@@ -39,7 +39,12 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            commands::test_clockify_connection,
+            commands::get_clockify_workspaces,
+            commands::trigger_sync,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
