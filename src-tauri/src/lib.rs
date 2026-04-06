@@ -66,6 +66,8 @@ pub fn run() {
             commands::update_employee_quota,
             commands::get_sync_status,
             commands::start_background_sync,
+            commands::test_huly_connection,
+            commands::trigger_huly_sync,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

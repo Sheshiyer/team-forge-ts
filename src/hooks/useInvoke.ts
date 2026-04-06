@@ -44,5 +44,8 @@ export function useInvoke() {
       invoke<void>("update_employee_quota", { employeeId, quota }),
     getSyncStatus: () => invoke<SyncState[]>("get_sync_status"),
     startBackgroundSync: () => invoke<string>("start_background_sync"),
+    testHulyConnection: (token: string) =>
+      invoke<string>("test_huly_connection", { token }),
+    triggerHulySync: () => invoke<string>("trigger_huly_sync"),
   };
 }

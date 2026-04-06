@@ -17,6 +17,16 @@ function Settings() {
   const [selectedWorkspace, setSelectedWorkspace] = useState("");
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
 
+  // Huly connection state
+  const [hulyToken, setHulyToken] = useState("");
+  const [showHulyToken, setShowHulyToken] = useState(false);
+  const [hulyStatus, setHulyStatus] = useState<
+    "idle" | "testing" | "success" | "error"
+  >("idle");
+  const [hulyMessage, setHulyMessage] = useState<string | null>(null);
+  const [hulySyncing, setHulySyncing] = useState(false);
+  const [hulySyncResult, setHulySyncResult] = useState<string | null>(null);
+
   // Sync state
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
@@ -37,6 +47,9 @@ function Settings() {
       }
       if (settings.clockify_workspace_id) {
         setSelectedWorkspace(settings.clockify_workspace_id);
+      }
+      if (settings.huly_token) {
+        setHulyToken(settings.huly_token);
       }
     } catch {
       // Settings may not exist yet
@@ -117,6 +130,49 @@ function Settings() {
       setSyncResult(`Error: ${err}`);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // Test Huly connection
+  const handleTestHuly = async () => {
+    if (!hulyToken.trim()) return;
+    setHulyStatus("testing");
+    setHulyMessage(null);
+    try {
+      const msg = await api.testHulyConnection(hulyToken);
+      setHulyStatus("success");
+      setHulyMessage(msg);
+    } catch (err) {
+      setHulyStatus("error");
+      setHulyMessage(String(err));
+    }
+  };
+
+  // Save Huly token
+  const handleSaveHuly = async () => {
+    try {
+      await api.saveSetting("huly_token", hulyToken);
+      setHulyMessage("Huly token saved");
+      setTimeout(() => {
+        if (hulyStatus !== "error") setHulyMessage(null);
+      }, 3000);
+    } catch (err) {
+      setHulyMessage(`Error: ${err}`);
+    }
+  };
+
+  // Trigger Huly sync
+  const handleHulySync = async () => {
+    setHulySyncing(true);
+    setHulySyncResult(null);
+    try {
+      const result = await api.triggerHulySync();
+      setHulySyncResult(result);
+      await loadSyncStatus();
+    } catch (err) {
+      setHulySyncResult(`Error: ${err}`);
+    } finally {
+      setHulySyncing(false);
     }
   };
 
@@ -216,6 +272,75 @@ function Settings() {
               }}
             >
               {saveStatus}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Huly Connection */}
+      <div style={styles.card}>
+        <h2 style={styles.sectionTitle}>Huly Connection</h2>
+
+        <div style={styles.field}>
+          <label style={styles.label}>User Token</label>
+          <div style={styles.inputRow}>
+            <input
+              type={showHulyToken ? "text" : "password"}
+              value={hulyToken}
+              onChange={(e) => setHulyToken(e.target.value)}
+              placeholder="Enter your Huly JWT token"
+              style={{ ...styles.input, flex: 1 }}
+            />
+            <button
+              onClick={() => setShowHulyToken(!showHulyToken)}
+              style={styles.ghostButton}
+            >
+              {showHulyToken ? "Hide" : "Show"}
+            </button>
+            <button
+              onClick={handleTestHuly}
+              disabled={hulyStatus === "testing" || !hulyToken.trim()}
+              style={{
+                ...styles.ghostButton,
+                opacity:
+                  hulyStatus === "testing" || !hulyToken.trim() ? 0.5 : 1,
+              }}
+            >
+              {hulyStatus === "testing" ? "Testing..." : "Test Connection"}
+            </button>
+          </div>
+          {hulyStatus === "success" && hulyMessage && (
+            <div style={styles.successText}>{hulyMessage}</div>
+          )}
+          {hulyStatus === "error" && hulyMessage && (
+            <div style={styles.errorText}>{hulyMessage}</div>
+          )}
+        </div>
+
+        <div style={styles.buttonRow}>
+          <button onClick={handleSaveHuly} style={styles.primaryButton}>
+            Save
+          </button>
+          <button
+            onClick={handleHulySync}
+            disabled={hulySyncing || !hulyToken.trim()}
+            style={{
+              ...styles.ghostButton,
+              opacity: hulySyncing || !hulyToken.trim() ? 0.5 : 1,
+            }}
+          >
+            {hulySyncing ? "Syncing..." : "Sync Huly"}
+          </button>
+          {hulySyncResult && (
+            <span
+              style={{
+                ...styles.label,
+                color: hulySyncResult.startsWith("Error")
+                  ? "var(--status-critical)"
+                  : "var(--status-success)",
+              }}
+            >
+              {hulySyncResult}
             </span>
           )}
         </div>

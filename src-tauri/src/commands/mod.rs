@@ -9,6 +9,8 @@ use crate::clockify::sync::ClockifySyncEngine;
 use crate::clockify::types::{ClockifyUser, ClockifyWorkspace};
 use crate::db::models::*;
 use crate::db::queries;
+use crate::huly::client::HulyClient;
+use crate::huly::sync::HulySyncEngine;
 use crate::sync::scheduler::SyncScheduler;
 use crate::{DbPool, SchedulerState};
 
@@ -522,6 +524,36 @@ pub async fn get_sync_status(db: State<'_, DbPool>) -> Result<Vec<SyncState>, St
             .await
             .map_err(|e| format!("db error: {e}"))?;
     Ok(states)
+}
+
+// ─── Huly connection commands ──────────────────────────────────
+
+/// Test connectivity to Huly using a user token.
+#[tauri::command]
+pub async fn test_huly_connection(token: String) -> Result<String, String> {
+    let client = HulyClient::connect(None, &token).await?;
+    client.test_connection().await
+}
+
+/// Run a full Huly sync (issues + presence).
+#[tauri::command]
+pub async fn trigger_huly_sync(db: State<'_, DbPool>) -> Result<String, String> {
+    let pool = &db.0;
+
+    let token = queries::get_setting(pool, "huly_token")
+        .await
+        .map_err(|e| format!("db error: {e}"))?
+        .ok_or_else(|| "Huly token not configured".to_string())?;
+
+    let client = HulyClient::connect(None, &token).await?;
+    let engine = HulySyncEngine::new(Arc::new(client), pool.clone());
+
+    let report = engine.full_sync().await?;
+
+    Ok(format!(
+        "Huly sync complete: {} issue activities, {} presence updates",
+        report.issues_synced, report.presence_updated
+    ))
 }
 
 // ─── Background sync ───────────────────────────────────────────
