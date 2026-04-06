@@ -1,7 +1,132 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useInvoke } from "../hooks/useInvoke";
 import { timeAgo } from "../lib/format";
+import { SkeletonTable } from "../components/ui/Skeleton";
+import Avatar from "../components/ui/Avatar";
 import type { ActivityItem } from "../lib/types";
+
+// ── Engagement Heatmap ────────────────────────────────────────
+
+function EngagementHeatmap({ activities }: { activities: ActivityItem[] }) {
+  const { employees, days, grid } = useMemo(() => {
+    const now = new Date();
+    const dayLabels: string[] = [];
+    const dayKeys: string[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - i);
+      dayLabels.push(d.toLocaleDateString("en-US", { weekday: "short" }));
+      dayKeys.push(d.toISOString().split("T")[0]);
+    }
+
+    // Count activities per employee per day
+    const countMap = new Map<string, Map<string, number>>();
+    const empSet = new Set<string>();
+
+    for (const a of activities) {
+      empSet.add(a.employeeName);
+      const day = a.occurredAt.split("T")[0];
+      if (!countMap.has(a.employeeName)) countMap.set(a.employeeName, new Map());
+      const empMap = countMap.get(a.employeeName)!;
+      empMap.set(day, (empMap.get(day) ?? 0) + 1);
+    }
+
+    const employeeNames = Array.from(empSet).sort();
+    const gridData = employeeNames.map((emp) => {
+      return dayKeys.map((dk) => countMap.get(emp)?.get(dk) ?? 0);
+    });
+
+    return { employees: employeeNames, days: dayLabels, grid: gridData };
+  }, [activities]);
+
+  if (employees.length === 0) return null;
+
+  function cellColor(count: number): string {
+    if (count === 0) return "rgba(255,255,255,0.02)";
+    if (count <= 2) return "rgba(94, 106, 210, 0.3)";
+    if (count <= 5) return "rgba(94, 106, 210, 0.5)";
+    return "rgba(94, 106, 210, 0.8)";
+  }
+
+  return (
+    <div style={heatmapStyles.wrapper}>
+      <h2 style={heatmapStyles.title}>Engagement Heatmap</h2>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse" }}>
+          <thead>
+            <tr>
+              <th style={heatmapStyles.cornerCell} />
+              {days.map((d) => (
+                <th key={d} style={heatmapStyles.dayLabel}>
+                  {d}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {employees.map((emp, ei) => (
+              <tr key={emp}>
+                <td style={heatmapStyles.empLabel}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <Avatar name={emp} size={18} />
+                    <span>{emp}</span>
+                  </div>
+                </td>
+                {grid[ei].map((count, di) => (
+                  <td key={di} style={{ padding: 2 }}>
+                    <div
+                      style={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: 3,
+                        backgroundColor: cellColor(count),
+                      }}
+                      title={`${emp}: ${count} activities`}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+const heatmapStyles: Record<string, React.CSSProperties> = {
+  wrapper: {
+    background: "rgba(255,255,255,0.02)",
+    border: "1px solid var(--border-standard)",
+    borderRadius: "var(--radius-lg)",
+    padding: 24,
+    marginBottom: 20,
+  },
+  title: {
+    fontSize: 14,
+    fontWeight: 510,
+    color: "var(--text-primary)",
+    marginBottom: 16,
+  },
+  cornerCell: {
+    padding: "4px 12px 4px 0",
+  },
+  dayLabel: {
+    fontSize: 11,
+    fontWeight: 500,
+    color: "var(--text-quaternary)",
+    textAlign: "center",
+    padding: "0 2px 6px",
+  },
+  empLabel: {
+    fontSize: 12,
+    color: "var(--text-tertiary)",
+    paddingRight: 12,
+    whiteSpace: "nowrap",
+  },
+};
+
+// ── Activity Page ─────────────────────────────────────────────
 
 function Activity() {
   const api = useInvoke();
@@ -27,9 +152,13 @@ function Activity() {
     <div>
       <h1 style={styles.pageTitle}>Activity</h1>
 
+      {!loading && items.length > 0 && (
+        <EngagementHeatmap activities={items} />
+      )}
+
       <div style={styles.card}>
         {loading ? (
-          <p style={styles.emptyText}>Loading...</p>
+          <SkeletonTable rows={8} cols={3} />
         ) : items.length === 0 ? (
           <p style={styles.emptyText}>
             No activity yet. Sync data to populate the feed.
@@ -38,12 +167,26 @@ function Activity() {
           <div>
             {items.map((item, i) => (
               <div key={`${item.occurredAt}-${i}`} style={styles.feedItem}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    marginBottom: 4,
+                  }}
+                >
+                  <Avatar name={item.employeeName} size={22} />
                   <SourceBadge source={item.source} />
                   <span style={styles.employeeName}>{item.employeeName}</span>
                   <span style={styles.actionText}>{item.action}</span>
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "baseline",
+                  }}
+                >
                   {item.detail && (
                     <span style={styles.detailText}>{item.detail}</span>
                   )}

@@ -81,3 +81,12 @@ select,
 button {
   font-feature-settings: "cv01", "ss03";
 }
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}

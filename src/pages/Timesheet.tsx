@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { useInvoke } from "../hooks/useInvoke";
 import { formatDuration } from "../lib/format";
+import { exportCsv } from "../lib/export";
+import { SkeletonTable } from "../components/ui/Skeleton";
+import Avatar from "../components/ui/Avatar";
 import type { TimeEntry, Employee } from "../lib/types";
 
 type DateRange = "week" | "month";
@@ -94,6 +97,19 @@ function Timesheet() {
   const sortIndicator = (col: string) =>
     sortCol === col ? (sortAsc ? " \u25B2" : " \u25BC") : "";
 
+  const handleExport = () => {
+    const headers = ["Date", "Employee", "Project", "Description", "Hours", "Billable"];
+    const rows = sorted.map((entry) => [
+      entry.startTime.split("T")[0],
+      empMap.get(entry.employeeId) ?? entry.employeeId,
+      entry.projectId ?? "",
+      entry.description ?? "",
+      entry.durationSeconds != null ? (entry.durationSeconds / 3600).toFixed(2) : "",
+      entry.isBillable ? "Yes" : "No",
+    ]);
+    exportCsv(`timesheet-${range}.csv`, headers, rows);
+  };
+
   return (
     <div>
       <h1 style={styles.pageTitle}>Timesheet</h1>
@@ -123,9 +139,7 @@ function Timesheet() {
 
         <select
           value={filterEmployee ?? ""}
-          onChange={(e) =>
-            setFilterEmployee(e.target.value || null)
-          }
+          onChange={(e) => setFilterEmployee(e.target.value || null)}
           style={styles.select}
         >
           <option value="">All Employees</option>
@@ -137,12 +151,16 @@ function Timesheet() {
               </option>
             ))}
         </select>
+
+        <button onClick={handleExport} style={styles.ghostBtn}>
+          Export CSV
+        </button>
       </div>
 
       {/* Table */}
       <div style={styles.card}>
         {loading ? (
-          <p style={styles.emptyText}>Loading...</p>
+          <SkeletonTable rows={8} cols={6} />
         ) : sorted.length === 0 ? (
           <p style={styles.emptyText}>
             No time entries found for this period.
@@ -180,13 +198,37 @@ function Timesheet() {
                   <td style={styles.td}>
                     {entry.startTime.split("T")[0]}
                   </td>
-                  <td style={{ ...styles.td, fontWeight: 510, color: "var(--text-primary)" }}>
-                    {empMap.get(entry.employeeId) ?? entry.employeeId}
+                  <td
+                    style={{
+                      ...styles.td,
+                      fontWeight: 510,
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <Avatar
+                        name={empMap.get(entry.employeeId) ?? entry.employeeId}
+                        size={22}
+                      />
+                      {empMap.get(entry.employeeId) ?? entry.employeeId}
+                    </div>
                   </td>
-                  <td style={styles.td}>
-                    {entry.projectId ?? "--"}
-                  </td>
-                  <td style={{ ...styles.td, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <td style={styles.td}>{entry.projectId ?? "--"}</td>
+                  <td
+                    style={{
+                      ...styles.td,
+                      maxWidth: 240,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
                     {entry.description ?? "--"}
                   </td>
                   <td style={styles.td}>
@@ -262,6 +304,19 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
     fontFamily: "var(--font-sans)",
     outline: "none",
+  },
+  ghostBtn: {
+    background: "rgba(255,255,255,0.02)",
+    border: "1px solid var(--border-standard)",
+    borderRadius: "var(--radius-md)",
+    color: "var(--text-tertiary)",
+    padding: "8px 14px",
+    fontSize: 13,
+    fontWeight: 510,
+    fontFamily: "var(--font-sans)",
+    cursor: "pointer",
+    transition: "background 0.15s, color 0.15s",
+    marginLeft: "auto",
   },
   card: {
     background: "rgba(255,255,255,0.02)",

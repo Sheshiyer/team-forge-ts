@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { useInvoke } from "../hooks/useInvoke";
+import { SkeletonCard, SkeletonTable } from "../components/ui/Skeleton";
+import Avatar from "../components/ui/Avatar";
 import type { OverviewData, QuotaRow } from "../lib/types";
 
-// ─── ProgressRing ──────────────────────────────────────────────
+// ── ProgressRing ──────────────────────────────────────────────
 
 function ProgressRing({
   percent,
@@ -21,7 +23,12 @@ function ProgressRing({
   const offset = circumference - (clamped / 100) * circumference;
 
   const strokeColor =
-    color ?? (clamped >= 80 ? "var(--accent-brand)" : clamped >= 50 ? "var(--status-warning)" : "var(--status-critical)");
+    color ??
+    (clamped >= 80
+      ? "var(--accent-brand)"
+      : clamped >= 50
+      ? "var(--status-warning)"
+      : "var(--status-critical)");
 
   return (
     <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
@@ -49,7 +56,64 @@ function ProgressRing({
   );
 }
 
-// ─── MetricCard ────────────────────────────────────────────────
+// ── Sparkline ─────────────────────────────────────────────────
+
+function Sparkline({
+  data,
+  width = 80,
+  height = 24,
+  color = "var(--accent-brand)",
+}: {
+  data: number[];
+  width?: number;
+  height?: number;
+  color?: string;
+}) {
+  if (data.length < 2) return null;
+  const max = Math.max(...data, 1);
+  const min = Math.min(...data, 0);
+  const range = max - min || 1;
+  const points = data
+    .map((v, i) => {
+      const x = (i / (data.length - 1)) * width;
+      const y = height - ((v - min) / range) * (height - 4) - 2;
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  return (
+    <svg width={width} height={height} style={{ display: "block" }}>
+      <polyline
+        points={points}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/**
+ * Generate mock sparkline data for a given employee name.
+ * Uses a simple seeded approach so the same name always produces the same data.
+ * TODO: Replace with real historical weekly data from a new Tauri command
+ * (e.g. `get_employee_weekly_hours`) in a future pass.
+ */
+function mockSparklineData(name: string): number[] {
+  let seed = name.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+  const data: number[] = [];
+  let val = 10 + (seed % 20);
+  for (let i = 0; i < 8; i++) {
+    seed = (seed * 9301 + 49297) % 233280;
+    val += (seed % 7) - 2;
+    data.push(Math.max(val, 0));
+  }
+  return data;
+}
+
+// ── MetricCard ────────────────────────────────────────────────
 
 function MetricCard({
   label,
@@ -62,7 +126,13 @@ function MetricCard({
 }) {
   return (
     <div style={styles.metricCard}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
         <div>
           <div style={styles.metricLabel}>{label}</div>
           <div style={styles.metricValue}>{value}</div>
@@ -73,7 +143,7 @@ function MetricCard({
   );
 }
 
-// ─── Overview Page ─────────────────────────────────────────────
+// ── Overview Page ─────────────────────────────────────────────
 
 function Overview() {
   const api = useInvoke();
@@ -104,7 +174,14 @@ function Overview() {
     return (
       <div>
         <h1 style={styles.pageTitle}>Overview</h1>
-        <p style={styles.emptyText}>Loading...</p>
+        <div style={styles.metricsRow}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </div>
+        <div style={styles.card}>
+          <SkeletonTable rows={5} cols={6} />
+        </div>
       </div>
     );
   }
@@ -189,16 +266,40 @@ function Overview() {
                 <th style={styles.th}>This Week</th>
                 <th style={styles.th}>This Month</th>
                 <th style={styles.th}>Quota</th>
+                <th style={styles.th}>Trend</th>
                 <th style={styles.th}>Status</th>
               </tr>
             </thead>
             <tbody>
               {quotaRows.map((row) => (
                 <tr key={row.employeeName} style={{ cursor: "default" }}>
-                  <td style={styles.td}>{row.employeeName}</td>
+                  <td style={styles.td}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <Avatar name={row.employeeName} size={24} />
+                      {row.employeeName}
+                    </div>
+                  </td>
                   <td style={styles.td}>{row.thisWeekHours.toFixed(1)}h</td>
                   <td style={styles.td}>{row.thisMonthHours.toFixed(1)}h</td>
                   <td style={styles.td}>{row.quota.toFixed(0)}h</td>
+                  <td style={styles.td}>
+                    <Sparkline
+                      data={mockSparklineData(row.employeeName)}
+                      color={
+                        row.status === "onTrack"
+                          ? "var(--status-success)"
+                          : row.status === "behind"
+                          ? "var(--status-warning)"
+                          : "var(--status-critical)"
+                      }
+                    />
+                  </td>
                   <td style={styles.td}>
                     <StatusPill status={row.status} />
                   </td>
@@ -263,7 +364,7 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
-// ─── Styles ────────────────────────────────────────────────────
+// ── Styles ────────────────────────────────────────────────────
 
 const styles: Record<string, React.CSSProperties> = {
   pageTitle: {

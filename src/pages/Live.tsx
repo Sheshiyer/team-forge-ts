@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useInvoke } from "../hooks/useInvoke";
 import { formatDuration, timeAgo } from "../lib/format";
+import { SkeletonCard } from "../components/ui/Skeleton";
+import Avatar from "../components/ui/Avatar";
 import type { PresenceStatus } from "../lib/types";
 
 function Live() {
@@ -32,7 +34,14 @@ function Live() {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 24 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          marginBottom: 24,
+        }}
+      >
         <h1 style={styles.pageTitle}>Live Presence</h1>
         {lastUpdated && (
           <span style={styles.lastUpdated}>
@@ -42,11 +51,13 @@ function Live() {
       </div>
 
       {loading ? (
-        <p style={styles.emptyText}>Loading...</p>
+        <div style={styles.grid}>
+          {Array.from({ length: 4 }).map((_, i) => (
+            <SkeletonCard key={i} />
+          ))}
+        </div>
       ) : presence.length === 0 ? (
-        <p style={styles.emptyText}>
-          No employees found. Sync data first.
-        </p>
+        <p style={styles.emptyText}>No employees found. Sync data first.</p>
       ) : (
         <div style={styles.grid}>
           {presence.map((p) => (
@@ -80,7 +91,15 @@ function PresenceCard({ data }: { data: PresenceStatus }) {
 
   return (
     <div style={styles.presenceCard}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          marginBottom: 12,
+        }}
+      >
+        <Avatar name={data.employeeName} size={32} />
         <span
           style={{
             display: "inline-block",

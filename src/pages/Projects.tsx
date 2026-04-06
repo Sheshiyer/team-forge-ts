@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useInvoke } from "../hooks/useInvoke";
+import { exportCsv } from "../lib/export";
+import { SkeletonCard, SkeletonTable } from "../components/ui/Skeleton";
 import type { ProjectStats } from "../lib/types";
 
 function Projects() {
@@ -35,28 +37,65 @@ function Projects() {
       ? projects.reduce((sum, p) => sum + p.utilization, 0) / projects.length
       : 0;
 
+  const handleExport = () => {
+    const headers = [
+      "Project",
+      "Total Hours",
+      "Billable Hours",
+      "Team Members",
+      "Utilization %",
+    ];
+    const rows = projects.map((p) => [
+      p.projectName,
+      p.totalHours.toFixed(2),
+      p.billableHours.toFixed(2),
+      String(p.teamMembers),
+      (p.utilization * 100).toFixed(1),
+    ]);
+    exportCsv("projects.csv", headers, rows);
+  };
+
   return (
     <div>
-      <h1 style={styles.pageTitle}>Projects</h1>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 24,
+        }}
+      >
+        <h1 style={styles.pageTitle}>Projects</h1>
+        <button onClick={handleExport} style={styles.ghostBtn}>
+          Export CSV
+        </button>
+      </div>
 
       {/* Summary Row */}
-      <div style={styles.summaryRow}>
-        <div style={styles.summaryCard}>
-          <div style={styles.summaryLabel}>Total Hours</div>
-          <div style={styles.summaryValue}>{totalHours.toFixed(1)}h</div>
+      {loading ? (
+        <div style={styles.summaryRow}>
+          <SkeletonCard />
+          <SkeletonCard />
         </div>
-        <div style={styles.summaryCard}>
-          <div style={styles.summaryLabel}>Avg Utilization</div>
-          <div style={styles.summaryValue}>
-            {(avgUtilization * 100).toFixed(1)}%
+      ) : (
+        <div style={styles.summaryRow}>
+          <div style={styles.summaryCard}>
+            <div style={styles.summaryLabel}>Total Hours</div>
+            <div style={styles.summaryValue}>{totalHours.toFixed(1)}h</div>
+          </div>
+          <div style={styles.summaryCard}>
+            <div style={styles.summaryLabel}>Avg Utilization</div>
+            <div style={styles.summaryValue}>
+              {(avgUtilization * 100).toFixed(1)}%
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Projects Table */}
       <div style={styles.card}>
         {loading ? (
-          <p style={styles.emptyText}>Loading...</p>
+          <SkeletonTable rows={5} cols={5} />
         ) : projects.length === 0 ? (
           <p style={styles.emptyText}>
             No project data yet. Sync time entries first.
@@ -75,14 +114,26 @@ function Projects() {
             <tbody>
               {projects.map((p) => (
                 <tr key={p.projectName}>
-                  <td style={{ ...styles.td, fontWeight: 510, color: "var(--text-primary)" }}>
+                  <td
+                    style={{
+                      ...styles.td,
+                      fontWeight: 510,
+                      color: "var(--text-primary)",
+                    }}
+                  >
                     {p.projectName}
                   </td>
                   <td style={styles.td}>{p.totalHours.toFixed(1)}h</td>
                   <td style={styles.td}>{p.billableHours.toFixed(1)}h</td>
                   <td style={styles.td}>{p.teamMembers}</td>
                   <td style={styles.td}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
                       <div style={styles.barTrack}>
                         <div
                           style={{
@@ -92,7 +143,13 @@ function Projects() {
                           }}
                         />
                       </div>
-                      <span style={{ fontSize: 12, color: "var(--text-tertiary)", minWidth: 40 }}>
+                      <span
+                        style={{
+                          fontSize: 12,
+                          color: "var(--text-tertiary)",
+                          minWidth: 40,
+                        }}
+                      >
                         {(p.utilization * 100).toFixed(0)}%
                       </span>
                     </div>
@@ -117,9 +174,21 @@ const styles: Record<string, React.CSSProperties> = {
   pageTitle: {
     fontSize: 20,
     fontWeight: 600,
-    marginBottom: 24,
     color: "var(--text-primary)",
     letterSpacing: "-0.02em",
+    marginBottom: 0,
+  },
+  ghostBtn: {
+    background: "rgba(255,255,255,0.02)",
+    border: "1px solid var(--border-standard)",
+    borderRadius: "var(--radius-md)",
+    color: "var(--text-tertiary)",
+    padding: "8px 14px",
+    fontSize: 13,
+    fontWeight: 510,
+    fontFamily: "var(--font-sans)",
+    cursor: "pointer",
+    transition: "background 0.15s, color 0.15s",
   },
   summaryRow: {
     display: "grid",
