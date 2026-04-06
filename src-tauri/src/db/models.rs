@@ -159,7 +159,7 @@ pub enum CombinedStatus {
     Offline,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivityItem {
     pub source: String,

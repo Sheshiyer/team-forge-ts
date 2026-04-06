@@ -44,6 +44,17 @@ pub fn run() {
             commands::test_clockify_connection,
             commands::get_clockify_workspaces,
             commands::trigger_sync,
+            commands::get_settings,
+            commands::save_setting,
+            commands::get_overview,
+            commands::get_quota_compliance,
+            commands::get_time_entries_view,
+            commands::get_project_breakdown,
+            commands::get_activity_feed,
+            commands::get_presence_status,
+            commands::get_employees,
+            commands::update_employee_quota,
+            commands::get_sync_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
