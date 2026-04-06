@@ -84,3 +84,85 @@ export interface ClockifyWorkspace {
   id: string;
   name: string;
 }
+
+export interface MilestoneView {
+  id: string;
+  label: string;
+  status: string;
+  targetDate: string | null;
+  totalIssues: number;
+  completedIssues: number;
+  progressPercent: number;
+  projectName: string | null;
+}
+
+export interface TimeDiscrepancy {
+  employeeName: string;
+  hulyHours: number;
+  clockifyHours: number;
+  differenceHours: number;
+  differencePercent: number;
+}
+
+export interface EstimationAccuracy {
+  employeeName: string;
+  totalIssues: number;
+  avgEstimatedHours: number;
+  avgActualHours: number;
+  accuracyPercent: number;
+  chronicUnderEstimator: boolean;
+}
+
+export interface PriorityDistribution {
+  priority: string;
+  count: number;
+  assignedCount: number;
+  unassignedCount: number;
+}
+
+export interface DepartmentView {
+  id: string;
+  name: string;
+  headName: string | null;
+  memberCount: number;
+  totalHours: number;
+  quotaTotal: number;
+}
+
+export interface LeaveView {
+  employeeName: string;
+  leaveType: string;
+  dateFrom: string;
+  dateTo: string;
+  status: string;
+  days: number;
+}
+
+export interface HolidayView {
+  title: string;
+  date: string;
+}
+
+export interface ChatActivityView {
+  employeeName: string;
+  messageCount: number;
+  channelsActive: number;
+  lastMessageAt: string | null;
+}
+
+export interface BoardCardView {
+  id: string;
+  title: string;
+  status: string;
+  assigneeName: string | null;
+  daysInStatus: number;
+  boardName: string | null;
+}
+
+export interface MeetingLoadView {
+  employeeName: string;
+  meetingsThisWeek: number;
+  totalMeetingHours: number;
+  workHours: number;
+  meetingRatio: number;
+}

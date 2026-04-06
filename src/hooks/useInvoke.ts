@@ -10,6 +10,16 @@ import type {
   PresenceStatus,
   Employee,
   SyncState,
+  MilestoneView,
+  TimeDiscrepancy,
+  EstimationAccuracy,
+  PriorityDistribution,
+  DepartmentView,
+  LeaveView,
+  HolidayView,
+  ChatActivityView,
+  BoardCardView,
+  MeetingLoadView,
 } from "../lib/types";
 
 export function useInvoke() {
@@ -47,5 +57,15 @@ export function useInvoke() {
     testHulyConnection: (token: string) =>
       invoke<string>("test_huly_connection", { token }),
     triggerHulySync: () => invoke<string>("trigger_huly_sync"),
+    getMilestones: () => invoke<MilestoneView[]>("get_milestones"),
+    getTimeDiscrepancies: () => invoke<TimeDiscrepancy[]>("get_time_discrepancies"),
+    getEstimationAccuracy: () => invoke<EstimationAccuracy[]>("get_estimation_accuracy"),
+    getPriorityDistribution: () => invoke<PriorityDistribution[]>("get_priority_distribution"),
+    getDepartments: () => invoke<DepartmentView[]>("get_departments"),
+    getLeaveRequests: () => invoke<LeaveView[]>("get_leave_requests"),
+    getHolidays: () => invoke<HolidayView[]>("get_holidays"),
+    getChatActivity: () => invoke<ChatActivityView[]>("get_chat_activity"),
+    getBoardCards: () => invoke<BoardCardView[]>("get_board_cards"),
+    getMeetingLoad: () => invoke<MeetingLoadView[]>("get_meeting_load"),
   };
 }

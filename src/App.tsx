@@ -4,6 +4,11 @@ import { invoke } from "@tauri-apps/api/core";
 import Overview from "./pages/Overview";
 import Timesheet from "./pages/Timesheet";
 import Projects from "./pages/Projects";
+import Sprints from "./pages/Sprints";
+import Insights from "./pages/Insights";
+import Team from "./pages/Team";
+import Comms from "./pages/Comms";
+import Boards from "./pages/Boards";
 import Activity from "./pages/Activity";
 import Live from "./pages/Live";
 import Settings from "./pages/Settings";
@@ -16,6 +21,11 @@ const navItems = [
   { path: "/", label: "Overview" },
   { path: "/timesheet", label: "Timesheet" },
   { path: "/projects", label: "Projects" },
+  { path: "/sprints", label: "Sprints" },
+  { path: "/insights", label: "Insights" },
+  { path: "/team", label: "Team" },
+  { path: "/comms", label: "Comms" },
+  { path: "/boards", label: "Boards" },
   { path: "/activity", label: "Activity" },
   { path: "/live", label: "Live" },
   { path: "/settings", label: "Settings" },
@@ -50,15 +60,26 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Keyboard navigation: Cmd/Ctrl + 1-6 for routes, Cmd/Ctrl + R for sync
+  // Keyboard navigation: Cmd/Ctrl + 1-0 for routes, Cmd/Ctrl + - for settings, Cmd/Ctrl + R for sync
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey) {
-        const routes = ["/", "/timesheet", "/projects", "/activity", "/live", "/settings"];
+        const routes = [
+          "/", "/timesheet", "/projects", "/sprints", "/insights",
+          "/team", "/comms", "/boards", "/activity", "/live",
+        ];
         const num = parseInt(e.key);
-        if (num >= 1 && num <= 6) {
+        if (num >= 1 && num <= 9) {
           e.preventDefault();
           navigate(routes[num - 1]);
+        }
+        if (e.key === "0") {
+          e.preventDefault();
+          navigate(routes[9]); // Live
+        }
+        if (e.key === "-") {
+          e.preventDefault();
+          navigate("/settings");
         }
         if (e.key === "r") {
           e.preventDefault();
@@ -140,6 +161,11 @@ function App() {
           <Route path="/" element={<Overview />} />
           <Route path="/timesheet" element={<Timesheet />} />
           <Route path="/projects" element={<Projects />} />
+          <Route path="/sprints" element={<Sprints />} />
+          <Route path="/insights" element={<Insights />} />
+          <Route path="/team" element={<Team />} />
+          <Route path="/comms" element={<Comms />} />
+          <Route path="/boards" element={<Boards />} />
           <Route path="/activity" element={<Activity />} />
           <Route path="/live" element={<Live />} />
           <Route path="/settings" element={<Settings />} />
