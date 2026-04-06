@@ -1,0 +1,76 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      - name: Build Tauri app (Apple Silicon)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'TeamForge ${{ github.ref_name }}'
+          releaseBody: |
+            ## TeamForge ${{ github.ref_name }}
+
+            LCARS Mission Control for your team. Unifies Clockify + Huly.io into a single native Mac dashboard.
+
+            ### Download
+
+            Download the `.dmg` file below, open it, and drag TeamForge to your Applications folder.
+
+            ### What's New
+
+            See the [full changelog](https://github.com/Sheshiyer/team-forge-ts/commits/main) for details.
+
+            ---
+            *Built with Tauri v2 + React + Rust*
+          releaseDraft: false
+          prerelease: false
+          args: --target aarch64-apple-darwin
+
+      - name: Build Tauri app (Intel)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'TeamForge ${{ github.ref_name }}'
+          releaseDraft: false
+          prerelease: false
+          args: --target x86_64-apple-darwin

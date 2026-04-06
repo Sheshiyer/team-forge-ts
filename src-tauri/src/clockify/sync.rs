@@ -3,6 +3,11 @@ use std::sync::Arc;
 use chrono::Utc;
 use sqlx::SqlitePool;
 
+/// Format a chrono DateTime as Clockify-compatible ISO 8601: `yyyy-MM-ddTHH:mm:ssZ`
+fn clockify_date(dt: chrono::DateTime<Utc>) -> String {
+    dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
 use super::client::ClockifyClient;
 use super::types::SyncReport;
 use crate::db::models::{Employee, Presence, Project, TimeEntry, SyncState};
@@ -96,11 +101,11 @@ impl ClockifySyncEngine {
             None => {
                 // Default: 90 days ago.
                 let dt = Utc::now() - chrono::Duration::days(90);
-                dt.to_rfc3339()
+                clockify_date(dt)
             }
         };
 
-        let end = Utc::now().to_rfc3339();
+        let end = clockify_date(Utc::now());
         let now_str = end.clone();
 
         // Get all active employees.
