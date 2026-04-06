@@ -560,6 +560,7 @@ pub async fn trigger_huly_sync(db: State<'_, DbPool>) -> Result<String, String> 
 
 #[tauri::command]
 pub async fn start_background_sync(
+    app_handle: tauri::AppHandle,
     db: State<'_, DbPool>,
     scheduler_state: State<'_, SchedulerState>,
 ) -> Result<String, String> {
@@ -573,7 +574,7 @@ pub async fn start_background_sync(
         }
     }
 
-    match SyncScheduler::start(pool).await {
+    match SyncScheduler::start(pool, app_handle).await {
         Some(scheduler) => {
             let mut guard = scheduler_state.0.lock().map_err(|e| format!("lock error: {e}"))?;
             *guard = Some(scheduler);

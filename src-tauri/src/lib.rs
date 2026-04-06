@@ -8,6 +8,8 @@ use std::sync::Mutex;
 
 use sqlx::SqlitePool;
 use tauri::Manager;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
 
 use crate::sync::scheduler::SyncScheduler;
 
@@ -25,6 +27,7 @@ fn greet(name: &str) -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -33,6 +36,33 @@ pub fn run() {
 
             // Manage the scheduler state (empty initially)
             app.manage(SchedulerState(Mutex::new(None)));
+
+            // ── System tray icon ──────────────────────────────────
+            let tray_menu = Menu::with_items(app, &[
+                &MenuItem::with_id(app, "show", "Show TeamForge", true, None::<&str>)?,
+                &MenuItem::with_id(app, "sync", "Sync Now", true, None::<&str>)?,
+                &MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
+            ])?;
+
+            let _tray = TrayIconBuilder::with_id("teamforge-tray")
+                .menu(&tray_menu)
+                .tooltip("TeamForge")
+                .icon(app.default_window_icon().unwrap().clone())
+                .on_menu_event(move |app, event| {
+                    match event.id().as_ref() {
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .build(app)?;
 
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {

@@ -7,6 +7,7 @@ use tokio::task::JoinHandle;
 use crate::clockify::client::ClockifyClient;
 use crate::clockify::sync::ClockifySyncEngine;
 use crate::db::queries;
+use crate::sync::alerts;
 
 /// Background sync scheduler that polls Clockify on intervals.
 pub struct SyncScheduler {
@@ -16,7 +17,7 @@ pub struct SyncScheduler {
 
 impl SyncScheduler {
     /// Start background polling. Returns None if settings are not configured.
-    pub async fn start(pool: SqlitePool) -> Option<Self> {
+    pub async fn start(pool: SqlitePool, app_handle: tauri::AppHandle) -> Option<Self> {
         // Check if settings are configured
         let api_key = queries::get_setting(&pool, "clockify_api_key")
             .await
@@ -35,12 +36,13 @@ impl SyncScheduler {
         let client = Arc::new(ClockifyClient::new(api_key));
         let mut handles = Vec::new();
 
-        // 1. Presence polling every 30 seconds
+        // 1. Presence polling every 30 seconds + tray tooltip update
         {
             let pool = pool.clone();
             let client = client.clone();
             let ws = workspace_id.clone();
             let mut rx = cancel_rx.clone();
+            let ah = app_handle.clone();
             handles.push(tokio::spawn(async move {
                 loop {
                     tokio::select! {
@@ -51,6 +53,9 @@ impl SyncScheduler {
                     if let Err(e) = engine.sync_presence().await {
                         eprintln!("[scheduler] presence sync error: {e}");
                     }
+
+                    // Update tray tooltip with active count
+                    update_tray_tooltip(&ah, &pool).await;
                 }
             }));
         }
@@ -75,12 +80,13 @@ impl SyncScheduler {
             }));
         }
 
-        // 3. Users + projects every 60 minutes
+        // 3. Users + projects every 60 minutes, plus quota alerts
         {
             let pool = pool.clone();
             let client = client.clone();
             let ws = workspace_id.clone();
             let mut rx = cancel_rx.clone();
+            let ah = app_handle.clone();
             handles.push(tokio::spawn(async move {
                 loop {
                     tokio::select! {
@@ -93,6 +99,11 @@ impl SyncScheduler {
                     }
                     if let Err(e) = engine.sync_projects().await {
                         eprintln!("[scheduler] projects sync error: {e}");
+                    }
+
+                    // Check quota alerts after hourly sync
+                    if let Err(e) = alerts::check_quota_alerts(&ah, &pool).await {
+                        eprintln!("[scheduler] quota alert error: {e}");
                     }
                 }
             }));
@@ -109,5 +120,27 @@ impl SyncScheduler {
             h.abort();
         }
         eprintln!("[scheduler] background sync stopped");
+    }
+}
+
+/// Query the database for active/total employee counts and update the tray tooltip.
+async fn update_tray_tooltip(app_handle: &tauri::AppHandle, pool: &SqlitePool) {
+    let active: Result<(i64,), _> = sqlx::query_as(
+        "SELECT COUNT(*) FROM presence WHERE clockify_timer_active = 1",
+    )
+    .fetch_one(pool)
+    .await;
+
+    let total: Result<(i64,), _> = sqlx::query_as(
+        "SELECT COUNT(*) FROM employees WHERE is_active = 1",
+    )
+    .fetch_one(pool)
+    .await;
+
+    if let (Ok((active_count,)), Ok((total_count,))) = (active, total) {
+        let tooltip = format!("TeamForge - {}/{} active", active_count, total_count);
+        if let Some(tray) = app_handle.tray_by_id("teamforge-tray") {
+            let _ = tray.set_tooltip(Some(&tooltip));
+        }
     }
 }
