@@ -9,7 +9,8 @@ use crate::clockify::sync::ClockifySyncEngine;
 use crate::clockify::types::{ClockifyUser, ClockifyWorkspace};
 use crate::db::models::*;
 use crate::db::queries;
-use crate::DbPool;
+use crate::sync::scheduler::SyncScheduler;
+use crate::{DbPool, SchedulerState};
 
 // ─── Clockify connection commands ───────────────────────────────
 
@@ -521,4 +522,31 @@ pub async fn get_sync_status(db: State<'_, DbPool>) -> Result<Vec<SyncState>, St
             .await
             .map_err(|e| format!("db error: {e}"))?;
     Ok(states)
+}
+
+// ─── Background sync ───────────────────────────────────────────
+
+#[tauri::command]
+pub async fn start_background_sync(
+    db: State<'_, DbPool>,
+    scheduler_state: State<'_, SchedulerState>,
+) -> Result<String, String> {
+    let pool = db.0.clone();
+
+    // Stop existing scheduler if running
+    {
+        let mut guard = scheduler_state.0.lock().map_err(|e| format!("lock error: {e}"))?;
+        if let Some(old) = guard.take() {
+            old.stop();
+        }
+    }
+
+    match SyncScheduler::start(pool).await {
+        Some(scheduler) => {
+            let mut guard = scheduler_state.0.lock().map_err(|e| format!("lock error: {e}"))?;
+            *guard = Some(scheduler);
+            Ok("Background sync started".to_string())
+        }
+        None => Ok("Settings not configured, background sync not started".to_string()),
+    }
 }

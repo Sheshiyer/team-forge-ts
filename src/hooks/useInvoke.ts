@@ -43,5 +43,6 @@ export function useInvoke() {
     updateEmployeeQuota: (employeeId: string, quota: number) =>
       invoke<void>("update_employee_quota", { employeeId, quota }),
     getSyncStatus: () => invoke<SyncState[]>("get_sync_status"),
+    startBackgroundSync: () => invoke<string>("start_background_sync"),
   };
 }

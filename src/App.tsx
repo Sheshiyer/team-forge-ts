@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import { Routes, Route, NavLink } from "react-router-dom";
+import { invoke } from "@tauri-apps/api/core";
 import Overview from "./pages/Overview";
 import Timesheet from "./pages/Timesheet";
 import Projects from "./pages/Projects";
@@ -16,6 +18,16 @@ const navItems = [
 ];
 
 function App() {
+  useEffect(() => {
+    // Start background sync on app launch (no-ops if settings not configured)
+    const timer = setTimeout(() => {
+      invoke<string>("start_background_sync").catch(() => {
+        // DB may not be ready yet on first launch, ignore
+      });
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <div style={styles.shell}>
       <aside style={styles.sidebar}>
