@@ -126,7 +126,10 @@ impl SyncScheduler {
 /// Query the database for active/total employee counts and update the tray tooltip.
 async fn update_tray_tooltip(app_handle: &tauri::AppHandle, pool: &SqlitePool) {
     let active: Result<(i64,), _> = sqlx::query_as(
-        "SELECT COUNT(*) FROM presence WHERE clockify_timer_active = 1",
+        "SELECT COUNT(*)
+         FROM presence p
+         JOIN employees e ON e.id = p.employee_id
+         WHERE e.is_active = 1 AND p.clockify_timer_active = 1",
     )
     .fetch_one(pool)
     .await;

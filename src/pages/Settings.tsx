@@ -3,6 +3,17 @@ import { useInvoke } from "../hooks/useInvoke";
 import { timeAgo } from "../lib/format";
 import type { ClockifyWorkspace, Employee, SyncState } from "../lib/types";
 
+const DEFAULT_IGNORED_EMAILS = "thoughtseedlabs@gmail.com";
+
+function normalizeIgnoredEmails(value: string): string {
+  const normalized = value
+    .split(/[\n,;]+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+
+  return normalized.length > 0 ? normalized.join(", ") : DEFAULT_IGNORED_EMAILS;
+}
+
 function Settings() {
   const api = useInvoke();
 
@@ -12,6 +23,7 @@ function Settings() {
   const [connectedUser, setConnectedUser] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<ClockifyWorkspace[]>([]);
   const [selectedWorkspace, setSelectedWorkspace] = useState("");
+  const [ignoredEmails, setIgnoredEmails] = useState(DEFAULT_IGNORED_EMAILS);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
 
   const [hulyToken, setHulyToken] = useState("");
@@ -33,6 +45,7 @@ function Settings() {
       const settings = await api.getSettings();
       if (settings.clockify_api_key) setApiKey(settings.clockify_api_key);
       if (settings.clockify_workspace_id) setSelectedWorkspace(settings.clockify_workspace_id);
+      setIgnoredEmails(settings.clockify_ignored_emails || DEFAULT_IGNORED_EMAILS);
       if (settings.huly_token) setHulyToken(settings.huly_token);
     } catch { /* Settings may not exist yet */ }
   }, []);
@@ -74,7 +87,10 @@ function Settings() {
     try {
       await api.saveSetting("clockify_api_key", apiKey);
       if (selectedWorkspace) await api.saveSetting("clockify_workspace_id", selectedWorkspace);
+      await api.saveSetting("clockify_ignored_emails", normalizeIgnoredEmails(ignoredEmails));
       setSaveStatus("Settings saved");
+      setIgnoredEmails(normalizeIgnoredEmails(ignoredEmails));
+      await loadEmployees();
       setTimeout(() => setSaveStatus(null), 3000);
     } catch (err) { setSaveStatus(`Error: ${err}`); }
   };
@@ -189,6 +205,20 @@ function Settings() {
             </select>
           </div>
         )}
+
+        <div style={styles.field}>
+          <label style={styles.label}>IGNORED CLOCKIFY EMAILS</label>
+          <textarea
+            value={ignoredEmails}
+            onChange={(e) => setIgnoredEmails(e.target.value)}
+            placeholder={DEFAULT_IGNORED_EMAILS}
+            style={{ ...styles.input, minHeight: 72, resize: "vertical" }}
+          />
+          <div style={styles.helperText}>
+            COMMA OR NEWLINE SEPARATED. THESE PEOPLE ARE EXCLUDED FROM CLOCKIFY HOURS,
+            CREW STATUS, TIMELINES, AND OVERVIEW METRICS.
+          </div>
+        </div>
 
         <div style={styles.buttonRow}>
           <button onClick={handleSave} style={styles.primaryButton}>SAVE</button>
@@ -314,7 +344,7 @@ function Settings() {
               </tr>
             </thead>
             <tbody>
-              {employees.map((emp) => (
+              {employees.filter((emp) => emp.isActive).map((emp) => (
                 <tr key={emp.id}>
                   <td style={{ ...styles.td, color: "var(--lcars-orange)" }}>{emp.name}</td>
                   <td style={styles.td}>{emp.email}</td>
@@ -472,6 +502,14 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--text-quaternary)",
     letterSpacing: "2px",
     textTransform: "uppercase" as const,
+  },
+  helperText: {
+    marginTop: 8,
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    color: "var(--text-quaternary)",
+    letterSpacing: "1px",
+    lineHeight: 1.6,
   },
   table: {
     width: "100%",

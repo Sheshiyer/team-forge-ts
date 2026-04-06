@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{Datelike, Local, NaiveDate, Utc, Weekday};
@@ -13,6 +13,62 @@ use crate::huly::client::HulyClient;
 use crate::huly::sync::HulySyncEngine;
 use crate::sync::scheduler::SyncScheduler;
 use crate::{DbPool, SchedulerState};
+
+const DEFAULT_CLOCKIFY_IGNORED_EMAILS: &str = "thoughtseedlabs@gmail.com";
+
+fn normalize_email(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+fn normalize_ignored_email_value(value: &str) -> String {
+    value
+        .split(|ch: char| ch == ',' || ch == '\n' || ch == ';')
+        .map(normalize_email)
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+async fn load_ignored_clockify_emails(pool: &sqlx::SqlitePool) -> Result<HashSet<String>, String> {
+    let raw = queries::get_setting(pool, "clockify_ignored_emails")
+        .await
+        .map_err(|e| format!("read ignored Clockify emails: {e}"))?;
+
+    let source = raw
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_CLOCKIFY_IGNORED_EMAILS.to_string());
+
+    Ok(source
+        .split(|ch: char| ch == ',' || ch == '\n' || ch == ';')
+        .map(normalize_email)
+        .filter(|item| !item.is_empty())
+        .collect())
+}
+
+async fn apply_clockify_ignore_rules(pool: &sqlx::SqlitePool) -> Result<(), String> {
+    let ignored = load_ignored_clockify_emails(pool).await?;
+    let employees = queries::get_employees(pool)
+        .await
+        .map_err(|e| format!("load employees for ignore rules: {e}"))?;
+
+    for employee in employees {
+        let should_ignore = ignored.contains(&normalize_email(&employee.email));
+        queries::set_employee_active(pool, &employee.id, !should_ignore)
+            .await
+            .map_err(|e| format!("update employee ignore state: {e}"))?;
+
+        if should_ignore {
+            queries::delete_time_entries_for_employee(pool, &employee.id)
+                .await
+                .map_err(|e| format!("purge ignored time entries: {e}"))?;
+            queries::delete_presence_for_employee(pool, &employee.id)
+                .await
+                .map_err(|e| format!("purge ignored presence: {e}"))?;
+        }
+    }
+
+    Ok(())
+}
 
 // ─── Clockify connection commands ───────────────────────────────
 
@@ -82,9 +138,26 @@ pub async fn save_setting(
     value: String,
 ) -> Result<(), String> {
     let pool = &db.0;
-    queries::set_setting(pool, &key, &value)
+    let value_to_store = if key == "clockify_ignored_emails" {
+        let normalized = normalize_ignored_email_value(&value);
+        if normalized.is_empty() {
+            DEFAULT_CLOCKIFY_IGNORED_EMAILS.to_string()
+        } else {
+            normalized
+        }
+    } else {
+        value
+    };
+
+    queries::set_setting(pool, &key, &value_to_store)
         .await
-        .map_err(|e| format!("db error: {e}"))
+        .map_err(|e| format!("db error: {e}"))?;
+
+    if key == "clockify_ignored_emails" {
+        apply_clockify_ignore_rules(pool).await?;
+    }
+
+    Ok(())
 }
 
 // ─── Dashboard commands ─────────────────────────────────────────
@@ -108,9 +181,10 @@ pub async fn get_overview(db: State<'_, DbPool>) -> Result<OverviewData, String>
 
     // Total hours this month
     let hours_row: (f64,) = sqlx::query_as(
-        "SELECT COALESCE(SUM(duration_seconds), 0) / 3600.0
-         FROM time_entries
-         WHERE start_time >= ?1 AND start_time < ?2",
+        "SELECT COALESCE(SUM(te.duration_seconds), 0) / 3600.0
+         FROM time_entries te
+         JOIN employees e ON e.id = te.employee_id
+         WHERE e.is_active = 1 AND te.start_time >= ?1 AND te.start_time < ?2",
     )
     .bind(&month_start)
     .bind(&next_month)
@@ -122,9 +196,10 @@ pub async fn get_overview(db: State<'_, DbPool>) -> Result<OverviewData, String>
 
     // Billable hours this month
     let billable_row: (f64,) = sqlx::query_as(
-        "SELECT COALESCE(SUM(duration_seconds), 0) / 3600.0
-         FROM time_entries
-         WHERE start_time >= ?1 AND start_time < ?2 AND is_billable = 1",
+        "SELECT COALESCE(SUM(te.duration_seconds), 0) / 3600.0
+         FROM time_entries te
+         JOIN employees e ON e.id = te.employee_id
+         WHERE e.is_active = 1 AND te.start_time >= ?1 AND te.start_time < ?2 AND te.is_billable = 1",
     )
     .bind(&month_start)
     .bind(&next_month)
@@ -152,7 +227,10 @@ pub async fn get_overview(db: State<'_, DbPool>) -> Result<OverviewData, String>
 
     // Active presence count
     let active_row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM presence WHERE clockify_timer_active = 1",
+        "SELECT COUNT(*)
+         FROM presence p
+         JOIN employees e ON e.id = p.employee_id
+         WHERE e.is_active = 1 AND p.clockify_timer_active = 1",
     )
     .fetch_one(pool)
     .await
@@ -206,9 +284,10 @@ pub async fn get_quota_compliance(db: State<'_, DbPool>) -> Result<Vec<QuotaRow>
     for emp in employees.iter().filter(|e| e.is_active) {
         // Hours this week
         let week_row: (f64,) = sqlx::query_as(
-            "SELECT COALESCE(SUM(duration_seconds), 0) / 3600.0
-             FROM time_entries
-             WHERE employee_id = ?1 AND start_time >= ?2 AND start_time < ?3",
+            "SELECT COALESCE(SUM(te.duration_seconds), 0) / 3600.0
+             FROM time_entries te
+             JOIN employees e ON e.id = te.employee_id
+             WHERE e.is_active = 1 AND te.employee_id = ?1 AND te.start_time >= ?2 AND te.start_time < ?3",
         )
         .bind(&emp.id)
         .bind(week_start.format("%Y-%m-%d").to_string())
@@ -219,9 +298,10 @@ pub async fn get_quota_compliance(db: State<'_, DbPool>) -> Result<Vec<QuotaRow>
 
         // Hours this month
         let month_row: (f64,) = sqlx::query_as(
-            "SELECT COALESCE(SUM(duration_seconds), 0) / 3600.0
-             FROM time_entries
-             WHERE employee_id = ?1 AND start_time >= ?2 AND start_time < ?3",
+            "SELECT COALESCE(SUM(te.duration_seconds), 0) / 3600.0
+             FROM time_entries te
+             JOIN employees e ON e.id = te.employee_id
+             WHERE e.is_active = 1 AND te.employee_id = ?1 AND te.start_time >= ?2 AND te.start_time < ?3",
         )
         .bind(&emp.id)
         .bind(month_start.format("%Y-%m-%d").to_string())
@@ -301,8 +381,9 @@ pub async fn get_project_breakdown(
             COALESCE(SUM(CASE WHEN te.is_billable = 1 THEN te.duration_seconds ELSE 0 END), 0) AS billable_seconds,
             COUNT(DISTINCT te.employee_id) AS member_count
          FROM time_entries te
+         JOIN employees e ON e.id = te.employee_id
          LEFT JOIN projects p ON te.project_id = p.id
-         WHERE te.start_time >= ?1 AND te.start_time < ?2
+         WHERE e.is_active = 1 AND te.start_time >= ?1 AND te.start_time < ?2
          GROUP BY COALESCE(p.name, 'No Project')
          ORDER BY total_seconds DESC",
     )
@@ -346,8 +427,10 @@ pub async fn get_time_entries_view(
 
     let entries: Vec<TimeEntry> = if let Some(eid) = employee_id {
         sqlx::query_as::<_, TimeEntry>(
-            "SELECT * FROM time_entries
-             WHERE employee_id = ?1 AND start_time >= ?2 AND start_time < ?3
+            "SELECT te.*
+             FROM time_entries te
+             JOIN employees e ON e.id = te.employee_id
+             WHERE e.is_active = 1 AND te.employee_id = ?1 AND te.start_time >= ?2 AND te.start_time < ?3
              ORDER BY start_time DESC",
         )
         .bind(&eid)
@@ -357,8 +440,10 @@ pub async fn get_time_entries_view(
         .await
     } else {
         sqlx::query_as::<_, TimeEntry>(
-            "SELECT * FROM time_entries
-             WHERE start_time >= ?1 AND start_time < ?2
+            "SELECT te.*
+             FROM time_entries te
+             JOIN employees e ON e.id = te.employee_id
+             WHERE e.is_active = 1 AND te.start_time >= ?1 AND te.start_time < ?2
              ORDER BY start_time DESC",
         )
         .bind(&start)
@@ -391,6 +476,7 @@ pub async fn get_activity_feed(
                 te.start_time AS occurred_at
             FROM time_entries te
             JOIN employees e ON te.employee_id = e.id
+            WHERE e.is_active = 1
 
             UNION ALL
 
@@ -402,6 +488,7 @@ pub async fn get_activity_feed(
                 h.occurred_at AS occurred_at
             FROM huly_issue_activity h
             JOIN employees e ON h.employee_id = e.id
+            WHERE e.is_active = 1
         )
         ORDER BY occurred_at DESC
         LIMIT ?1",

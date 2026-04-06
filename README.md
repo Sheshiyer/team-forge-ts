@@ -66,7 +66,37 @@ Star Trek-inspired interface with Orbitron typography, LCARS rounded end-cap bar
 
 </td>
 </tr>
+<tr>
+<td width="50%" valign="top">
+
+### Weekly Timeline
+Activity now rolls up into a compact 7-day timeline so you can read motion at the team level before diving into the raw feed.
+
+</td>
+<td width="50%" valign="top">
+
+### Admin Noise Filtering
+Clockify admin accounts such as `thoughtseedlabs@gmail.com` can be ignored so operational dashboards reflect the team, not the control plane.
+
+</td>
+</tr>
 </table>
+
+<img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
+
+## Preview
+
+### Overview
+
+![TeamForge Overview](docs/images/preview-overview.png)
+
+### Settings
+
+![TeamForge Settings](docs/images/preview-settings.png)
+
+### Activity
+
+![TeamForge Activity](docs/images/preview-activity.png)
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
@@ -84,8 +114,9 @@ cargo tauri dev
 On first launch:
 1. Navigate to **Settings** (or `Cmd+0`)
 2. Enter your **Clockify API key** and select workspace
-3. Enter your **Huly JWT token**
-4. Hit **Sync Now** — data populates across all views
+3. Confirm or edit the **Ignored Clockify Emails** list
+4. Enter your **Huly JWT token**
+5. Hit **Sync Now** — data populates across all views
 
 ## Architecture
 
@@ -104,6 +135,44 @@ graph LR
 ```
 <!-- readme-gen:end:architecture -->
 
+## Thoughtseed Data Flow
+
+TeamForge becomes useful when it does more than just display API responses. The real value is in **cross-populating three layers of truth**:
+
+1. **Clockify** answers who is working, for how long, and whether they are active right now.
+2. **Huly** answers what the work is, why it matters, what changed, and who is blocked.
+3. **Thoughtseed operating structure** answers how the work should be interpreted: client, project stream, sprint, onboarding flow, knowledge asset, and delivery rhythm.
+
+```mermaid
+graph TD
+    C["Clockify<br/>time entries, timers, projects, users"] --> DB["SQLite mission cache"]
+    H["Huly<br/>issues, milestones, departments, chat, meetings"] --> DB
+    T["Thoughtseed operating model<br/>clients, onboarding flow, sprints, knowledge, devices"] -. enriches .-> DB
+
+    DB --> O["Overview<br/>capacity, utilization, active crew"]
+    DB --> L["Live<br/>real-time people check"]
+    DB --> A["Activity<br/>weekly timeline + event feed"]
+    DB --> S["Sprints / Insights<br/>delivery health"]
+    DB --> TM["Team / Comms / Boards<br/>operating rhythm"]
+```
+
+### Cross-Population Strategy
+
+- **People layer:** map Clockify users and Huly persons into one employee record so presence, work logs, and Huly activity can sit on the same card.
+- **Time layer:** let Clockify remain the source of actual effort while Huly remains the source of task semantics and collaboration context.
+- **Meaning layer:** enrich raw operational data with Thoughtseed concepts such as Axtech vs Tuya vs OASIS, client onboarding flow, knowledge article lineage, and sprint rhythm.
+- **Dashboard layer:** expose the fused dataset differently by page, rather than trying to force every concept into one giant table.
+
+### How This Maps Onto The Current Dashboard
+
+- **Overview** should answer: Are we staffed correctly? Are people active? Are hours landing where they should?
+- **Live** should answer: Who is actually moving right now?
+- **Activity** should answer: What changed this week, and what is the shape of team motion over time?
+- **Sprints / Insights** should answer: Are delivery promises, estimates, and priorities converging?
+- **Team / Comms / Boards** should answer: Is the organization functioning, talking, and unblocking itself?
+
+This is the intended direction for the Thoughtseed workspace normalization work tracked in the repository backlog.
+
 ## Dashboard Views
 
 | View | Shortcut | Source | What It Shows |
@@ -116,7 +185,7 @@ graph LR
 | **Team** | `Cmd+6` | Huly | Department org cards, leave calendar, holiday list |
 | **Comms** | `Cmd+7` | Huly | Chat activity volume, meeting load with ratio analysis |
 | **Boards** | `Cmd+8` | Huly | Kanban cards, days-in-status tracking, stuck card filtering |
-| **Activity** | `Cmd+9` | Both | Combined feed, engagement heatmap |
+| **Activity** | `Cmd+9` | Both | Weekly timeline, combined feed, engagement heatmap |
 | **Live** | `Cmd+0` | Both | Real-time presence cards with auto-refresh |
 
 ## Project Structure
@@ -174,6 +243,12 @@ TeamForge connects to Huly via **direct REST API calls** (no SDK required). We r
 | Huly presence | Huly | 60s |
 
 SQLite is the single source of truth. Frontend reads cached data via Tauri IPC — never calls APIs directly.
+
+Menu bar quick actions:
+- **Show TeamForge** brings the app to the front
+- **Live Crew Check** jumps straight to the real-time presence view
+- **Weekly Timeline** jumps to the last-7-days activity view
+- **Sync Now** runs a manual sync sweep
 
 <!-- readme-gen:start:health -->
 ## Project Health

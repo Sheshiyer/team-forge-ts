@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Routes, Route, NavLink, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import Overview from "./pages/Overview";
 import Timesheet from "./pages/Timesheet";
 import Projects from "./pages/Projects";
@@ -124,6 +125,21 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [navigate]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    const bind = async () => {
+      unlisten = await listen<string>("tray:navigate", (event) => {
+        navigate(event.payload);
+      });
+    };
+
+    bind();
+    return () => {
+      unlisten?.();
+    };
   }, [navigate]);
 
   return (

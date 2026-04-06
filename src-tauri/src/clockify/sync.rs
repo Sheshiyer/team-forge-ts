@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::collections::HashSet;
 
 use chrono::Utc;
 use sqlx::SqlitePool;
@@ -33,10 +34,12 @@ impl ClockifySyncEngine {
 
     pub async fn sync_users(&self) -> Result<u32, String> {
         let users = self.client.get_users(&self.workspace_id).await?;
+        let ignored_emails = load_ignored_clockify_emails(&self.pool).await?;
         let now = Utc::now().to_rfc3339();
         let mut count = 0u32;
 
         for u in &users {
+            let is_ignored = ignored_emails.contains(&normalize_email(&u.email));
             let emp = Employee {
                 id: u.id.clone(),
                 clockify_user_id: u.id.clone(),
@@ -45,14 +48,24 @@ impl ClockifySyncEngine {
                 email: u.email.clone(),
                 avatar_url: u.profile_picture.clone(),
                 monthly_quota_hours: 160.0, // default
-                is_active: true,
+                is_active: !is_ignored,
                 created_at: now.clone(),
                 updated_at: now.clone(),
             };
             queries::upsert_employee(&self.pool, &emp)
                 .await
                 .map_err(|e| format!("upsert employee failed: {e}"))?;
-            count += 1;
+
+            if is_ignored {
+                queries::delete_time_entries_for_employee(&self.pool, &emp.id)
+                    .await
+                    .map_err(|e| format!("purge ignored time entries failed: {e}"))?;
+                queries::delete_presence_for_employee(&self.pool, &emp.id)
+                    .await
+                    .map_err(|e| format!("purge ignored presence failed: {e}"))?;
+            } else {
+                count += 1;
+            }
         }
 
         eprintln!("[clockify-sync] synced {count} users");
@@ -245,6 +258,28 @@ impl ClockifySyncEngine {
             time_entries_synced,
         })
     }
+}
+
+const DEFAULT_CLOCKIFY_IGNORED_EMAILS: &str = "thoughtseedlabs@gmail.com";
+
+fn normalize_email(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+async fn load_ignored_clockify_emails(pool: &SqlitePool) -> Result<HashSet<String>, String> {
+    let raw = queries::get_setting(pool, "clockify_ignored_emails")
+        .await
+        .map_err(|e| format!("read ignored Clockify emails failed: {e}"))?;
+
+    let source = raw
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_CLOCKIFY_IGNORED_EMAILS.to_string());
+
+    Ok(source
+        .split(|ch: char| ch == ',' || ch == '\n' || ch == ';')
+        .map(normalize_email)
+        .filter(|value| !value.is_empty())
+        .collect())
 }
 
 // ─── ISO 8601 duration parser ───────────────────────────────────

@@ -5,6 +5,106 @@ import { SkeletonTable } from "../components/ui/Skeleton";
 import Avatar from "../components/ui/Avatar";
 import type { ActivityItem } from "../lib/types";
 
+function dateKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatTimelineTime(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "--:--";
+  return parsed.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+// ── Weekly Timeline ────────────────────────────────────────────
+
+function WeeklyTimeline({ activities }: { activities: ActivityItem[] }) {
+  const days = useMemo(() => {
+    const now = new Date();
+    return Array.from({ length: 7 }, (_, index) => {
+      const dayDate = new Date(now);
+      dayDate.setDate(now.getDate() - (6 - index));
+
+      const key = dateKey(dayDate);
+      const dayItems = activities
+        .filter((item) => {
+          const parsed = new Date(item.occurredAt);
+          return !Number.isNaN(parsed.getTime()) && dateKey(parsed) === key;
+        })
+        .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+
+      return {
+        key,
+        label: dayDate.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase(),
+        date: dayDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase(),
+        count: dayItems.length,
+        items: dayItems.slice(0, 4),
+      };
+    });
+  }, [activities]);
+
+  if (days.every((day) => day.count === 0)) return null;
+
+  return (
+    <div id="weekly-timeline" style={timelineStyles.wrapper}>
+      <div style={timelineStyles.headerRow}>
+        <div>
+          <h2 style={timelineStyles.title}>WEEKLY TIMELINE</h2>
+          <div style={timelineStyles.subhead}>
+            CLOCKIFY MOTION + HULY CONTEXT FOR THE LAST 7 DAYS
+          </div>
+        </div>
+        <div style={timelineStyles.rangePill}>7 DAY WINDOW</div>
+      </div>
+      <div style={timelineStyles.divider} />
+
+      <div style={timelineStyles.grid}>
+        {days.map((day) => (
+          <div key={day.key} style={timelineStyles.dayCard}>
+            <div style={timelineStyles.dayHeader}>
+              <div>
+                <div style={timelineStyles.dayLabel}>{day.label}</div>
+                <div style={timelineStyles.dayDate}>{day.date}</div>
+              </div>
+              <div style={timelineStyles.dayCount}>{day.count}</div>
+            </div>
+
+            {day.count === 0 ? (
+              <div style={timelineStyles.emptyDay}>NO SIGNALS</div>
+            ) : (
+              <div style={timelineStyles.dayList}>
+                {day.items.map((item, index) => (
+                  <div key={`${day.key}-${index}`} style={timelineStyles.timelineItem}>
+                    <div style={timelineStyles.timelineMeta}>
+                      <span style={timelineStyles.timelineTime}>{formatTimelineTime(item.occurredAt)}</span>
+                      <span style={timelineStyles.timelineSource}>{item.source.toUpperCase()}</span>
+                    </div>
+                    <div style={timelineStyles.timelineText}>
+                      <span style={timelineStyles.timelineName}>{item.employeeName}</span>
+                      <span>{item.action}</span>
+                    </div>
+                  </div>
+                ))}
+                {day.count > day.items.length && (
+                  <div style={timelineStyles.moreText}>
+                    +{day.count - day.items.length} MORE EVENTS
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Engagement Heatmap ────────────────────────────────────────
 
 function EngagementHeatmap({ activities }: { activities: ActivityItem[] }) {
@@ -136,6 +236,142 @@ const heatmapStyles: Record<string, React.CSSProperties> = {
   },
 };
 
+const timelineStyles: Record<string, React.CSSProperties> = {
+  wrapper: {
+    background: "rgba(26, 26, 46, 0.6)",
+    borderLeft: "4px solid var(--lcars-cyan)",
+    padding: 24,
+    marginBottom: 20,
+  },
+  headerRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 16,
+  },
+  title: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "var(--lcars-cyan)",
+    marginBottom: 6,
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
+  },
+  subhead: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    color: "var(--text-quaternary)",
+    letterSpacing: "1px",
+  },
+  rangePill: {
+    border: "1px solid rgba(0, 204, 255, 0.25)",
+    color: "var(--lcars-cyan)",
+    padding: "6px 10px",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    letterSpacing: "1.5px",
+    whiteSpace: "nowrap",
+  },
+  divider: {
+    height: 2,
+    background: "rgba(153, 153, 204, 0.15)",
+    margin: "16px 0",
+  },
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+    gap: 12,
+  },
+  dayCard: {
+    background: "rgba(10, 10, 26, 0.55)",
+    border: "1px solid rgba(0, 204, 255, 0.12)",
+    padding: 14,
+    minHeight: 170,
+  },
+  dayHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 8,
+    marginBottom: 12,
+  },
+  dayLabel: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 11,
+    color: "var(--lcars-orange)",
+    letterSpacing: "1px",
+  },
+  dayDate: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-lavender)",
+    marginTop: 2,
+  },
+  dayCount: {
+    minWidth: 26,
+    height: 26,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: "50%",
+    background: "rgba(0, 204, 255, 0.12)",
+    color: "var(--lcars-cyan)",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+  },
+  emptyDay: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    color: "var(--text-quaternary)",
+    letterSpacing: "1px",
+  },
+  dayList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  },
+  timelineItem: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+  },
+  timelineMeta: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  },
+  timelineTime: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: "var(--lcars-cyan)",
+  },
+  timelineSource: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 8,
+    color: "var(--lcars-peach)",
+    letterSpacing: "1px",
+  },
+  timelineText: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    fontSize: 11,
+    color: "var(--lcars-tan)",
+  },
+  timelineName: {
+    color: "var(--lcars-orange)",
+    fontWeight: 600,
+  },
+  moreText: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    color: "var(--text-quaternary)",
+    letterSpacing: "1px",
+    marginTop: 2,
+  },
+};
+
 // ── Activity Page ─────────────────────────────────────────────
 
 function Activity() {
@@ -145,7 +381,7 @@ function Activity() {
 
   const load = useCallback(async () => {
     try {
-      const data = await api.getActivityFeed(50);
+      const data = await api.getActivityFeed(120);
       setItems(data);
     } catch {
       // ignore
@@ -162,7 +398,10 @@ function Activity() {
       <div style={styles.pageTitleBar} />
 
       {!loading && items.length > 0 && (
-        <EngagementHeatmap activities={items} />
+        <>
+          <WeeklyTimeline activities={items} />
+          <EngagementHeatmap activities={items} />
+        </>
       )}
 
       <div style={styles.card}>

@@ -4,13 +4,18 @@ mod db;
 mod huly;
 mod sync;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use sqlx::SqlitePool;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 
+use crate::clockify::client::ClockifyClient;
+use crate::clockify::sync::ClockifySyncEngine;
+use crate::db::queries;
+use crate::huly::client::HulyClient;
+use crate::huly::sync::HulySyncEngine;
 use crate::sync::scheduler::SyncScheduler;
 
 /// Managed state wrapper so Tauri commands can access the database pool.
@@ -40,6 +45,8 @@ pub fn run() {
             // ── System tray icon ──────────────────────────────────
             let tray_menu = Menu::with_items(app, &[
                 &MenuItem::with_id(app, "show", "Show TeamForge", true, None::<&str>)?,
+                &MenuItem::with_id(app, "live", "Live Crew Check", true, None::<&str>)?,
+                &MenuItem::with_id(app, "timeline", "Weekly Timeline", true, None::<&str>)?,
                 &MenuItem::with_id(app, "sync", "Sync Now", true, None::<&str>)?,
                 &MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
             ])?;
@@ -50,11 +57,16 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .on_menu_event(move |app, event| {
                     match event.id().as_ref() {
-                        "show" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                            }
+                        "show" => focus_main_window(app),
+                        "live" => open_main_route(app, "/live"),
+                        "timeline" => open_main_route(app, "/activity"),
+                        "sync" => {
+                            let app_handle = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(error) = run_tray_sync(app_handle).await {
+                                    eprintln!("[teamforge] tray sync failed: {error}");
+                                }
+                            });
                         }
                         "quit" => {
                             app.exit(0);
@@ -111,4 +123,53 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn focus_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn open_main_route(app: &tauri::AppHandle, route: &str) {
+    focus_main_window(app);
+    let _ = app.emit("tray:navigate", route.to_string());
+}
+
+async fn run_tray_sync(app: tauri::AppHandle) -> Result<(), String> {
+    let db = app
+        .try_state::<DbPool>()
+        .ok_or_else(|| "database not ready".to_string())?;
+    let pool = db.0.clone();
+
+    let api_key = queries::get_setting(&pool, "clockify_api_key")
+        .await
+        .map_err(|e| format!("read clockify api key: {e}"))?;
+    let workspace_id = queries::get_setting(&pool, "clockify_workspace_id")
+        .await
+        .map_err(|e| format!("read clockify workspace: {e}"))?;
+
+    if let (Some(api_key), Some(workspace_id)) = (api_key, workspace_id) {
+        if !api_key.is_empty() && !workspace_id.is_empty() {
+            let client = Arc::new(ClockifyClient::new(api_key));
+            let engine = ClockifySyncEngine::new(client, pool.clone(), workspace_id);
+            engine.full_sync().await?;
+        }
+    }
+
+    let token = queries::get_setting(&pool, "huly_token")
+        .await
+        .map_err(|e| format!("read huly token: {e}"))?;
+
+    if let Some(token) = token {
+        if !token.is_empty() {
+            let client = HulyClient::connect(None, &token).await?;
+            let engine = HulySyncEngine::new(Arc::new(client), pool);
+            engine.full_sync().await?;
+        }
+    }
+
+    Ok(())
 }

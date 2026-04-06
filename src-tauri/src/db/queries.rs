@@ -29,6 +29,23 @@ pub async fn get_employees(pool: &SqlitePool) -> Result<Vec<Employee>, sqlx::Err
         .await
 }
 
+pub async fn set_employee_active(
+    pool: &SqlitePool,
+    employee_id: &str,
+    is_active: bool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE employees
+         SET is_active = ?1, updated_at = datetime('now')
+         WHERE id = ?2",
+    )
+    .bind(is_active)
+    .bind(employee_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn upsert_employee(pool: &SqlitePool, e: &Employee) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO employees (id, clockify_user_id, huly_person_id, name, email, avatar_url, monthly_quota_hours, is_active, created_at, updated_at)
@@ -104,6 +121,17 @@ pub async fn upsert_time_entry(pool: &SqlitePool, te: &TimeEntry) -> Result<(), 
     Ok(())
 }
 
+pub async fn delete_time_entries_for_employee(
+    pool: &SqlitePool,
+    employee_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM time_entries WHERE employee_id = ?1")
+        .bind(employee_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 // ─── Projects ────────────────────────────────────────────────────
 
 pub async fn get_projects(pool: &SqlitePool) -> Result<Vec<Project>, sqlx::Error> {
@@ -167,6 +195,17 @@ pub async fn update_presence(pool: &SqlitePool, p: &Presence) -> Result<(), sqlx
     .bind(&p.huly_last_seen)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+pub async fn delete_presence_for_employee(
+    pool: &SqlitePool,
+    employee_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM presence WHERE employee_id = ?1")
+        .bind(employee_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
