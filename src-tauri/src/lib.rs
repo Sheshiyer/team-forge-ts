@@ -98,6 +98,16 @@ pub fn run() {
             commands::start_background_sync,
             commands::test_huly_connection,
             commands::trigger_huly_sync,
+            commands::get_milestones,
+            commands::get_time_discrepancies,
+            commands::get_estimation_accuracy,
+            commands::get_priority_distribution,
+            commands::get_departments,
+            commands::get_leave_requests,
+            commands::get_holidays,
+            commands::get_chat_activity,
+            commands::get_board_cards,
+            commands::get_meeting_load,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

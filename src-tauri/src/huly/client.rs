@@ -42,20 +42,27 @@ impl HulyClient {
         let workspace_from_jwt = Self::extract_workspace_from_jwt(user_token);
         eprintln!("[huly] workspace from JWT: {:?}", workspace_from_jwt);
 
-        // Step 2: select workspace
+        // Step 2: select workspace via JSON-RPC call to accounts URL
         let workspace_slug = workspace_from_jwt
             .as_deref()
             .ok_or_else(|| "could not extract workspace from JWT".to_string())?;
 
-        let select_url = format!("{}/api/v1/selectWorkspace", config.accounts_url);
-        eprintln!("[huly] POSTing to {select_url}");
+        eprintln!("[huly] JSON-RPC selectWorkspace to {}", config.accounts_url);
+
+        // Huly uses JSON-RPC: POST { method, params } to the accounts URL root
+        let rpc_body = json!({
+            "method": "selectWorkspace",
+            "params": {
+                "workspaceUrl": workspace_slug,
+                "kind": "external"
+            }
+        });
 
         let resp = http
-            .post(&select_url)
+            .post(&config.accounts_url)
             .header("Authorization", format!("Bearer {user_token}"))
-            .json(&SelectWorkspaceRequest {
-                workspace: workspace_slug.to_string(),
-            })
+            .header("Content-Type", "application/json")
+            .json(&rpc_body)
             .send()
             .await
             .map_err(|e| format!("selectWorkspace request failed: {e}"))?;
@@ -75,18 +82,21 @@ impl HulyClient {
             ));
         }
 
-        // Try parsing the response (it may be nested under "result" or flat)
-        let accounts_resp: AccountsResponse = serde_json::from_str(&body)
+        // JSON-RPC response: { "result": { endpoint, token, workspace } }
+        let rpc_resp: serde_json::Value = serde_json::from_str(&body)
             .map_err(|e| format!("failed to parse selectWorkspace response: {e}"))?;
 
-        let login_info = accounts_resp
-            .into_login_info()
-            .ok_or_else(|| {
-                format!(
-                    "selectWorkspace returned unexpected shape: {}",
-                    &body[..body.len().min(500)]
-                )
-            })?;
+        // Check for RPC error
+        if let Some(err) = rpc_resp.get("error") {
+            return Err(format!("selectWorkspace RPC error: {err}"));
+        }
+
+        // Extract result
+        let result = rpc_resp.get("result")
+            .ok_or_else(|| format!("selectWorkspace response missing 'result': {}", &body[..body.len().min(500)]))?;
+
+        let login_info: WorkspaceLoginInfo = serde_json::from_value(result.clone())
+            .map_err(|e| format!("failed to parse workspace login info: {e}"))?;
 
         // Step 3: convert wss:// endpoint to https://
         let endpoint = login_info
@@ -182,13 +192,24 @@ impl HulyClient {
             ));
         }
 
-        // The response should be a JSON array
-        let results: Vec<serde_json::Value> = serde_json::from_str(&body).map_err(|e| {
-            format!(
-                "failed to parse find_all response as array: {e} (body: {})",
-                &body[..body.len().min(300)]
-            )
-        })?;
+        // Response may be a plain array OR a TotalArray: { dataType, total, value: [...] }
+        let results: Vec<serde_json::Value> = match serde_json::from_str::<Vec<serde_json::Value>>(&body) {
+            Ok(arr) => arr,
+            Err(_) => {
+                // Try parsing as TotalArray wrapper
+                let wrapper: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+                    format!("failed to parse find_all response: {e} (body: {})", &body[..body.len().min(300)])
+                })?;
+                if let Some(arr) = wrapper.get("value").and_then(|v| v.as_array()) {
+                    arr.clone()
+                } else {
+                    return Err(format!(
+                        "find_all response has no 'value' array: {}",
+                        &body[..body.len().min(300)]
+                    ));
+                }
+            }
+        };
 
         eprintln!("[huly] find_all returned {} documents", results.len());
         Ok(results)
@@ -294,6 +315,178 @@ impl HulyClient {
 
         serde_json::from_str(&body)
             .map_err(|e| format!("parse account info: {e}"))
+    }
+
+    /// Fetch tracker milestones.
+    pub async fn get_milestones(&self) -> Result<Vec<HulyMilestone>, String> {
+        let docs = self
+            .find_all("tracker:class:Milestone", json!({}), Some(200))
+            .await?;
+
+        let mut items = Vec::with_capacity(docs.len());
+        for doc in docs {
+            match serde_json::from_value::<HulyMilestone>(doc.clone()) {
+                Ok(m) => items.push(m),
+                Err(e) => eprintln!("[huly] warning: could not parse milestone: {e}"),
+            }
+        }
+        Ok(items)
+    }
+
+    /// Fetch time spend reports, optionally since a given timestamp (ms epoch).
+    pub async fn get_time_reports(
+        &self,
+        since: Option<i64>,
+    ) -> Result<Vec<HulyTimeSpendReport>, String> {
+        let query = if let Some(ts) = since {
+            json!({ "modifiedOn": { "$gte": ts } })
+        } else {
+            json!({})
+        };
+
+        let docs = self
+            .find_all("tracker:class:TimeSpendReport", query, Some(1000))
+            .await?;
+
+        let mut items = Vec::with_capacity(docs.len());
+        for doc in docs {
+            match serde_json::from_value::<HulyTimeSpendReport>(doc.clone()) {
+                Ok(r) => items.push(r),
+                Err(e) => eprintln!("[huly] warning: could not parse time report: {e}"),
+            }
+        }
+        Ok(items)
+    }
+
+    /// Fetch HR departments.
+    pub async fn get_departments(&self) -> Result<Vec<HulyDepartment>, String> {
+        let docs = self
+            .find_all("hr:class:Department", json!({}), Some(100))
+            .await?;
+
+        let mut items = Vec::with_capacity(docs.len());
+        for doc in docs {
+            match serde_json::from_value::<HulyDepartment>(doc.clone()) {
+                Ok(d) => items.push(d),
+                Err(e) => eprintln!("[huly] warning: could not parse department: {e}"),
+            }
+        }
+        Ok(items)
+    }
+
+    /// Fetch HR leave requests.
+    pub async fn get_leave_requests(&self) -> Result<Vec<HulyLeaveRequest>, String> {
+        let docs = self
+            .find_all("hr:class:Request", json!({}), Some(500))
+            .await?;
+
+        let mut items = Vec::with_capacity(docs.len());
+        for doc in docs {
+            match serde_json::from_value::<HulyLeaveRequest>(doc.clone()) {
+                Ok(r) => items.push(r),
+                Err(e) => eprintln!("[huly] warning: could not parse leave request: {e}"),
+            }
+        }
+        Ok(items)
+    }
+
+    /// Fetch HR holidays.
+    pub async fn get_holidays(&self) -> Result<Vec<HulyHoliday>, String> {
+        let docs = self
+            .find_all("hr:class:Holiday", json!({}), Some(200))
+            .await?;
+
+        let mut items = Vec::with_capacity(docs.len());
+        for doc in docs {
+            match serde_json::from_value::<HulyHoliday>(doc.clone()) {
+                Ok(h) => items.push(h),
+                Err(e) => eprintln!("[huly] warning: could not parse holiday: {e}"),
+            }
+        }
+        Ok(items)
+    }
+
+    /// Fetch chunter channels.
+    pub async fn get_channels(&self) -> Result<Vec<HulyChannel>, String> {
+        let docs = self
+            .find_all("chunter:class:Channel", json!({}), Some(200))
+            .await?;
+
+        let mut items = Vec::with_capacity(docs.len());
+        for doc in docs {
+            match serde_json::from_value::<HulyChannel>(doc.clone()) {
+                Ok(c) => items.push(c),
+                Err(e) => eprintln!("[huly] warning: could not parse channel: {e}"),
+            }
+        }
+        Ok(items)
+    }
+
+    /// Fetch chat messages, optionally since a given timestamp (ms epoch).
+    /// Tries ChunterMessage first, falls back to ThreadMessage.
+    pub async fn get_chat_messages(
+        &self,
+        since: Option<i64>,
+    ) -> Result<Vec<HulyChatMessage>, String> {
+        let query = if let Some(ts) = since {
+            json!({ "createdOn": { "$gte": ts } })
+        } else {
+            json!({})
+        };
+
+        let docs = self
+            .find_all("chunter:class:ChunterMessage", query.clone(), Some(1000))
+            .await?;
+
+        let docs = if docs.is_empty() {
+            eprintln!("[huly] ChunterMessage returned nothing, trying ThreadMessage");
+            self.find_all("chunter:class:ThreadMessage", query, Some(1000))
+                .await
+                .unwrap_or_default()
+        } else {
+            docs
+        };
+
+        let mut items = Vec::with_capacity(docs.len());
+        for doc in docs {
+            match serde_json::from_value::<HulyChatMessage>(doc.clone()) {
+                Ok(m) => items.push(m),
+                Err(e) => eprintln!("[huly] warning: could not parse chat message: {e}"),
+            }
+        }
+        Ok(items)
+    }
+
+    /// Fetch board cards.
+    pub async fn get_board_cards(&self) -> Result<Vec<HulyBoardCard>, String> {
+        let docs = self
+            .find_all("board:class:Card", json!({}), Some(500))
+            .await?;
+
+        let mut items = Vec::with_capacity(docs.len());
+        for doc in docs {
+            match serde_json::from_value::<HulyBoardCard>(doc.clone()) {
+                Ok(c) => items.push(c),
+                Err(e) => eprintln!("[huly] warning: could not parse board card: {e}"),
+            }
+        }
+        Ok(items)
+    }
+
+    /// Fetch calendar events.
+    pub async fn get_calendar_events(&self) -> Result<Vec<HulyCalendarEvent>, String> {
+        let docs = self
+            .find_all("calendar:class:Event", json!({}), Some(500))
+            .await?;
+
+        let mut items = Vec::with_capacity(docs.len());
+        for doc in docs {
+            match serde_json::from_value::<HulyCalendarEvent>(doc.clone()) {
+                Ok(e) => items.push(e),
+                Err(err) => eprintln!("[huly] warning: could not parse calendar event: {err}"),
+            }
+        }
+        Ok(items)
     }
 
     /// Quick connectivity check: get account info and return a summary string.

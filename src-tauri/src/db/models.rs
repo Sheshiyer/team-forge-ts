@@ -168,3 +168,107 @@ pub struct ActivityItem {
     pub detail: Option<String>,
     pub occurred_at: String,
 }
+
+// ─── New Huly integration view structs ──────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MilestoneView {
+    pub id: String,
+    pub label: String,
+    pub status: String,
+    pub target_date: Option<String>,
+    pub total_issues: u32,
+    pub completed_issues: u32,
+    pub progress_percent: f64,
+    pub project_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeDiscrepancy {
+    pub employee_name: String,
+    pub huly_hours: f64,
+    pub clockify_hours: f64,
+    pub difference_hours: f64,
+    pub difference_percent: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EstimationAccuracy {
+    pub employee_name: String,
+    pub total_issues: u32,
+    pub avg_estimated_hours: f64,
+    pub avg_actual_hours: f64,
+    pub accuracy_percent: f64,
+    pub chronic_under_estimator: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PriorityDistribution {
+    pub priority: String,
+    pub count: u32,
+    pub assigned_count: u32,
+    pub unassigned_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DepartmentView {
+    pub id: String,
+    pub name: String,
+    pub head_name: Option<String>,
+    pub member_count: u32,
+    pub total_hours: f64,
+    pub quota_total: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeaveView {
+    pub employee_name: String,
+    pub leave_type: String,
+    pub date_from: String,
+    pub date_to: String,
+    pub status: String,
+    pub days: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HolidayView {
+    pub title: String,
+    pub date: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatActivityView {
+    pub employee_name: String,
+    pub message_count: u32,
+    pub channels_active: u32,
+    pub last_message_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardCardView {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub assignee_name: Option<String>,
+    pub days_in_status: u32,
+    pub board_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingLoadView {
+    pub employee_name: String,
+    pub meetings_this_week: u32,
+    pub total_meeting_hours: f64,
+    pub work_hours: f64,
+    pub meeting_ratio: f64,
+}
