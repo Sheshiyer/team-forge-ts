@@ -15,11 +15,10 @@ function EngagementHeatmap({ activities }: { activities: ActivityItem[] }) {
     for (let i = 6; i >= 0; i--) {
       const d = new Date(now);
       d.setDate(now.getDate() - i);
-      dayLabels.push(d.toLocaleDateString("en-US", { weekday: "short" }));
+      dayLabels.push(d.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase());
       dayKeys.push(d.toISOString().split("T")[0]);
     }
 
-    // Count activities per employee per day
     const countMap = new Map<string, Map<string, number>>();
     const empSet = new Set<string>();
 
@@ -42,24 +41,23 @@ function EngagementHeatmap({ activities }: { activities: ActivityItem[] }) {
   if (employees.length === 0) return null;
 
   function cellColor(count: number): string {
-    if (count === 0) return "rgba(255,255,255,0.02)";
-    if (count <= 2) return "rgba(94, 106, 210, 0.3)";
-    if (count <= 5) return "rgba(94, 106, 210, 0.5)";
-    return "rgba(94, 106, 210, 0.8)";
+    if (count === 0) return "rgba(153, 153, 204, 0.05)";
+    if (count <= 2) return "rgba(255, 153, 0, 0.25)";
+    if (count <= 5) return "rgba(255, 153, 0, 0.5)";
+    return "rgba(255, 153, 0, 0.8)";
   }
 
   return (
     <div style={heatmapStyles.wrapper}>
-      <h2 style={heatmapStyles.title}>Engagement Heatmap</h2>
+      <h2 style={heatmapStyles.title}>ENGAGEMENT HEATMAP</h2>
+      <div style={heatmapStyles.divider} />
       <div style={{ overflowX: "auto" }}>
         <table style={{ borderCollapse: "collapse" }}>
           <thead>
             <tr>
               <th style={heatmapStyles.cornerCell} />
               {days.map((d) => (
-                <th key={d} style={heatmapStyles.dayLabel}>
-                  {d}
-                </th>
+                <th key={d} style={heatmapStyles.dayLabel}>{d}</th>
               ))}
             </tr>
           </thead>
@@ -69,7 +67,7 @@ function EngagementHeatmap({ activities }: { activities: ActivityItem[] }) {
                 <td style={heatmapStyles.empLabel}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <Avatar name={emp} size={18} />
-                    <span>{emp}</span>
+                    <span>{emp.toUpperCase()}</span>
                   </div>
                 </td>
                 {grid[ei].map((count, di) => (
@@ -78,8 +76,9 @@ function EngagementHeatmap({ activities }: { activities: ActivityItem[] }) {
                       style={{
                         width: 20,
                         height: 20,
-                        borderRadius: 3,
+                        borderRadius: 0,
                         backgroundColor: cellColor(count),
+                        border: count > 0 ? "1px solid rgba(255, 153, 0, 0.2)" : "1px solid transparent",
                       }}
                       title={`${emp}: ${count} activities`}
                     />
@@ -96,33 +95,44 @@ function EngagementHeatmap({ activities }: { activities: ActivityItem[] }) {
 
 const heatmapStyles: Record<string, React.CSSProperties> = {
   wrapper: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-lg)",
+    background: "rgba(26, 26, 46, 0.6)",
+    borderLeft: "4px solid var(--lcars-orange)",
     padding: 24,
     marginBottom: 20,
   },
   title: {
-    fontSize: 14,
-    fontWeight: 510,
-    color: "var(--text-primary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "var(--lcars-orange)",
+    marginBottom: 8,
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
+  },
+  divider: {
+    height: 2,
+    background: "rgba(153, 153, 204, 0.15)",
     marginBottom: 16,
   },
   cornerCell: {
     padding: "4px 12px 4px 0",
   },
   dayLabel: {
-    fontSize: 11,
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
     fontWeight: 500,
-    color: "var(--text-quaternary)",
+    color: "var(--lcars-lavender)",
     textAlign: "center",
     padding: "0 2px 6px",
+    letterSpacing: "1px",
   },
   empLabel: {
-    fontSize: 12,
-    color: "var(--text-tertiary)",
+    fontSize: 10,
+    fontFamily: "'Orbitron', sans-serif",
+    color: "var(--lcars-lavender)",
     paddingRight: 12,
     whiteSpace: "nowrap",
+    letterSpacing: "0.5px",
   },
 };
 
@@ -144,13 +154,12 @@ function Activity() {
     }
   }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   return (
     <div>
-      <h1 style={styles.pageTitle}>Activity</h1>
+      <h1 style={styles.pageTitle}>ACTIVITY</h1>
+      <div style={styles.pageTitleBar} />
 
       {!loading && items.length > 0 && (
         <EngagementHeatmap activities={items} />
@@ -161,38 +170,23 @@ function Activity() {
           <SkeletonTable rows={8} cols={3} />
         ) : items.length === 0 ? (
           <p style={styles.emptyText}>
-            No activity yet. Sync data to populate the feed.
+            NO ACTIVITY YET. SYNC DATA TO POPULATE THE FEED.
           </p>
         ) : (
           <div>
             {items.map((item, i) => (
               <div key={`${item.occurredAt}-${i}`} style={styles.feedItem}>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    marginBottom: 4,
-                  }}
-                >
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
                   <Avatar name={item.employeeName} size={22} />
                   <SourceBadge source={item.source} />
                   <span style={styles.employeeName}>{item.employeeName}</span>
                   <span style={styles.actionText}>{item.action}</span>
                 </div>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "baseline",
-                  }}
-                >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                   {item.detail && (
                     <span style={styles.detailText}>{item.detail}</span>
                   )}
-                  <span style={styles.timeText}>
-                    {timeAgo(item.occurredAt)}
-                  </span>
+                  <span style={styles.timeText}>{timeAgo(item.occurredAt)}</span>
                 </div>
               </div>
             ))}
@@ -210,62 +204,72 @@ function SourceBadge({ source }: { source: string }) {
       style={{
         display: "inline-block",
         padding: "1px 8px",
-        borderRadius: "var(--radius-full)",
-        fontSize: 11,
-        fontWeight: 510,
-        letterSpacing: "0.02em",
-        background: isClockify
-          ? "rgba(94, 106, 210, 0.15)"
-          : "rgba(113, 112, 255, 0.15)",
-        color: isClockify ? "var(--accent-brand)" : "var(--accent-violet)",
+        borderRadius: 2,
+        fontSize: 9,
+        fontWeight: 600,
+        fontFamily: "'Orbitron', sans-serif",
+        letterSpacing: "1px",
+        border: `1px solid ${isClockify ? "var(--lcars-orange)" : "var(--lcars-peach)"}`,
+        color: isClockify ? "var(--lcars-orange)" : "var(--lcars-peach)",
+        textTransform: "uppercase" as const,
       }}
     >
-      {isClockify ? "Clockify" : "Huly"}
+      {isClockify ? "CLOCKIFY" : "HULY"}
     </span>
   );
 }
 
 const styles: Record<string, React.CSSProperties> = {
   pageTitle: {
+    fontFamily: "'Orbitron', sans-serif",
     fontSize: 20,
-    fontWeight: 600,
+    fontWeight: 700,
+    marginBottom: 8,
+    color: "var(--lcars-orange)",
+    letterSpacing: "4px",
+    textTransform: "uppercase" as const,
+  },
+  pageTitleBar: {
+    height: 3,
+    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
     marginBottom: 24,
-    color: "var(--text-primary)",
-    letterSpacing: "-0.02em",
   },
   card: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-lg)",
+    background: "rgba(26, 26, 46, 0.6)",
+    borderLeft: "4px solid var(--lcars-green)",
     padding: 24,
   },
   feedItem: {
     padding: "12px 0",
-    borderBottom: "1px solid var(--border-subtle)",
+    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
   },
   employeeName: {
-    fontWeight: 510,
-    color: "var(--text-primary)",
+    fontWeight: 600,
+    color: "var(--lcars-orange)",
     fontSize: 13,
   },
   actionText: {
-    color: "var(--text-secondary)",
+    color: "var(--lcars-tan)",
     fontSize: 13,
   },
   detailText: {
-    color: "var(--text-tertiary)",
+    color: "var(--lcars-lavender)",
     fontSize: 13,
     flex: 1,
   },
   timeText: {
+    fontFamily: "'JetBrains Mono', monospace",
     color: "var(--text-quaternary)",
     fontSize: 12,
     flexShrink: 0,
     marginLeft: 12,
   },
   emptyText: {
-    fontSize: 13,
-    color: "var(--text-tertiary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 11,
+    color: "var(--text-quaternary)",
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
   },
 };
 

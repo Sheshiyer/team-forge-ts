@@ -21,7 +21,6 @@ function getDateRange(range: DateRange): { start: string; end: string } {
       end: sunday.toISOString().split("T")[0],
     };
   }
-  // month
   const start = new Date(now.getFullYear(), now.getMonth(), 1);
   const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
   return {
@@ -61,10 +60,8 @@ function Timesheet() {
     load();
   }, [load]);
 
-  // Build employee lookup
   const empMap = new Map(employees.map((e) => [e.id, e.name]));
 
-  // Sort entries
   const sorted = [...entries].sort((a, b) => {
     let cmp = 0;
     switch (sortCol) {
@@ -112,7 +109,8 @@ function Timesheet() {
 
   return (
     <div>
-      <h1 style={styles.pageTitle}>Timesheet</h1>
+      <h1 style={styles.pageTitle}>TIMESHEET</h1>
+      <div style={styles.pageTitleBar} />
 
       {/* Controls */}
       <div style={styles.controls}>
@@ -124,7 +122,7 @@ function Timesheet() {
               ...(range === "week" ? styles.toggleActive : {}),
             }}
           >
-            This Week
+            THIS WEEK
           </button>
           <button
             onClick={() => setRange("month")}
@@ -133,7 +131,7 @@ function Timesheet() {
               ...(range === "month" ? styles.toggleActive : {}),
             }}
           >
-            This Month
+            THIS MONTH
           </button>
         </div>
 
@@ -142,7 +140,7 @@ function Timesheet() {
           onChange={(e) => setFilterEmployee(e.target.value || null)}
           style={styles.select}
         >
-          <option value="">All Employees</option>
+          <option value="">ALL CREW</option>
           {employees
             .filter((e) => e.isActive)
             .map((e) => (
@@ -153,7 +151,7 @@ function Timesheet() {
         </select>
 
         <button onClick={handleExport} style={styles.ghostBtn}>
-          Export CSV
+          EXPORT CSV
         </button>
       </div>
 
@@ -163,7 +161,7 @@ function Timesheet() {
           <SkeletonTable rows={8} cols={6} />
         ) : sorted.length === 0 ? (
           <p style={styles.emptyText}>
-            No time entries found for this period.
+            NO TIME ENTRIES FOUND FOR THIS PERIOD
           </p>
         ) : (
           <table style={styles.table}>
@@ -173,38 +171,32 @@ function Timesheet() {
                   style={{ ...styles.th, cursor: "pointer" }}
                   onClick={() => handleSort("startTime")}
                 >
-                  Date{sortIndicator("startTime")}
+                  DATE{sortIndicator("startTime")}
                 </th>
                 <th
                   style={{ ...styles.th, cursor: "pointer" }}
                   onClick={() => handleSort("employee")}
                 >
-                  Employee{sortIndicator("employee")}
+                  CREW{sortIndicator("employee")}
                 </th>
-                <th style={styles.th}>Project</th>
-                <th style={styles.th}>Description</th>
+                <th style={styles.th}>PROJECT</th>
+                <th style={styles.th}>DESCRIPTION</th>
                 <th
                   style={{ ...styles.th, cursor: "pointer" }}
                   onClick={() => handleSort("duration")}
                 >
-                  Hours{sortIndicator("duration")}
+                  HOURS{sortIndicator("duration")}
                 </th>
-                <th style={styles.th}>Billable</th>
+                <th style={styles.th}>BILLABLE</th>
               </tr>
             </thead>
             <tbody>
               {sorted.map((entry) => (
                 <tr key={entry.id}>
-                  <td style={styles.td}>
+                  <td style={styles.tdMono}>
                     {entry.startTime.split("T")[0]}
                   </td>
-                  <td
-                    style={{
-                      ...styles.td,
-                      fontWeight: 510,
-                      color: "var(--text-primary)",
-                    }}
-                  >
+                  <td style={styles.td}>
                     <div
                       style={{
                         display: "flex",
@@ -216,7 +208,9 @@ function Timesheet() {
                         name={empMap.get(entry.employeeId) ?? entry.employeeId}
                         size={22}
                       />
-                      {empMap.get(entry.employeeId) ?? entry.employeeId}
+                      <span style={{ color: "var(--lcars-orange)" }}>
+                        {empMap.get(entry.employeeId) ?? entry.employeeId}
+                      </span>
                     </div>
                   </td>
                   <td style={styles.td}>{entry.projectId ?? "--"}</td>
@@ -231,7 +225,7 @@ function Timesheet() {
                   >
                     {entry.description ?? "--"}
                   </td>
-                  <td style={styles.td}>
+                  <td style={styles.tdMono}>
                     {entry.durationSeconds != null
                       ? formatDuration(entry.durationSeconds)
                       : "--"}
@@ -244,8 +238,11 @@ function Timesheet() {
                         height: 8,
                         borderRadius: "50%",
                         backgroundColor: entry.isBillable
-                          ? "var(--status-success)"
+                          ? "var(--lcars-green)"
                           : "var(--text-quaternary)",
+                        boxShadow: entry.isBillable
+                          ? "0 0 6px rgba(51, 204, 102, 0.4)"
+                          : "none",
                       }}
                     />
                   </td>
@@ -261,11 +258,18 @@ function Timesheet() {
 
 const styles: Record<string, React.CSSProperties> = {
   pageTitle: {
+    fontFamily: "'Orbitron', sans-serif",
     fontSize: 20,
-    fontWeight: 600,
+    fontWeight: 700,
+    marginBottom: 8,
+    color: "var(--lcars-orange)",
+    letterSpacing: "4px",
+    textTransform: "uppercase" as const,
+  },
+  pageTitleBar: {
+    height: 3,
+    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
     marginBottom: 24,
-    color: "var(--text-primary)",
-    letterSpacing: "-0.02em",
   },
   controls: {
     display: "flex",
@@ -275,53 +279,57 @@ const styles: Record<string, React.CSSProperties> = {
   },
   toggleGroup: {
     display: "flex",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-md)",
+    border: "1px solid rgba(255, 153, 0, 0.3)",
+    borderRadius: 2,
     overflow: "hidden",
   },
   toggleBtn: {
-    background: "rgba(255,255,255,0.02)",
+    background: "transparent",
     border: "none",
-    borderRight: "1px solid var(--border-standard)",
-    color: "var(--text-tertiary)",
+    borderRight: "1px solid rgba(255, 153, 0, 0.2)",
+    color: "var(--lcars-lavender)",
     padding: "8px 16px",
-    fontSize: 13,
-    fontWeight: 510,
-    fontFamily: "var(--font-sans)",
+    fontSize: 10,
+    fontWeight: 600,
+    fontFamily: "'Orbitron', sans-serif",
     cursor: "pointer",
     transition: "background 0.15s, color 0.15s",
+    letterSpacing: "1px",
   },
   toggleActive: {
-    background: "var(--bg-hover)",
-    color: "var(--text-primary)",
+    background: "var(--lcars-orange)",
+    color: "#000",
   },
   select: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-md)",
-    color: "var(--text-secondary)",
+    background: "rgba(26, 26, 46, 0.8)",
+    border: "1px solid rgba(255, 153, 0, 0.3)",
+    borderRadius: 2,
+    color: "var(--lcars-tan)",
     padding: "8px 14px",
-    fontSize: 13,
-    fontFamily: "var(--font-sans)",
+    fontSize: 11,
+    fontFamily: "'Orbitron', sans-serif",
     outline: "none",
+    letterSpacing: "1px",
+    textTransform: "uppercase" as const,
   },
   ghostBtn: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-md)",
-    color: "var(--text-tertiary)",
+    background: "transparent",
+    border: "1px solid rgba(255, 153, 0, 0.3)",
+    borderRadius: 2,
+    color: "var(--lcars-orange)",
     padding: "8px 14px",
-    fontSize: 13,
-    fontWeight: 510,
-    fontFamily: "var(--font-sans)",
+    fontSize: 10,
+    fontWeight: 600,
+    fontFamily: "'Orbitron', sans-serif",
     cursor: "pointer",
     transition: "background 0.15s, color 0.15s",
     marginLeft: "auto",
+    letterSpacing: "1px",
+    textTransform: "uppercase" as const,
   },
   card: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-lg)",
+    background: "rgba(26, 26, 46, 0.6)",
+    borderLeft: "4px solid var(--lcars-blue)",
     padding: 24,
   },
   table: {
@@ -331,23 +339,34 @@ const styles: Record<string, React.CSSProperties> = {
   },
   th: {
     textAlign: "left" as const,
-    color: "var(--text-tertiary)",
+    color: "var(--lcars-lavender)",
+    fontFamily: "'Orbitron', sans-serif",
     fontWeight: 500,
     padding: "8px 12px",
-    borderBottom: "1px solid var(--border-subtle)",
-    fontSize: 12,
+    borderBottom: "1px solid rgba(255, 153, 0, 0.15)",
+    fontSize: 10,
     textTransform: "uppercase" as const,
-    letterSpacing: "0.04em",
+    letterSpacing: "1.5px",
+    background: "rgba(255, 153, 0, 0.05)",
     userSelect: "none" as const,
   },
   td: {
     padding: "10px 12px",
-    color: "var(--text-secondary)",
-    borderBottom: "1px solid var(--border-subtle)",
+    color: "var(--lcars-tan)",
+    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
+  },
+  tdMono: {
+    padding: "10px 12px",
+    color: "var(--lcars-lavender)",
+    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
+    fontFamily: "'JetBrains Mono', monospace",
   },
   emptyText: {
-    fontSize: 13,
-    color: "var(--text-tertiary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 11,
+    color: "var(--text-quaternary)",
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
   },
 };
 

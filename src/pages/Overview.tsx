@@ -25,10 +25,10 @@ function ProgressRing({
   const strokeColor =
     color ??
     (clamped >= 80
-      ? "var(--accent-brand)"
+      ? "var(--lcars-orange)"
       : clamped >= 50
-      ? "var(--status-warning)"
-      : "var(--status-critical)");
+      ? "var(--lcars-yellow)"
+      : "var(--lcars-red)");
 
   return (
     <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
@@ -37,7 +37,7 @@ function ProgressRing({
         cy={size / 2}
         r={radius}
         fill="none"
-        stroke="rgba(255,255,255,0.05)"
+        stroke="rgba(153, 153, 204, 0.1)"
         strokeWidth={strokeWidth}
       />
       <circle
@@ -49,8 +49,11 @@ function ProgressRing({
         strokeWidth={strokeWidth}
         strokeDasharray={circumference}
         strokeDashoffset={offset}
-        strokeLinecap="round"
-        style={{ transition: "stroke-dashoffset 0.6s ease" }}
+        strokeLinecap="butt"
+        style={{
+          transition: "stroke-dashoffset 0.6s ease",
+          filter: `drop-shadow(0 0 4px ${strokeColor})`,
+        }}
       />
     </svg>
   );
@@ -62,7 +65,7 @@ function Sparkline({
   data,
   width = 80,
   height = 24,
-  color = "var(--accent-brand)",
+  color = "var(--lcars-orange)",
 }: {
   data: number[];
   width?: number;
@@ -95,12 +98,6 @@ function Sparkline({
   );
 }
 
-/**
- * Generate mock sparkline data for a given employee name.
- * Uses a simple seeded approach so the same name always produces the same data.
- * TODO: Replace with real historical weekly data from a new Tauri command
- * (e.g. `get_employee_weekly_hours`) in a future pass.
- */
 function mockSparklineData(name: string): number[] {
   let seed = name.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
   const data: number[] = [];
@@ -115,17 +112,23 @@ function mockSparklineData(name: string): number[] {
 
 // ── MetricCard ────────────────────────────────────────────────
 
+const METRIC_COLORS = ["var(--lcars-orange)", "var(--lcars-cyan)", "var(--lcars-green)"];
+
 function MetricCard({
   label,
   value,
   children,
+  colorIndex = 0,
 }: {
   label: string;
   value: string;
   children?: React.ReactNode;
+  colorIndex?: number;
 }) {
+  const barColor = METRIC_COLORS[colorIndex % METRIC_COLORS.length];
   return (
     <div style={styles.metricCard}>
+      <div style={{ ...styles.metricCardBar, backgroundColor: barColor }} />
       <div
         style={{
           display: "flex",
@@ -173,7 +176,8 @@ function Overview() {
   if (loading) {
     return (
       <div>
-        <h1 style={styles.pageTitle}>Overview</h1>
+        <h1 style={styles.pageTitle}>OVERVIEW</h1>
+        <div style={styles.pageTitleBar} />
         <div style={styles.metricsRow}>
           <SkeletonCard />
           <SkeletonCard />
@@ -193,42 +197,46 @@ function Overview() {
 
   return (
     <div>
-      <h1 style={styles.pageTitle}>Overview</h1>
+      <h1 style={styles.pageTitle}>OVERVIEW</h1>
+      <div style={styles.pageTitleBar} />
 
       {/* Metric Cards Row */}
       <div style={styles.metricsRow}>
         <MetricCard
-          label="Team Hours This Month"
+          label="TEAM HOURS THIS MONTH"
           value={
             overview
-              ? `${overview.teamHoursThisMonth.toFixed(1)} / ${overview.teamQuota.toFixed(0)}h`
+              ? `${overview.teamHoursThisMonth.toFixed(1)} / ${overview.teamQuota.toFixed(0)}H`
               : "--"
           }
+          colorIndex={0}
         >
           <ProgressRing percent={hoursPercent} />
         </MetricCard>
 
         <MetricCard
-          label="Utilization Rate"
+          label="UTILIZATION RATE"
           value={
             overview
               ? `${(overview.utilizationRate * 100).toFixed(1)}%`
               : "--"
           }
+          colorIndex={1}
         >
           <ProgressRing
             percent={overview ? overview.utilizationRate * 100 : 0}
-            color="var(--accent-violet)"
+            color="var(--lcars-cyan)"
           />
         </MetricCard>
 
         <MetricCard
-          label="Active Now"
+          label="ACTIVE NOW"
           value={
             overview
               ? `${overview.activeCount} / ${overview.totalCount}`
               : "--"
           }
+          colorIndex={2}
         >
           <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
             {overview &&
@@ -242,8 +250,16 @@ function Overview() {
                     borderRadius: "50%",
                     backgroundColor:
                       i < overview.activeCount
-                        ? "var(--status-success)"
+                        ? "var(--lcars-green)"
                         : "var(--text-quaternary)",
+                    boxShadow:
+                      i < overview.activeCount
+                        ? "0 0 6px rgba(51, 204, 102, 0.4)"
+                        : "none",
+                    animation:
+                      i < overview.activeCount
+                        ? "lcars-pulse 2s ease-in-out infinite"
+                        : "none",
                   }}
                 />
               ))}
@@ -253,7 +269,8 @@ function Overview() {
 
       {/* Quota Compliance Table */}
       <div style={styles.card}>
-        <h2 style={styles.sectionTitle}>Quota Compliance</h2>
+        <h2 style={styles.sectionTitle}>QUOTA COMPLIANCE</h2>
+        <div style={styles.sectionDivider} />
         {quotaRows.length === 0 ? (
           <p style={styles.emptyText}>
             No data yet. Sync employees and time entries first.
@@ -262,12 +279,12 @@ function Overview() {
           <table style={styles.table}>
             <thead>
               <tr>
-                <th style={styles.th}>Name</th>
-                <th style={styles.th}>This Week</th>
-                <th style={styles.th}>This Month</th>
-                <th style={styles.th}>Quota</th>
-                <th style={styles.th}>Trend</th>
-                <th style={styles.th}>Status</th>
+                <th style={styles.th}>NAME</th>
+                <th style={styles.th}>THIS WEEK</th>
+                <th style={styles.th}>THIS MONTH</th>
+                <th style={styles.th}>QUOTA</th>
+                <th style={styles.th}>TREND</th>
+                <th style={styles.th}>STATUS</th>
               </tr>
             </thead>
             <tbody>
@@ -282,21 +299,21 @@ function Overview() {
                       }}
                     >
                       <Avatar name={row.employeeName} size={24} />
-                      {row.employeeName}
+                      <span style={{ color: "var(--lcars-orange)" }}>{row.employeeName}</span>
                     </div>
                   </td>
-                  <td style={styles.td}>{row.thisWeekHours.toFixed(1)}h</td>
-                  <td style={styles.td}>{row.thisMonthHours.toFixed(1)}h</td>
-                  <td style={styles.td}>{row.quota.toFixed(0)}h</td>
+                  <td style={styles.tdMono}>{row.thisWeekHours.toFixed(1)}h</td>
+                  <td style={styles.tdMono}>{row.thisMonthHours.toFixed(1)}h</td>
+                  <td style={styles.tdMono}>{row.quota.toFixed(0)}h</td>
                   <td style={styles.td}>
                     <Sparkline
                       data={mockSparklineData(row.employeeName)}
                       color={
                         row.status === "onTrack"
-                          ? "var(--status-success)"
+                          ? "var(--lcars-green)"
                           : row.status === "behind"
-                          ? "var(--status-warning)"
-                          : "var(--status-critical)"
+                          ? "var(--lcars-yellow)"
+                          : "var(--lcars-red)"
                       }
                     />
                   </td>
@@ -310,10 +327,11 @@ function Overview() {
         )}
       </div>
 
-      {/* Weekly Trend Placeholder */}
+      {/* Weekly Trend */}
       <div style={styles.card}>
-        <h2 style={styles.sectionTitle}>Weekly Trend</h2>
-        <p style={styles.emptyText}>Coming Soon</p>
+        <h2 style={styles.sectionTitle}>WEEKLY TREND</h2>
+        <div style={styles.sectionDivider} />
+        <p style={styles.emptyText}>AWAITING DATA STREAM</p>
       </div>
     </div>
   );
@@ -321,29 +339,24 @@ function Overview() {
 
 function StatusPill({ status }: { status: string }) {
   let bg: string;
-  let color: string;
   let label: string;
 
   switch (status) {
     case "onTrack":
-      bg = "var(--status-success)";
-      color = "#fff";
-      label = "On Track";
+      bg = "var(--lcars-green)";
+      label = "ON TRACK";
       break;
     case "behind":
-      bg = "var(--status-warning)";
-      color = "#1a1a1a";
-      label = "Behind";
+      bg = "var(--lcars-yellow)";
+      label = "BEHIND";
       break;
     case "critical":
-      bg = "var(--status-critical)";
-      color = "#fff";
-      label = "Critical";
+      bg = "var(--lcars-red)";
+      label = "CRITICAL";
       break;
     default:
       bg = "var(--text-quaternary)";
-      color = "#fff";
-      label = status;
+      label = status.toUpperCase();
   }
 
   return (
@@ -351,12 +364,17 @@ function StatusPill({ status }: { status: string }) {
       style={{
         display: "inline-block",
         padding: "2px 10px",
-        borderRadius: "var(--radius-full)",
-        backgroundColor: bg,
-        color,
-        fontSize: 12,
-        fontWeight: 510,
-        lineHeight: "20px",
+        borderRadius: 2,
+        backgroundColor: "transparent",
+        border: `1px solid ${bg}`,
+        color: bg,
+        fontSize: 10,
+        fontWeight: 600,
+        fontFamily: "'Orbitron', sans-serif",
+        lineHeight: "18px",
+        letterSpacing: "1px",
+        textTransform: "uppercase" as const,
+        boxShadow: `0 0 8px ${bg}33`,
       }}
     >
       {label}
@@ -368,11 +386,18 @@ function StatusPill({ status }: { status: string }) {
 
 const styles: Record<string, React.CSSProperties> = {
   pageTitle: {
+    fontFamily: "'Orbitron', sans-serif",
     fontSize: 20,
-    fontWeight: 600,
+    fontWeight: 700,
+    marginBottom: 8,
+    color: "var(--lcars-orange)",
+    letterSpacing: "4px",
+    textTransform: "uppercase" as const,
+  },
+  pageTitleBar: {
+    height: 3,
+    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
     marginBottom: 24,
-    color: "var(--text-primary)",
-    letterSpacing: "-0.02em",
   },
   metricsRow: {
     display: "grid",
@@ -381,34 +406,52 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 20,
   },
   metricCard: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-lg)",
+    background: "rgba(26, 26, 46, 0.6)",
+    borderLeft: "4px solid var(--lcars-orange)",
     padding: 24,
+    position: "relative" as const,
+  },
+  metricCardBar: {
+    position: "absolute" as const,
+    top: 0,
+    left: -4,
+    right: 0,
+    height: 3,
   },
   metricLabel: {
-    fontSize: 13,
-    fontWeight: 510,
-    color: "var(--text-tertiary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    fontWeight: 500,
+    color: "var(--lcars-lavender)",
     marginBottom: 8,
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
   },
   metricValue: {
-    fontSize: 32,
-    fontWeight: 510,
-    color: "var(--text-primary)",
-    letterSpacing: "-0.704px",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 28,
+    fontWeight: 600,
+    color: "var(--lcars-orange)",
+    letterSpacing: "-0.5px",
   },
   card: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-lg)",
+    background: "rgba(26, 26, 46, 0.6)",
+    borderLeft: "4px solid var(--lcars-lavender)",
     padding: 24,
     marginBottom: 20,
   },
   sectionTitle: {
-    fontSize: 14,
-    fontWeight: 510,
-    color: "var(--text-primary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "var(--lcars-orange)",
+    marginBottom: 8,
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
+  },
+  sectionDivider: {
+    height: 2,
+    background: "rgba(153, 153, 204, 0.15)",
     marginBottom: 16,
   },
   table: {
@@ -418,22 +461,33 @@ const styles: Record<string, React.CSSProperties> = {
   },
   th: {
     textAlign: "left" as const,
-    color: "var(--text-tertiary)",
+    color: "var(--lcars-lavender)",
+    fontFamily: "'Orbitron', sans-serif",
     fontWeight: 500,
     padding: "8px 12px",
-    borderBottom: "1px solid var(--border-subtle)",
-    fontSize: 12,
+    borderBottom: "1px solid rgba(255, 153, 0, 0.15)",
+    fontSize: 10,
     textTransform: "uppercase" as const,
-    letterSpacing: "0.04em",
+    letterSpacing: "1.5px",
+    background: "rgba(255, 153, 0, 0.05)",
   },
   td: {
     padding: "10px 12px",
-    color: "var(--text-secondary)",
-    borderBottom: "1px solid var(--border-subtle)",
+    color: "var(--lcars-tan)",
+    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
+  },
+  tdMono: {
+    padding: "10px 12px",
+    color: "var(--lcars-lavender)",
+    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
+    fontFamily: "'JetBrains Mono', monospace",
   },
   emptyText: {
-    fontSize: 13,
-    color: "var(--text-tertiary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 11,
+    color: "var(--text-quaternary)",
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
   },
 };
 

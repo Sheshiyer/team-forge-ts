@@ -62,14 +62,15 @@ function Projects() {
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          marginBottom: 24,
+          marginBottom: 8,
         }}
       >
-        <h1 style={styles.pageTitle}>Projects</h1>
+        <h1 style={styles.pageTitle}>PROJECTS</h1>
         <button onClick={handleExport} style={styles.ghostBtn}>
-          Export CSV
+          EXPORT CSV
         </button>
       </div>
+      <div style={styles.pageTitleBar} />
 
       {/* Summary Row */}
       {loading ? (
@@ -79,12 +80,12 @@ function Projects() {
         </div>
       ) : (
         <div style={styles.summaryRow}>
-          <div style={styles.summaryCard}>
-            <div style={styles.summaryLabel}>Total Hours</div>
-            <div style={styles.summaryValue}>{totalHours.toFixed(1)}h</div>
+          <div style={{ ...styles.summaryCard, borderLeftColor: "var(--lcars-orange)" }}>
+            <div style={styles.summaryLabel}>TOTAL HOURS</div>
+            <div style={styles.summaryValue}>{totalHours.toFixed(1)}H</div>
           </div>
-          <div style={styles.summaryCard}>
-            <div style={styles.summaryLabel}>Avg Utilization</div>
+          <div style={{ ...styles.summaryCard, borderLeftColor: "var(--lcars-cyan)" }}>
+            <div style={styles.summaryLabel}>AVG UTILIZATION</div>
             <div style={styles.summaryValue}>
               {(avgUtilization * 100).toFixed(1)}%
             </div>
@@ -98,17 +99,17 @@ function Projects() {
           <SkeletonTable rows={5} cols={5} />
         ) : projects.length === 0 ? (
           <p style={styles.emptyText}>
-            No project data yet. Sync time entries first.
+            NO PROJECT DATA. SYNC TIME ENTRIES FIRST.
           </p>
         ) : (
           <table style={styles.table}>
             <thead>
               <tr>
-                <th style={styles.th}>Project</th>
-                <th style={styles.th}>Total Hours</th>
-                <th style={styles.th}>Billable Hours</th>
-                <th style={styles.th}>Team Members</th>
-                <th style={{ ...styles.th, minWidth: 180 }}>Utilization</th>
+                <th style={styles.th}>PROJECT</th>
+                <th style={styles.th}>TOTAL HOURS</th>
+                <th style={styles.th}>BILLABLE HOURS</th>
+                <th style={styles.th}>CREW</th>
+                <th style={{ ...styles.th, minWidth: 180 }}>UTILIZATION</th>
               </tr>
             </thead>
             <tbody>
@@ -117,15 +118,15 @@ function Projects() {
                   <td
                     style={{
                       ...styles.td,
-                      fontWeight: 510,
-                      color: "var(--text-primary)",
+                      fontWeight: 600,
+                      color: "var(--lcars-orange)",
                     }}
                   >
                     {p.projectName}
                   </td>
-                  <td style={styles.td}>{p.totalHours.toFixed(1)}h</td>
-                  <td style={styles.td}>{p.billableHours.toFixed(1)}h</td>
-                  <td style={styles.td}>{p.teamMembers}</td>
+                  <td style={styles.tdMono}>{p.totalHours.toFixed(1)}h</td>
+                  <td style={styles.tdMono}>{p.billableHours.toFixed(1)}h</td>
+                  <td style={styles.tdMono}>{p.teamMembers}</td>
                   <td style={styles.td}>
                     <div
                       style={{
@@ -140,13 +141,15 @@ function Projects() {
                             ...styles.barFill,
                             width: `${Math.min(p.utilization * 100, 100)}%`,
                             backgroundColor: utilizationColor(p.utilization),
+                            boxShadow: `0 0 6px ${utilizationColor(p.utilization)}44`,
                           }}
                         />
                       </div>
                       <span
                         style={{
                           fontSize: 12,
-                          color: "var(--text-tertiary)",
+                          fontFamily: "'JetBrains Mono', monospace",
+                          color: "var(--lcars-lavender)",
                           minWidth: 40,
                         }}
                       >
@@ -165,30 +168,38 @@ function Projects() {
 }
 
 function utilizationColor(rate: number): string {
-  if (rate >= 0.8) return "var(--accent-brand)";
-  if (rate >= 0.5) return "var(--status-warning)";
-  return "var(--text-quaternary)";
+  if (rate >= 0.8) return "var(--lcars-green)";
+  if (rate >= 0.5) return "var(--lcars-yellow)";
+  return "var(--lcars-red)";
 }
 
 const styles: Record<string, React.CSSProperties> = {
   pageTitle: {
+    fontFamily: "'Orbitron', sans-serif",
     fontSize: 20,
-    fontWeight: 600,
-    color: "var(--text-primary)",
-    letterSpacing: "-0.02em",
+    fontWeight: 700,
+    color: "var(--lcars-orange)",
+    letterSpacing: "4px",
+    textTransform: "uppercase" as const,
     marginBottom: 0,
   },
+  pageTitleBar: {
+    height: 3,
+    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
+    marginBottom: 24,
+  },
   ghostBtn: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-md)",
-    color: "var(--text-tertiary)",
+    background: "transparent",
+    border: "1px solid rgba(255, 153, 0, 0.3)",
+    borderRadius: 2,
+    color: "var(--lcars-orange)",
     padding: "8px 14px",
-    fontSize: 13,
-    fontWeight: 510,
-    fontFamily: "var(--font-sans)",
+    fontSize: 10,
+    fontWeight: 600,
+    fontFamily: "'Orbitron', sans-serif",
     cursor: "pointer",
-    transition: "background 0.15s, color 0.15s",
+    letterSpacing: "1px",
+    textTransform: "uppercase" as const,
   },
   summaryRow: {
     display: "grid",
@@ -197,27 +208,29 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 20,
   },
   summaryCard: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-lg)",
+    background: "rgba(26, 26, 46, 0.6)",
+    borderLeft: "4px solid var(--lcars-orange)",
     padding: 24,
   },
   summaryLabel: {
-    fontSize: 13,
-    fontWeight: 510,
-    color: "var(--text-tertiary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    fontWeight: 500,
+    color: "var(--lcars-lavender)",
     marginBottom: 8,
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
   },
   summaryValue: {
+    fontFamily: "'JetBrains Mono', monospace",
     fontSize: 28,
-    fontWeight: 510,
-    color: "var(--text-primary)",
+    fontWeight: 600,
+    color: "var(--lcars-orange)",
     letterSpacing: "-0.5px",
   },
   card: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-lg)",
+    background: "rgba(26, 26, 46, 0.6)",
+    borderLeft: "4px solid var(--lcars-tan)",
     padding: 24,
     marginBottom: 20,
   },
@@ -228,34 +241,45 @@ const styles: Record<string, React.CSSProperties> = {
   },
   th: {
     textAlign: "left" as const,
-    color: "var(--text-tertiary)",
+    color: "var(--lcars-lavender)",
+    fontFamily: "'Orbitron', sans-serif",
     fontWeight: 500,
     padding: "8px 12px",
-    borderBottom: "1px solid var(--border-subtle)",
-    fontSize: 12,
+    borderBottom: "1px solid rgba(255, 153, 0, 0.15)",
+    fontSize: 10,
     textTransform: "uppercase" as const,
-    letterSpacing: "0.04em",
+    letterSpacing: "1.5px",
+    background: "rgba(255, 153, 0, 0.05)",
   },
   td: {
     padding: "10px 12px",
-    color: "var(--text-secondary)",
-    borderBottom: "1px solid var(--border-subtle)",
+    color: "var(--lcars-tan)",
+    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
+  },
+  tdMono: {
+    padding: "10px 12px",
+    color: "var(--lcars-lavender)",
+    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
+    fontFamily: "'JetBrains Mono', monospace",
   },
   barTrack: {
     flex: 1,
     height: 6,
-    borderRadius: 3,
-    background: "rgba(255,255,255,0.05)",
+    borderRadius: 0,
+    background: "rgba(153, 153, 204, 0.1)",
     overflow: "hidden",
   },
   barFill: {
     height: "100%",
-    borderRadius: 3,
+    borderRadius: 0,
     transition: "width 0.4s ease",
   },
   emptyText: {
-    fontSize: 13,
-    color: "var(--text-tertiary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 11,
+    color: "var(--text-quaternary)",
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
   },
 };
 

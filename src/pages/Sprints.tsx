@@ -6,12 +6,15 @@ import type { MilestoneView } from "../lib/types";
 function MetricCard({
   label,
   value,
+  barColor = "var(--lcars-orange)",
 }: {
   label: string;
   value: string;
+  barColor?: string;
 }) {
   return (
-    <div style={styles.metricCard}>
+    <div style={{ ...styles.metricCard, borderLeftColor: barColor }}>
+      <div style={{ ...styles.metricCardBar, backgroundColor: barColor }} />
       <div style={styles.metricLabel}>{label}</div>
       <div style={styles.metricValue}>{value}</div>
     </div>
@@ -19,35 +22,29 @@ function MetricCard({
 }
 
 function StatusPill({ status }: { status: string }) {
-  let bg: string;
-  let color: string;
+  let borderColor: string;
   let label: string;
 
   switch (status) {
     case "active":
-      bg = "var(--accent-brand)";
-      color = "#fff";
-      label = "Active";
+      borderColor = "var(--lcars-orange)";
+      label = "ACTIVE";
       break;
     case "completed":
-      bg = "var(--status-success)";
-      color = "#fff";
-      label = "Completed";
+      borderColor = "var(--lcars-green)";
+      label = "COMPLETED";
       break;
     case "planned":
-      bg = "var(--text-tertiary)";
-      color = "#fff";
-      label = "Planned";
+      borderColor = "var(--lcars-lavender)";
+      label = "PLANNED";
       break;
     case "cancelled":
-      bg = "var(--status-critical)";
-      color = "#fff";
-      label = "Cancelled";
+      borderColor = "var(--lcars-red)";
+      label = "CANCELLED";
       break;
     default:
-      bg = "var(--text-quaternary)";
-      color = "#fff";
-      label = status;
+      borderColor = "var(--text-quaternary)";
+      label = status.toUpperCase();
   }
 
   return (
@@ -55,12 +52,16 @@ function StatusPill({ status }: { status: string }) {
       style={{
         display: "inline-block",
         padding: "2px 10px",
-        borderRadius: "var(--radius-full)",
-        backgroundColor: bg,
-        color,
-        fontSize: 12,
-        fontWeight: 510,
-        lineHeight: "20px",
+        borderRadius: 2,
+        backgroundColor: "transparent",
+        border: `1px solid ${borderColor}`,
+        color: borderColor,
+        fontSize: 10,
+        fontWeight: 600,
+        fontFamily: "'Orbitron', sans-serif",
+        lineHeight: "18px",
+        letterSpacing: "1px",
+        boxShadow: `0 0 8px ${borderColor}33`,
       }}
     >
       {label}
@@ -70,13 +71,14 @@ function StatusPill({ status }: { status: string }) {
 
 function ProgressBar({ percent }: { percent: number }) {
   const clamped = Math.min(Math.max(percent, 0), 100);
+  const color = clamped >= 80 ? "var(--lcars-green)" : clamped >= 40 ? "var(--lcars-orange)" : "var(--lcars-yellow)";
   return (
     <div
       style={{
         width: "100%",
         height: 6,
-        borderRadius: 3,
-        background: "rgba(255,255,255,0.05)",
+        borderRadius: 0,
+        background: "rgba(153, 153, 204, 0.1)",
         overflow: "hidden",
       }}
     >
@@ -84,9 +86,9 @@ function ProgressBar({ percent }: { percent: number }) {
         style={{
           width: `${clamped}%`,
           height: "100%",
-          borderRadius: 3,
-          background: clamped >= 80 ? "var(--status-success)" : clamped >= 40 ? "var(--accent-brand)" : "var(--status-warning)",
+          background: color,
           transition: "width 0.4s ease",
+          boxShadow: `0 0 6px ${color}44`,
         }}
       />
     </div>
@@ -130,7 +132,8 @@ function Sprints() {
   if (loading) {
     return (
       <div>
-        <h1 style={styles.pageTitle}>Sprints & Milestones</h1>
+        <h1 style={styles.pageTitle}>SPRINTS & MILESTONES</h1>
+        <div style={styles.pageTitleBar} />
         <div style={styles.metricsRow}>
           <SkeletonCard />
           <SkeletonCard />
@@ -153,56 +156,58 @@ function Sprints() {
 
   return (
     <div>
-      <h1 style={styles.pageTitle}>Sprints & Milestones</h1>
+      <h1 style={styles.pageTitle}>SPRINTS & MILESTONES</h1>
+      <div style={styles.pageTitleBar} />
 
       <div style={styles.metricsRow}>
-        <MetricCard label="Active Sprints" value={String(activeSprints)} />
-        <MetricCard label="On Track" value={String(onTrack)} />
-        <MetricCard label="Avg Completion" value={`${avgCompletion.toFixed(0)}%`} />
+        <MetricCard label="ACTIVE SPRINTS" value={String(activeSprints)} barColor="var(--lcars-orange)" />
+        <MetricCard label="ON TRACK" value={String(onTrack)} barColor="var(--lcars-green)" />
+        <MetricCard label="AVG COMPLETION" value={`${avgCompletion.toFixed(0)}%`} barColor="var(--lcars-cyan)" />
       </div>
 
       <div style={styles.card}>
-        <h2 style={styles.sectionTitle}>Milestones</h2>
+        <h2 style={styles.sectionTitle}>MILESTONES</h2>
+        <div style={styles.sectionDivider} />
         {milestones.length === 0 ? (
-          <p style={styles.emptyText}>No milestones found. Sync Huly data first.</p>
+          <p style={styles.emptyText}>NO MILESTONES FOUND. SYNC HULY DATA FIRST.</p>
         ) : (
           <table style={styles.table}>
             <thead>
               <tr>
-                <th style={styles.th}>Sprint</th>
-                <th style={styles.th}>Project</th>
-                <th style={styles.th}>Issues</th>
-                <th style={{ ...styles.th, minWidth: 120 }}>Progress</th>
-                <th style={styles.th}>Target Date</th>
-                <th style={styles.th}>Status</th>
+                <th style={styles.th}>SPRINT</th>
+                <th style={styles.th}>PROJECT</th>
+                <th style={styles.th}>ISSUES</th>
+                <th style={{ ...styles.th, minWidth: 120 }}>PROGRESS</th>
+                <th style={styles.th}>TARGET DATE</th>
+                <th style={styles.th}>STATUS</th>
               </tr>
             </thead>
             <tbody>
               {milestones.map((m) => (
                 <tr key={m.id} style={{ cursor: "default" }}>
-                  <td style={{ ...styles.td, color: "var(--text-primary)", fontWeight: 500 }}>
+                  <td style={{ ...styles.td, color: "var(--lcars-orange)", fontWeight: 600 }}>
                     {m.label}
                   </td>
                   <td style={styles.td}>{m.projectName ?? "--"}</td>
-                  <td style={styles.td}>
+                  <td style={styles.tdMono}>
                     {m.completedIssues}/{m.totalIssues}
                   </td>
                   <td style={styles.td}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <ProgressBar percent={m.progressPercent} />
-                      <span style={{ fontSize: 12, color: "var(--text-tertiary)", whiteSpace: "nowrap" }}>
+                      <span style={{ fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: "var(--lcars-lavender)", whiteSpace: "nowrap" }}>
                         {m.progressPercent.toFixed(0)}%
                       </span>
                     </div>
                   </td>
                   <td
                     style={{
-                      ...styles.td,
+                      ...styles.tdMono,
                       color:
                         m.status === "active" && isPastDue(m.targetDate)
-                          ? "var(--status-critical)"
-                          : "var(--text-secondary)",
-                      fontWeight: isPastDue(m.targetDate) && m.status === "active" ? 510 : 400,
+                          ? "var(--lcars-red)"
+                          : "var(--lcars-lavender)",
+                      fontWeight: isPastDue(m.targetDate) && m.status === "active" ? 600 : 400,
                     }}
                   >
                     {formatDate(m.targetDate)}
@@ -222,11 +227,18 @@ function Sprints() {
 
 const styles: Record<string, React.CSSProperties> = {
   pageTitle: {
+    fontFamily: "'Orbitron', sans-serif",
     fontSize: 20,
-    fontWeight: 600,
+    fontWeight: 700,
+    marginBottom: 8,
+    color: "var(--lcars-orange)",
+    letterSpacing: "4px",
+    textTransform: "uppercase" as const,
+  },
+  pageTitleBar: {
+    height: 3,
+    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
     marginBottom: 24,
-    color: "var(--text-primary)",
-    letterSpacing: "-0.02em",
   },
   metricsRow: {
     display: "grid",
@@ -235,34 +247,51 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 20,
   },
   metricCard: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-lg)",
+    background: "rgba(26, 26, 46, 0.6)",
+    borderLeft: "4px solid var(--lcars-orange)",
     padding: 24,
+    position: "relative" as const,
+  },
+  metricCardBar: {
+    position: "absolute" as const,
+    top: 0,
+    left: -4,
+    right: 0,
+    height: 3,
   },
   metricLabel: {
-    fontSize: 13,
-    fontWeight: 510,
-    color: "var(--text-tertiary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    fontWeight: 500,
+    color: "var(--lcars-lavender)",
     marginBottom: 8,
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
   },
   metricValue: {
-    fontSize: 32,
-    fontWeight: 510,
-    color: "var(--text-primary)",
-    letterSpacing: "-0.704px",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 28,
+    fontWeight: 600,
+    color: "var(--lcars-orange)",
   },
   card: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-lg)",
+    background: "rgba(26, 26, 46, 0.6)",
+    borderLeft: "4px solid var(--lcars-peach)",
     padding: 24,
     marginBottom: 20,
   },
   sectionTitle: {
-    fontSize: 14,
-    fontWeight: 510,
-    color: "var(--text-primary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "var(--lcars-orange)",
+    marginBottom: 8,
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
+  },
+  sectionDivider: {
+    height: 2,
+    background: "rgba(153, 153, 204, 0.15)",
     marginBottom: 16,
   },
   table: {
@@ -272,22 +301,33 @@ const styles: Record<string, React.CSSProperties> = {
   },
   th: {
     textAlign: "left" as const,
-    color: "var(--text-tertiary)",
+    color: "var(--lcars-lavender)",
+    fontFamily: "'Orbitron', sans-serif",
     fontWeight: 500,
     padding: "8px 12px",
-    borderBottom: "1px solid var(--border-subtle)",
-    fontSize: 12,
+    borderBottom: "1px solid rgba(255, 153, 0, 0.15)",
+    fontSize: 10,
     textTransform: "uppercase" as const,
-    letterSpacing: "0.04em",
+    letterSpacing: "1.5px",
+    background: "rgba(255, 153, 0, 0.05)",
   },
   td: {
     padding: "10px 12px",
-    color: "var(--text-secondary)",
-    borderBottom: "1px solid var(--border-subtle)",
+    color: "var(--lcars-tan)",
+    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
+  },
+  tdMono: {
+    padding: "10px 12px",
+    color: "var(--lcars-lavender)",
+    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
+    fontFamily: "'JetBrains Mono', monospace",
   },
   emptyText: {
-    fontSize: 13,
-    color: "var(--text-tertiary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 11,
+    color: "var(--text-quaternary)",
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
   },
 };
 

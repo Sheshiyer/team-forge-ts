@@ -22,7 +22,12 @@ function Avatar({
       <img
         src={src}
         alt={name}
-        style={{ width: size, height: size, borderRadius: "50%" }}
+        style={{
+          width: size,
+          height: size,
+          borderRadius: "50%",
+          border: "2px solid var(--lcars-orange)",
+        }}
       />
     );
   }
@@ -33,13 +38,15 @@ function Avatar({
         width: size,
         height: size,
         borderRadius: "50%",
-        backgroundColor: `hsl(${hue}, 40%, 30%)`,
+        backgroundColor: `hsl(${hue}, 40%, 20%)`,
+        border: "2px solid var(--lcars-orange)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        fontSize: size * 0.4,
-        fontWeight: 510,
-        color: "var(--text-primary)",
+        fontSize: size * 0.35,
+        fontWeight: 600,
+        fontFamily: "'Orbitron', sans-serif",
+        color: "var(--lcars-orange)",
         flexShrink: 0,
       }}
     >

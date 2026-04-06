@@ -5,25 +5,20 @@ import Avatar from "../components/ui/Avatar";
 import type { DepartmentView, LeaveView, HolidayView } from "../lib/types";
 
 function StatusPill({ status }: { status: string }) {
-  let bg: string;
-  let color: string;
+  let borderColor: string;
 
   switch (status.toLowerCase()) {
     case "approved":
-      bg = "var(--status-success)";
-      color = "#fff";
+      borderColor = "var(--lcars-green)";
       break;
     case "pending":
-      bg = "var(--status-warning)";
-      color = "#1a1a1a";
+      borderColor = "var(--lcars-yellow)";
       break;
     case "rejected":
-      bg = "var(--status-critical)";
-      color = "#fff";
+      borderColor = "var(--lcars-red)";
       break;
     default:
-      bg = "var(--text-quaternary)";
-      color = "#fff";
+      borderColor = "var(--text-quaternary)";
   }
 
   return (
@@ -31,36 +26,34 @@ function StatusPill({ status }: { status: string }) {
       style={{
         display: "inline-block",
         padding: "2px 10px",
-        borderRadius: "var(--radius-full)",
-        backgroundColor: bg,
-        color,
-        fontSize: 12,
-        fontWeight: 510,
-        lineHeight: "20px",
-        textTransform: "capitalize",
+        borderRadius: 2,
+        backgroundColor: "transparent",
+        border: `1px solid ${borderColor}`,
+        color: borderColor,
+        fontSize: 10,
+        fontWeight: 600,
+        fontFamily: "'Orbitron', sans-serif",
+        lineHeight: "18px",
+        letterSpacing: "1px",
+        textTransform: "uppercase" as const,
+        boxShadow: `0 0 8px ${borderColor}33`,
       }}
     >
-      {status}
+      {status.toUpperCase()}
     </span>
   );
 }
 
 function ProgressBar({ current, total }: { current: number; total: number }) {
   const pct = total > 0 ? Math.min((current / total) * 100, 100) : 0;
+  const color = pct >= 80 ? "var(--lcars-green)" : pct >= 50 ? "var(--lcars-orange)" : "var(--lcars-yellow)";
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-      }}
-    >
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <div
         style={{
           flex: 1,
           height: 6,
-          borderRadius: 3,
-          background: "rgba(255,255,255,0.05)",
+          background: "rgba(153, 153, 204, 0.1)",
           overflow: "hidden",
         }}
       >
@@ -68,18 +61,13 @@ function ProgressBar({ current, total }: { current: number; total: number }) {
           style={{
             width: `${pct}%`,
             height: "100%",
-            borderRadius: 3,
-            background:
-              pct >= 80
-                ? "var(--status-success)"
-                : pct >= 50
-                ? "var(--accent-brand)"
-                : "var(--status-warning)",
+            background: color,
             transition: "width 0.4s ease",
+            boxShadow: `0 0 6px ${color}44`,
           }}
         />
       </div>
-      <span style={{ fontSize: 12, color: "var(--text-tertiary)", whiteSpace: "nowrap" }}>
+      <span style={{ fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: "var(--lcars-lavender)", whiteSpace: "nowrap" }}>
         {current.toFixed(0)}h / {total.toFixed(0)}h
       </span>
     </div>
@@ -88,27 +76,17 @@ function ProgressBar({ current, total }: { current: number; total: number }) {
 
 function isCurrentlyOnLeave(dateFrom: string, dateTo: string): boolean {
   const now = new Date();
-  const from = new Date(dateFrom);
-  const to = new Date(dateTo);
-  return now >= from && now <= to;
+  return now >= new Date(dateFrom) && now <= new Date(dateTo);
 }
 
 function isToday(dateStr: string): boolean {
   const d = new Date(dateStr);
   const now = new Date();
-  return (
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate()
-  );
+  return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
 }
 
 function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function Team() {
@@ -135,74 +113,62 @@ function Team() {
     }
   }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   if (loading) {
     return (
       <div>
-        <h1 style={styles.pageTitle}>Team</h1>
-        <div style={styles.card}>
-          <SkeletonTable rows={4} cols={4} />
-        </div>
-        <div style={styles.card}>
-          <SkeletonTable rows={5} cols={6} />
-        </div>
-        <div style={styles.card}>
-          <SkeletonTable rows={3} cols={2} />
-        </div>
+        <h1 style={styles.pageTitle}>TEAM</h1>
+        <div style={styles.pageTitleBar} />
+        <div style={styles.card}><SkeletonTable rows={4} cols={4} /></div>
+        <div style={styles.card}><SkeletonTable rows={5} cols={6} /></div>
+        <div style={styles.card}><SkeletonTable rows={3} cols={2} /></div>
       </div>
     );
   }
 
   return (
     <div>
-      <h1 style={styles.pageTitle}>Team</h1>
+      <h1 style={styles.pageTitle}>TEAM</h1>
+      <div style={styles.pageTitleBar} />
 
       {/* Departments */}
       <div style={styles.card}>
-        <h2 style={styles.sectionTitle}>Department Structure</h2>
+        <h2 style={styles.sectionTitle}>DEPARTMENT STRUCTURE</h2>
+        <div style={styles.sectionDivider} />
         {departments.length === 0 ? (
-          <p style={styles.emptyText}>No department data available.</p>
+          <p style={styles.emptyText}>NO DEPARTMENT DATA AVAILABLE</p>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             {departments.map((dept) => (
               <div
                 key={dept.id}
                 style={{
-                  background: "rgba(255,255,255,0.02)",
-                  border: "1px solid var(--border-subtle)",
-                  borderRadius: "var(--radius-md)",
+                  background: "rgba(26, 26, 46, 0.8)",
+                  borderLeft: "3px solid var(--lcars-peach)",
                   padding: 16,
                 }}
               >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "flex-start",
-                    marginBottom: 12,
-                  }}
-                >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
                   <div>
-                    <div style={{ fontSize: 14, fontWeight: 510, color: "var(--text-primary)" }}>
-                      {dept.name}
+                    <div style={{ fontFamily: "'Orbitron', sans-serif", fontSize: 12, fontWeight: 600, color: "var(--lcars-orange)", letterSpacing: "1px" }}>
+                      {dept.name.toUpperCase()}
                     </div>
-                    <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginTop: 2 }}>
-                      {dept.headName ? `Head: ${dept.headName}` : "No head assigned"}
+                    <div style={{ fontSize: 11, color: "var(--lcars-lavender)", marginTop: 2 }}>
+                      {dept.headName ? `HEAD: ${dept.headName.toUpperCase()}` : "NO HEAD ASSIGNED"}
                     </div>
                   </div>
                   <div
                     style={{
-                      fontSize: 12,
-                      color: "var(--text-tertiary)",
-                      background: "rgba(255,255,255,0.04)",
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 11,
+                      color: "var(--lcars-lavender)",
+                      background: "rgba(153, 153, 204, 0.1)",
                       padding: "2px 8px",
-                      borderRadius: "var(--radius-full)",
+                      borderRadius: 2,
                     }}
                   >
-                    {dept.memberCount} members
+                    {dept.memberCount} CREW
                   </div>
                 </div>
                 <ProgressBar current={dept.totalHours} total={dept.quotaTotal} />
@@ -214,19 +180,20 @@ function Team() {
 
       {/* Leave Calendar */}
       <div style={styles.card}>
-        <h2 style={styles.sectionTitle}>Leave Calendar</h2>
+        <h2 style={styles.sectionTitle}>LEAVE CALENDAR</h2>
+        <div style={styles.sectionDivider} />
         {leaves.length === 0 ? (
-          <p style={styles.emptyText}>No leave requests found.</p>
+          <p style={styles.emptyText}>NO LEAVE REQUESTS FOUND</p>
         ) : (
           <table style={styles.table}>
             <thead>
               <tr>
-                <th style={styles.th}>Employee</th>
-                <th style={styles.th}>Type</th>
-                <th style={styles.th}>From</th>
-                <th style={styles.th}>To</th>
-                <th style={styles.th}>Days</th>
-                <th style={styles.th}>Status</th>
+                <th style={styles.th}>CREW MEMBER</th>
+                <th style={styles.th}>TYPE</th>
+                <th style={styles.th}>FROM</th>
+                <th style={styles.th}>TO</th>
+                <th style={styles.th}>DAYS</th>
+                <th style={styles.th}>STATUS</th>
               </tr>
             </thead>
             <tbody>
@@ -237,38 +204,36 @@ function Team() {
                     key={`${l.employeeName}-${idx}`}
                     style={{
                       cursor: "default",
-                      backgroundColor: onLeave ? "rgba(39, 166, 68, 0.06)" : "transparent",
+                      backgroundColor: onLeave ? "rgba(51, 204, 102, 0.04)" : "transparent",
                     }}
                   >
                     <td style={styles.td}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <Avatar name={l.employeeName} size={24} />
-                        {l.employeeName}
+                        <span style={{ color: "var(--lcars-orange)" }}>{l.employeeName}</span>
                         {onLeave && (
                           <span
                             style={{
-                              fontSize: 10,
+                              fontFamily: "'Orbitron', sans-serif",
+                              fontSize: 8,
                               fontWeight: 600,
-                              color: "var(--status-success)",
-                              background: "rgba(39, 166, 68, 0.12)",
+                              color: "var(--lcars-green)",
+                              border: "1px solid var(--lcars-green)",
                               padding: "1px 6px",
-                              borderRadius: "var(--radius-full)",
-                              textTransform: "uppercase",
-                              letterSpacing: "0.04em",
+                              borderRadius: 2,
+                              letterSpacing: "1px",
                             }}
                           >
-                            On Leave
+                            ON LEAVE
                           </span>
                         )}
                       </div>
                     </td>
-                    <td style={{ ...styles.td, textTransform: "capitalize" }}>{l.leaveType}</td>
-                    <td style={styles.td}>{formatDate(l.dateFrom)}</td>
-                    <td style={styles.td}>{formatDate(l.dateTo)}</td>
-                    <td style={styles.td}>{l.days}</td>
-                    <td style={styles.td}>
-                      <StatusPill status={l.status} />
-                    </td>
+                    <td style={{ ...styles.td, textTransform: "uppercase" as const }}>{l.leaveType}</td>
+                    <td style={styles.tdMono}>{formatDate(l.dateFrom)}</td>
+                    <td style={styles.tdMono}>{formatDate(l.dateTo)}</td>
+                    <td style={styles.tdMono}>{l.days}</td>
+                    <td style={styles.td}><StatusPill status={l.status} /></td>
                   </tr>
                 );
               })}
@@ -279,11 +244,12 @@ function Team() {
 
       {/* Holidays */}
       <div style={styles.card}>
-        <h2 style={styles.sectionTitle}>Upcoming Holidays</h2>
+        <h2 style={styles.sectionTitle}>UPCOMING HOLIDAYS</h2>
+        <div style={styles.sectionDivider} />
         {holidays.length === 0 ? (
-          <p style={styles.emptyText}>No holidays configured.</p>
+          <p style={styles.emptyText}>NO HOLIDAYS CONFIGURED</p>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
             {holidays.map((h, idx) => (
               <div
                 key={idx}
@@ -292,32 +258,32 @@ function Team() {
                   alignItems: "center",
                   justifyContent: "space-between",
                   padding: "8px 12px",
-                  borderRadius: "var(--radius-md)",
-                  background: isToday(h.date) ? "rgba(94, 106, 210, 0.08)" : "transparent",
-                  borderBottom: "1px solid var(--border-subtle)",
+                  background: isToday(h.date) ? "rgba(255, 153, 0, 0.06)" : "transparent",
+                  borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 500 }}>
-                    {h.title}
+                  <span style={{ fontSize: 13, color: "var(--lcars-orange)", fontWeight: 500 }}>
+                    {h.title.toUpperCase()}
                   </span>
                   {isToday(h.date) && (
                     <span
                       style={{
-                        fontSize: 10,
+                        fontFamily: "'Orbitron', sans-serif",
+                        fontSize: 8,
                         fontWeight: 600,
-                        color: "var(--accent-brand)",
-                        background: "rgba(94, 106, 210, 0.15)",
+                        color: "var(--lcars-cyan)",
+                        border: "1px solid var(--lcars-cyan)",
                         padding: "1px 6px",
-                        borderRadius: "var(--radius-full)",
-                        letterSpacing: "0.04em",
+                        borderRadius: 2,
+                        letterSpacing: "1px",
                       }}
                     >
                       TODAY
                     </span>
                   )}
                 </div>
-                <span style={{ fontSize: 12, color: "var(--text-tertiary)" }}>
+                <span style={{ fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: "var(--lcars-lavender)" }}>
                   {formatDate(h.date)}
                 </span>
               </div>
@@ -331,23 +297,37 @@ function Team() {
 
 const styles: Record<string, React.CSSProperties> = {
   pageTitle: {
+    fontFamily: "'Orbitron', sans-serif",
     fontSize: 20,
-    fontWeight: 600,
+    fontWeight: 700,
+    marginBottom: 8,
+    color: "var(--lcars-orange)",
+    letterSpacing: "4px",
+    textTransform: "uppercase" as const,
+  },
+  pageTitleBar: {
+    height: 3,
+    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
     marginBottom: 24,
-    color: "var(--text-primary)",
-    letterSpacing: "-0.02em",
   },
   card: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-lg)",
+    background: "rgba(26, 26, 46, 0.6)",
+    borderLeft: "4px solid var(--lcars-peach)",
     padding: 24,
     marginBottom: 20,
   },
   sectionTitle: {
-    fontSize: 14,
-    fontWeight: 510,
-    color: "var(--text-primary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "var(--lcars-orange)",
+    marginBottom: 8,
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
+  },
+  sectionDivider: {
+    height: 2,
+    background: "rgba(153, 153, 204, 0.15)",
     marginBottom: 16,
   },
   table: {
@@ -357,22 +337,33 @@ const styles: Record<string, React.CSSProperties> = {
   },
   th: {
     textAlign: "left" as const,
-    color: "var(--text-tertiary)",
+    color: "var(--lcars-lavender)",
+    fontFamily: "'Orbitron', sans-serif",
     fontWeight: 500,
     padding: "8px 12px",
-    borderBottom: "1px solid var(--border-subtle)",
-    fontSize: 12,
+    borderBottom: "1px solid rgba(255, 153, 0, 0.15)",
+    fontSize: 10,
     textTransform: "uppercase" as const,
-    letterSpacing: "0.04em",
+    letterSpacing: "1.5px",
+    background: "rgba(255, 153, 0, 0.05)",
   },
   td: {
     padding: "10px 12px",
-    color: "var(--text-secondary)",
-    borderBottom: "1px solid var(--border-subtle)",
+    color: "var(--lcars-tan)",
+    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
+  },
+  tdMono: {
+    padding: "10px 12px",
+    color: "var(--lcars-lavender)",
+    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
+    fontFamily: "'JetBrains Mono', monospace",
   },
   emptyText: {
-    fontSize: 13,
-    color: "var(--text-tertiary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 11,
+    color: "var(--text-quaternary)",
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
   },
 };
 

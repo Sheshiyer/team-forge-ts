@@ -1,10 +1,10 @@
 import type { DateRange } from "../../stores/appStore";
 
 const options: { value: DateRange; label: string }[] = [
-  { value: "week", label: "This Week" },
-  { value: "month", label: "This Month" },
-  { value: "quarter", label: "This Quarter" },
-  { value: "year", label: "This Year" },
+  { value: "week", label: "WEEK" },
+  { value: "month", label: "MONTH" },
+  { value: "quarter", label: "QTR" },
+  { value: "year", label: "YEAR" },
 ];
 
 function DateRangePicker({
@@ -24,7 +24,7 @@ function DateRangePicker({
             ...styles.pill,
             ...(value === opt.value ? styles.pillActive : {}),
             ...(i < options.length - 1
-              ? { borderRight: "1px solid var(--border-standard)" }
+              ? { borderRight: "1px solid rgba(255, 153, 0, 0.2)" }
               : {}),
           }}
         >
@@ -38,25 +38,27 @@ function DateRangePicker({
 const styles: Record<string, React.CSSProperties> = {
   group: {
     display: "flex",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-md)",
+    border: "1px solid rgba(255, 153, 0, 0.3)",
+    borderRadius: 2,
     overflow: "hidden",
   },
   pill: {
-    background: "rgba(255,255,255,0.02)",
+    background: "transparent",
     border: "none",
-    color: "var(--text-tertiary)",
-    padding: "6px 14px",
-    fontSize: 12,
-    fontWeight: 510,
-    fontFamily: "var(--font-sans)",
+    color: "var(--lcars-lavender)",
+    padding: "4px 12px",
+    fontSize: 10,
+    fontWeight: 600,
+    fontFamily: "'Orbitron', sans-serif",
     cursor: "pointer",
     transition: "background 0.15s, color 0.15s",
     whiteSpace: "nowrap",
+    letterSpacing: "1px",
+    textTransform: "uppercase" as const,
   },
   pillActive: {
-    background: "var(--bg-hover)",
-    color: "var(--text-primary)",
+    background: "var(--lcars-orange)",
+    color: "#000",
   },
 };
 

@@ -1,34 +1,46 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+
 :root {
-  /* Background colors */
-  --bg-canvas: #08090a;
-  --bg-sidebar: #0f1011;
-  --bg-elevated: #191a1b;
-  --bg-hover: #28282c;
+  /* LCARS Color System */
+  --lcars-black: #000000;
+  --lcars-space: #0a0a1a;
+  --lcars-panel: #1a1a2e;
+  --lcars-orange: #ff9900;
+  --lcars-peach: #cc6699;
+  --lcars-tan: #cc9966;
+  --lcars-lavender: #9999cc;
+  --lcars-blue: #6688cc;
+  --lcars-red: #cc3333;
+  --lcars-green: #33cc66;
+  --lcars-cyan: #00ccff;
+  --lcars-yellow: #ffcc00;
 
-  /* Text colors */
-  --text-primary: #f7f8f8;
-  --text-secondary: #d0d6e0;
-  --text-tertiary: #8a8f98;
-  --text-quaternary: #62666d;
+  /* Semantic mapping */
+  --bg-canvas: var(--lcars-black);
+  --bg-sidebar: var(--lcars-space);
+  --bg-elevated: var(--lcars-panel);
+  --bg-hover: rgba(255, 153, 0, 0.08);
 
-  /* Brand colors */
-  --accent-brand: #5e6ad2;
-  --accent-violet: #7170ff;
-  --accent-hover: #828fff;
+  --text-primary: var(--lcars-orange);
+  --text-secondary: var(--lcars-tan);
+  --text-tertiary: var(--lcars-lavender);
+  --text-quaternary: #666688;
 
-  /* Status colors */
-  --status-success: #27a644;
-  --status-warning: #f59e0b;
-  --status-critical: #ef4444;
+  --accent-brand: var(--lcars-orange);
+  --accent-violet: var(--lcars-peach);
+  --accent-hover: var(--lcars-yellow);
 
-  /* Border colors */
-  --border-subtle: rgba(255, 255, 255, 0.05);
-  --border-standard: rgba(255, 255, 255, 0.08);
+  --status-success: var(--lcars-green);
+  --status-warning: var(--lcars-yellow);
+  --status-critical: var(--lcars-red);
 
-  /* Typography */
-  --font-sans: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont,
-    "Segoe UI", Roboto, sans-serif;
-  --font-mono: "Berkeley Mono", "SF Mono", "Fira Code", monospace;
+  --border-subtle: rgba(153, 153, 204, 0.15);
+  --border-standard: rgba(255, 153, 0, 0.25);
+
+  /* LCARS Typography */
+  --font-display: 'Orbitron', sans-serif;
+  --font-sans: 'JetBrains Mono', monospace;
+  --font-mono: 'JetBrains Mono', monospace;
 
   /* Spacing scale */
   --space-1: 4px;
@@ -41,10 +53,15 @@
   /* Radius scale */
   --radius-xs: 2px;
   --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 12px;
-  --radius-full: 22px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-full: 16px;
+
+  /* LCARS bar dimensions */
+  --lcars-bar-height: 28px;
+  --lcars-bar-thin: 4px;
+  --lcars-sidebar-width: 240px;
 }
 
 /* Base reset */
@@ -65,23 +82,14 @@ body,
 
 body {
   font-family: var(--font-sans);
-  font-feature-settings: "cv01", "ss03";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background-color: var(--bg-canvas);
-  color: var(--text-primary);
+  color: var(--text-secondary);
   line-height: 1.5;
 }
 
-/* Font feature settings on all text */
-*,
-input,
-textarea,
-select,
-button {
-  font-feature-settings: "cv01", "ss03";
-}
-
+/* LCARS Animations */
 @keyframes shimmer {
   0% {
     background-position: 200% 0;
@@ -89,4 +97,37 @@ button {
   100% {
     background-position: -200% 0;
   }
+}
+
+@keyframes lcars-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@keyframes lcars-scan {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+@keyframes lcars-blink {
+  0%, 90%, 100% { opacity: 1; }
+  95% { opacity: 0; }
+}
+
+/* Scrollbar styling - LCARS themed */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--lcars-black);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--lcars-orange);
+  border-radius: 0 4px 4px 0;
+}
+
+/* Selection color */
+::selection {
+  background: rgba(255, 153, 0, 0.3);
+  color: var(--lcars-orange);
 }

@@ -1,7 +1,7 @@
 function Skeleton({
   width,
   height = 16,
-  radius = 4,
+  radius = 0,
 }: {
   width?: number | string;
   height?: number;
@@ -14,7 +14,7 @@ function Skeleton({
         height,
         borderRadius: radius,
         background:
-          "linear-gradient(90deg, rgba(255,255,255,0.02) 25%, rgba(255,255,255,0.05) 50%, rgba(255,255,255,0.02) 75%)",
+          "linear-gradient(90deg, rgba(255,153,0,0.03) 25%, rgba(255,153,0,0.08) 50%, rgba(255,153,0,0.03) 75%)",
         backgroundSize: "200% 100%",
         animation: "shimmer 1.5s infinite",
       }}
@@ -46,9 +46,8 @@ function SkeletonCard() {
   return (
     <div
       style={{
-        background: "rgba(255,255,255,0.02)",
-        border: "1px solid var(--border-standard)",
-        borderRadius: "var(--radius-lg)",
+        background: "rgba(26, 26, 46, 0.5)",
+        borderLeft: "4px solid rgba(255, 153, 0, 0.2)",
         padding: 24,
       }}
     >

@@ -34,21 +34,15 @@ function Live() {
 
   return (
     <div>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "baseline",
-          marginBottom: 24,
-        }}
-      >
-        <h1 style={styles.pageTitle}>Live Presence</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+        <h1 style={styles.pageTitle}>LIVE PRESENCE</h1>
         {lastUpdated && (
           <span style={styles.lastUpdated}>
-            Last updated: {timeAgo(lastUpdated.toISOString())}
+            LAST UPDATED: {timeAgo(lastUpdated.toISOString()).toUpperCase()}
           </span>
         )}
       </div>
+      <div style={styles.pageTitleBar} />
 
       {loading ? (
         <div style={styles.grid}>
@@ -57,7 +51,7 @@ function Live() {
           ))}
         </div>
       ) : presence.length === 0 ? (
-        <p style={styles.emptyText}>No employees found. Sync data first.</p>
+        <p style={styles.emptyText}>NO CREW MEMBERS FOUND. SYNC DATA FIRST.</p>
       ) : (
         <div style={styles.grid}>
           {presence.map((p) => (
@@ -72,53 +66,55 @@ function Live() {
 function PresenceCard({ data }: { data: PresenceStatus }) {
   const statusColor =
     data.combinedStatus === "active"
-      ? "var(--status-success)"
+      ? "var(--lcars-green)"
       : data.combinedStatus === "idle"
-      ? "var(--status-warning)"
+      ? "var(--lcars-yellow)"
       : "var(--text-quaternary)";
 
+  const borderColor =
+    data.combinedStatus === "active"
+      ? "var(--lcars-green)"
+      : data.combinedStatus === "idle"
+      ? "var(--lcars-yellow)"
+      : "var(--lcars-lavender)";
+
   const clockifyLine = data.clockifyTimerActive
-    ? `Tracking: ${data.clockifyProject ?? "Unknown"} (${
+    ? `TRACKING: ${(data.clockifyProject ?? "UNKNOWN").toUpperCase()} (${
         data.clockifyDuration != null
           ? formatDuration(data.clockifyDuration)
           : "--"
       })`
-    : "No active timer";
+    : "NO ACTIVE TIMER";
 
   const hulyLine = data.hulyLastSeen
-    ? `Active ${timeAgo(data.hulyLastSeen)}`
-    : "Inactive";
+    ? `ACTIVE ${timeAgo(data.hulyLastSeen).toUpperCase()}`
+    : "INACTIVE";
 
   return (
-    <div style={styles.presenceCard}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          marginBottom: 12,
-        }}
-      >
+    <div style={{ ...styles.presenceCard, borderLeftColor: borderColor }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
         <Avatar name={data.employeeName} size={32} />
         <span
           style={{
             display: "inline-block",
-            width: 8,
-            height: 8,
+            width: 10,
+            height: 10,
             borderRadius: "50%",
             backgroundColor: statusColor,
             flexShrink: 0,
+            boxShadow: data.combinedStatus === "active" ? `0 0 8px ${statusColor}` : "none",
+            animation: data.combinedStatus === "active" ? "lcars-pulse 2s ease-in-out infinite" : "none",
           }}
         />
-        <span style={styles.employeeName}>{data.employeeName}</span>
+        <span style={styles.employeeName}>{data.employeeName.toUpperCase()}</span>
       </div>
       <div style={styles.presenceDetail}>
-        <span style={styles.detailLabel}>Clockify</span>
-        {clockifyLine}
+        <span style={styles.detailLabel}>CLOCKIFY</span>
+        <span style={styles.detailValue}>{clockifyLine}</span>
       </div>
       <div style={styles.presenceDetail}>
-        <span style={styles.detailLabel}>Huly</span>
-        {hulyLine}
+        <span style={styles.detailLabel}>HULY</span>
+        <span style={styles.detailValue}>{hulyLine}</span>
       </div>
     </div>
   );
@@ -126,15 +122,24 @@ function PresenceCard({ data }: { data: PresenceStatus }) {
 
 const styles: Record<string, React.CSSProperties> = {
   pageTitle: {
+    fontFamily: "'Orbitron', sans-serif",
     fontSize: 20,
-    fontWeight: 600,
-    color: "var(--text-primary)",
-    letterSpacing: "-0.02em",
+    fontWeight: 700,
+    color: "var(--lcars-orange)",
+    letterSpacing: "4px",
+    textTransform: "uppercase" as const,
     marginBottom: 0,
   },
+  pageTitleBar: {
+    height: 3,
+    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
+    marginBottom: 24,
+  },
   lastUpdated: {
-    fontSize: 12,
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
     color: "var(--text-quaternary)",
+    letterSpacing: "1px",
   },
   grid: {
     display: "grid",
@@ -142,34 +147,43 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 16,
   },
   presenceCard: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid var(--border-standard)",
-    borderRadius: "var(--radius-lg)",
+    background: "rgba(26, 26, 46, 0.6)",
+    borderLeft: "4px solid var(--lcars-lavender)",
     padding: 20,
   },
   employeeName: {
-    fontSize: 16,
-    fontWeight: 510,
-    color: "var(--text-primary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 14,
+    fontWeight: 600,
+    color: "var(--lcars-orange)",
+    letterSpacing: "1.5px",
   },
   presenceDetail: {
-    fontSize: 13,
-    color: "var(--text-tertiary)",
+    fontSize: 12,
     marginBottom: 4,
     display: "flex",
     gap: 8,
   },
   detailLabel: {
-    fontSize: 11,
-    fontWeight: 510,
-    textTransform: "uppercase" as const,
-    letterSpacing: "0.04em",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    fontWeight: 600,
     color: "var(--text-quaternary)",
-    minWidth: 56,
+    letterSpacing: "1px",
+    minWidth: 64,
+    paddingTop: 2,
+  },
+  detailValue: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+    color: "var(--lcars-lavender)",
   },
   emptyText: {
-    fontSize: 13,
-    color: "var(--text-tertiary)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 11,
+    color: "var(--text-quaternary)",
+    letterSpacing: "2px",
+    textTransform: "uppercase" as const,
   },
 };
 
