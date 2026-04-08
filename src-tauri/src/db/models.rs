@@ -227,6 +227,44 @@ pub struct DepartmentView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct OrgPersonView {
+    pub person_id: String,
+    pub employee_id: Option<String>,
+    pub name: String,
+    pub email: Option<String>,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgDepartmentMappingView {
+    pub id: String,
+    pub name: String,
+    pub head_person_id: Option<String>,
+    pub head_name: Option<String>,
+    pub team_lead_person_id: Option<String>,
+    pub team_lead_name: Option<String>,
+    pub member_person_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgChartView {
+    pub departments: Vec<OrgDepartmentMappingView>,
+    pub people: Vec<OrgPersonView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrgDepartmentUpdateInput {
+    pub department_id: String,
+    pub head_person_id: Option<String>,
+    pub team_lead_person_id: Option<String>,
+    pub member_person_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LeaveView {
     pub employee_name: String,
     pub leave_type: String,
@@ -250,6 +288,7 @@ pub struct ChatActivityView {
     pub message_count: u32,
     pub channels_active: u32,
     pub last_message_at: Option<String>,
+    pub sources: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

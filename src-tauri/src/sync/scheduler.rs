@@ -134,11 +134,10 @@ async fn update_tray_tooltip(app_handle: &tauri::AppHandle, pool: &SqlitePool) {
     .fetch_one(pool)
     .await;
 
-    let total: Result<(i64,), _> = sqlx::query_as(
-        "SELECT COUNT(*) FROM employees WHERE is_active = 1",
-    )
-    .fetch_one(pool)
-    .await;
+    let total: Result<(i64,), _> =
+        sqlx::query_as("SELECT COUNT(*) FROM employees WHERE is_active = 1")
+            .fetch_one(pool)
+            .await;
 
     if let (Ok((active_count,)), Ok((total_count,))) = (active, total) {
         let tooltip = format!("TeamForge - {}/{} active", active_count, total_count);

@@ -7,7 +7,7 @@
  /_  __/ __/  |/  /   / / / / __/ / / / / / _ \/ ___/ __/
   / / / _// /|_/ /   / /_/ /\ \/ /_/ / / / , _/ (_ / _/
  /_/ /___/_/  /_/    \____/___/\____/_/_/_/|_|\___/___/
-       STARDATE 2026.096 — SYSTEMS NOMINAL
+       STARDATE 2026.098 — SYSTEMS NOMINAL
 ```
 
 <!-- readme-gen:start:badges -->
@@ -84,6 +84,15 @@ Clockify admin accounts such as `thoughtseedlabs@gmail.com` can be ignored so op
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
+## New In v0.1.2
+
+- **Slack setup now lives in Settings** with explicit `xoxb-...` bot token guidance, optional channel filters, and exact missing-scope feedback when Slack rejects a permission set.
+- **Team mapping is now dynamic in-app** with a draggable crew rail, bento department cards, drop zones for `Head`, `Team Lead`, and `Members`, plus an unassigned tray for restructuring.
+- **Ignored emails now apply deeper** so admin or service accounts stay out of Clockify metrics and out of the Team org-chart mapping workflow.
+- **Huly rollout docs are now repo-native** with system design, rollout planning, normalization runbooks, and release notes tracked alongside the app.
+
+<img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
+
 ## Preview
 
 ### Overview
@@ -116,7 +125,8 @@ On first launch:
 2. Enter your **Clockify API key** and select workspace
 3. Confirm or edit the **Ignored Clockify Emails** list
 4. Enter your **Huly JWT token**
-5. Hit **Sync Now** — data populates across all views
+5. Paste the **Slack Bot User OAuth Token** (`xoxb-...`) if you want Slack-backed chat activity in **Comms**
+6. Hit **Sync Now** — data populates across all views
 
 ## Architecture
 
@@ -173,6 +183,14 @@ graph TD
 
 This is the intended direction for the Thoughtseed workspace normalization work tracked in the repository backlog.
 
+## System Design
+
+The rollout is now documented in-repo instead of living only in chat and GitHub issues:
+
+- [Changelog](CHANGELOG.md)
+- [Thoughtseed Huly System Design](docs/huly-system-design.md)
+- [Huly Rollout Implementation Plan](docs/plans/2026-04-06-huly-rollout.md)
+
 ## Dashboard Views
 
 | View | Shortcut | Source | What It Shows |
@@ -182,8 +200,8 @@ This is the intended direction for the Thoughtseed workspace normalization work 
 | **Projects** | `Cmd+3` | Clockify | Per-project breakdown, utilization bars, CSV export |
 | **Sprints** | `Cmd+4` | Huly | Milestone tracking, progress bars, on-track/delayed status |
 | **Insights** | `Cmd+5` | Both | Time discrepancies, estimation accuracy, priority queue health |
-| **Team** | `Cmd+6` | Huly | Department org cards, leave calendar, holiday list |
-| **Comms** | `Cmd+7` | Huly | Chat activity volume, meeting load with ratio analysis |
+| **Team** | `Cmd+6` | Huly | Drag-and-drop org chart mapping, leave calendar, holiday list |
+| **Comms** | `Cmd+7` | Huly + Slack | Chat activity volume, meeting load with ratio analysis |
 | **Boards** | `Cmd+8` | Huly | Kanban cards, days-in-status tracking, stuck card filtering |
 | **Activity** | `Cmd+9` | Both | Weekly timeline, combined feed, engagement heatmap |
 | **Live** | `Cmd+0` | Both | Real-time presence cards with auto-refresh |

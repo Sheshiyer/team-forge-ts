@@ -72,10 +72,7 @@ impl ClockifyClient {
                 return Err(format!(
                     "Clockify API error {} on retry: {}",
                     retry_resp.status(),
-                    retry_resp
-                        .text()
-                        .await
-                        .unwrap_or_else(|_| "no body".into())
+                    retry_resp.text().await.unwrap_or_else(|_| "no body".into())
                 ));
             }
             return Ok(retry_resp);

@@ -10,6 +10,8 @@ import type {
   PresenceStatus,
   Employee,
   SyncState,
+  OrgChartView,
+  OrgDepartmentUpdateInput,
   MilestoneView,
   TimeDiscrepancy,
   EstimationAccuracy,
@@ -56,7 +58,12 @@ export function useInvoke() {
     startBackgroundSync: () => invoke<string>("start_background_sync"),
     testHulyConnection: (token: string) =>
       invoke<string>("test_huly_connection", { token }),
+    testSlackConnection: (token: string) =>
+      invoke<string>("test_slack_connection", { token }),
     triggerHulySync: () => invoke<string>("trigger_huly_sync"),
+    getOrgChart: () => invoke<OrgChartView>("get_org_chart"),
+    applyOrgChartMapping: (mappings: OrgDepartmentUpdateInput[]) =>
+      invoke<string>("apply_org_chart_mapping", { mappings }),
     getMilestones: () => invoke<MilestoneView[]>("get_milestones"),
     getTimeDiscrepancies: () => invoke<TimeDiscrepancy[]>("get_time_discrepancies"),
     getEstimationAccuracy: () => invoke<EstimationAccuracy[]>("get_estimation_accuracy"),

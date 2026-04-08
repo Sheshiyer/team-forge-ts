@@ -129,6 +129,36 @@ export interface DepartmentView {
   quotaTotal: number;
 }
 
+export interface OrgPersonView {
+  personId: string;
+  employeeId: string | null;
+  name: string;
+  email: string | null;
+  active: boolean;
+}
+
+export interface OrgDepartmentMappingView {
+  id: string;
+  name: string;
+  headPersonId: string | null;
+  headName: string | null;
+  teamLeadPersonId: string | null;
+  teamLeadName: string | null;
+  memberPersonIds: string[];
+}
+
+export interface OrgChartView {
+  departments: OrgDepartmentMappingView[];
+  people: OrgPersonView[];
+}
+
+export interface OrgDepartmentUpdateInput {
+  departmentId: string;
+  headPersonId: string | null;
+  teamLeadPersonId: string | null;
+  memberPersonIds: string[];
+}
+
 export interface LeaveView {
   employeeName: string;
   leaveType: string;
@@ -148,6 +178,7 @@ export interface ChatActivityView {
   messageCount: number;
   channelsActive: number;
   lastMessageAt: string | null;
+  sources: string[];
 }
 
 export interface BoardCardView {

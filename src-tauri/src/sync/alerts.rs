@@ -50,8 +50,8 @@ pub async fn check_quota_alerts(
         .await
         .map_err(|e| format!("db error: {e}"))?;
 
-        let expected = (business_days_elapsed as f64 / total_business_days as f64)
-            * emp.monthly_quota_hours;
+        let expected =
+            (business_days_elapsed as f64 / total_business_days as f64) * emp.monthly_quota_hours;
 
         let ratio = if expected > 0.0 {
             month_row.0 / expected

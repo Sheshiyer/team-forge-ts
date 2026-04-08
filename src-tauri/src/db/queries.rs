@@ -223,7 +223,7 @@ pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>,
 pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO settings (key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     )
     .bind(key)
     .bind(value)
@@ -239,13 +239,11 @@ pub async fn get_sync_state(
     source: &str,
     entity: &str,
 ) -> Result<Option<SyncState>, sqlx::Error> {
-    sqlx::query_as::<_, SyncState>(
-        "SELECT * FROM sync_state WHERE source = ?1 AND entity = ?2"
-    )
-    .bind(source)
-    .bind(entity)
-    .fetch_optional(pool)
-    .await
+    sqlx::query_as::<_, SyncState>("SELECT * FROM sync_state WHERE source = ?1 AND entity = ?2")
+        .bind(source)
+        .bind(entity)
+        .fetch_optional(pool)
+        .await
 }
 
 pub async fn set_sync_state(pool: &SqlitePool, state: &SyncState) -> Result<(), sqlx::Error> {
@@ -254,7 +252,7 @@ pub async fn set_sync_state(pool: &SqlitePool, state: &SyncState) -> Result<(), 
          VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(source, entity) DO UPDATE SET
            last_sync_at = excluded.last_sync_at,
-           last_cursor = excluded.last_cursor"
+           last_cursor = excluded.last_cursor",
     )
     .bind(&state.source)
     .bind(&state.entity)

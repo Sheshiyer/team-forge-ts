@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use chrono::Utc;
 use sqlx::SqlitePool;
@@ -11,7 +11,7 @@ fn clockify_date(dt: chrono::DateTime<Utc>) -> String {
 
 use super::client::ClockifyClient;
 use super::types::SyncReport;
-use crate::db::models::{Employee, Presence, Project, TimeEntry, SyncState};
+use crate::db::models::{Employee, Presence, Project, SyncState, TimeEntry};
 use crate::db::queries;
 
 /// Coordinates fetching from Clockify and persisting into SQLite.
@@ -145,10 +145,7 @@ impl ClockifySyncEngine {
                     .as_deref()
                     .and_then(parse_iso_duration);
 
-                let project_id = entry
-                    .project
-                    .as_ref()
-                    .and_then(|p| p.id.clone());
+                let project_id = entry.project.as_ref().and_then(|p| p.id.clone());
 
                 let te = TimeEntry {
                     id: entry.id.clone(),
@@ -220,10 +217,7 @@ impl ClockifySyncEngine {
 
         // Then set active timers.
         for (uid, entry) in &active_timers {
-            let project_name = entry
-                .project
-                .as_ref()
-                .and_then(|p| p.name.clone());
+            let project_name = entry.project.as_ref().and_then(|p| p.name.clone());
 
             let p = Presence {
                 employee_id: uid.clone(),

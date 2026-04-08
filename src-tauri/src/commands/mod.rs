@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{Datelike, Local, NaiveDate, Utc, Weekday};
+use serde_json::{json, Value};
 use tauri::State;
 
 use crate::clockify::client::ClockifyClient;
@@ -11,22 +12,139 @@ use crate::db::models::*;
 use crate::db::queries;
 use crate::huly::client::HulyClient;
 use crate::huly::sync::HulySyncEngine;
+use crate::huly::types::{
+    HulyAccountInfo, HulyBoard, HulyBoardCard, HulyChannel, HulyDepartment, HulyDocument,
+    HulyEmployee, HulyIssue, HulyPerson, HulyProject, HulyWorkspaceNormalizationAction,
+    HulyWorkspaceNormalizationReport, HulyWorkspaceNormalizationSnapshot,
+};
+use crate::slack::client::SlackClient;
+use crate::slack::types::{SlackConversation, SlackUser};
 use crate::sync::scheduler::SyncScheduler;
 use crate::{DbPool, SchedulerState};
 
 const DEFAULT_CLOCKIFY_IGNORED_EMAILS: &str = "thoughtseedlabs@gmail.com";
+const SLACK_REQUIRED_SCOPES: &[&str] = &[
+    "channels:read",
+    "channels:history",
+    "groups:read",
+    "groups:history",
+    "users:read",
+    "users:read.email",
+];
 
 fn normalize_email(value: &str) -> String {
     value.trim().to_lowercase()
 }
 
-fn normalize_ignored_email_value(value: &str) -> String {
+fn parse_multi_value_setting(value: &str) -> Vec<String> {
     value
         .split(|ch: char| ch == ',' || ch == '\n' || ch == ';')
-        .map(normalize_email)
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .map(|item| item.to_string())
+        .collect()
+}
+
+fn normalize_ignored_email_value(value: &str) -> String {
+    parse_multi_value_setting(value)
+        .into_iter()
+        .map(|item| normalize_email(&item))
         .filter(|item| !item.is_empty())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn slack_required_scopes_label() -> String {
+    SLACK_REQUIRED_SCOPES.join(", ")
+}
+
+fn slack_error_detail(error: &str, key: &str) -> Option<String> {
+    error
+        .split(" | ")
+        .find_map(|segment| {
+            segment
+                .strip_prefix(key)
+                .map(|value| value.trim().to_string())
+        })
+        .filter(|value| !value.is_empty())
+}
+
+fn validate_slack_bot_token(value: &str) -> Result<String, String> {
+    let token = value.trim();
+
+    if token.is_empty() {
+        return Err("Slack bot token is required".to_string());
+    }
+
+    if token.starts_with("xoxp-") {
+        return Err(
+            "Use the Slack Bot User OAuth Token (xoxb-...), not the User OAuth Token (xoxp-...)."
+                .to_string(),
+        );
+    }
+
+    if !token.starts_with("xoxb-") {
+        return Err(
+            "Paste the Slack Bot User OAuth Token (xoxb-...) from Slack > Settings > Install App."
+                .to_string(),
+        );
+    }
+
+    Ok(token.to_string())
+}
+
+fn humanize_slack_connection_error(error: String) -> String {
+    if error.contains("missing_scope") {
+        let needed = slack_error_detail(&error, "needed=");
+        let mut message = if let Some(scope) = needed {
+            format!(
+                "Slack connected, but Slack reports the missing scope `{scope}`. Add that Bot Token Scope in Slack, click Reinstall to Workspace, then retry."
+            )
+        } else {
+            "Slack connected, but one or more required scopes are missing or the app has not been reinstalled after scope changes. Reinstall the Slack app, then retry."
+                .to_string()
+        };
+
+        message.push_str(&format!(
+            " TeamForge expects: {}.",
+            slack_required_scopes_label()
+        ));
+
+        return message;
+    }
+
+    if error.contains("invalid_auth")
+        || error.contains("not_authed")
+        || error.contains("account_inactive")
+    {
+        return "Slack authentication failed. Paste the Bot User OAuth Token (xoxb-...) from Slack > Settings > Install App."
+            .to_string();
+    }
+
+    error
+}
+
+fn normalize_person_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
+fn person_token_signature(value: &str) -> String {
+    let mut tokens: Vec<String> = value
+        .split(|ch: char| !ch.is_alphanumeric())
+        .map(|token| token.trim().to_lowercase())
+        .filter(|token| !token.is_empty())
+        .collect();
+    tokens.sort();
+    tokens.join("|")
+}
+
+fn slack_ts_to_millis(ts: &str) -> Option<i64> {
+    let seconds = ts.split('.').next()?.parse::<i64>().ok()?;
+    Some(seconds.saturating_mul(1000))
 }
 
 async fn load_ignored_clockify_emails(pool: &sqlx::SqlitePool) -> Result<HashSet<String>, String> {
@@ -70,6 +188,79 @@ async fn apply_clockify_ignore_rules(pool: &sqlx::SqlitePool) -> Result<(), Stri
     Ok(())
 }
 
+#[derive(Default)]
+struct ChatActivityAccum {
+    count: u32,
+    channels: HashSet<String>,
+    last_at_ms: Option<i64>,
+    sources: HashSet<String>,
+}
+
+fn add_chat_activity(
+    per_user: &mut HashMap<String, ChatActivityAccum>,
+    employee_name: &str,
+    channel_key: String,
+    timestamp_ms: Option<i64>,
+    source: &str,
+) {
+    let entry = per_user.entry(employee_name.to_string()).or_default();
+    entry.count += 1;
+    entry.channels.insert(channel_key);
+    entry.sources.insert(source.to_string());
+    if let Some(ts) = timestamp_ms {
+        entry.last_at_ms = Some(entry.last_at_ms.map_or(ts, |previous| previous.max(ts)));
+    }
+}
+
+fn slack_user_display_names(user: &SlackUser) -> Vec<String> {
+    let mut names = Vec::new();
+    for candidate in [
+        user.profile
+            .as_ref()
+            .and_then(|profile| profile.display_name.as_deref()),
+        user.profile
+            .as_ref()
+            .and_then(|profile| profile.real_name.as_deref()),
+        user.real_name.as_deref(),
+        user.name.as_deref(),
+    ] {
+        if let Some(value) = candidate {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() && !names.iter().any(|existing| existing == trimmed) {
+                names.push(trimmed.to_string());
+            }
+        }
+    }
+    names
+}
+
+fn filter_slack_channels(
+    channels: Vec<SlackConversation>,
+    raw_filters: &str,
+) -> Vec<SlackConversation> {
+    let filters = parse_multi_value_setting(raw_filters);
+    if filters.is_empty() {
+        return channels;
+    }
+
+    let allowed: HashSet<String> = filters
+        .into_iter()
+        .map(|value| normalize_person_key(&value))
+        .collect();
+
+    channels
+        .into_iter()
+        .filter(|channel| {
+            allowed.contains(&normalize_person_key(&channel.id))
+                || channel
+                    .name
+                    .as_ref()
+                    .map(|name| allowed.contains(&normalize_person_key(name)))
+                    .unwrap_or(false)
+        })
+        .collect()
+}
+
 // ─── Clockify connection commands ───────────────────────────────
 
 /// Validate a Clockify API key by fetching the authenticated user.
@@ -81,9 +272,7 @@ pub async fn test_clockify_connection(api_key: String) -> Result<ClockifyUser, S
 
 /// List workspaces accessible with the given API key.
 #[tauri::command]
-pub async fn get_clockify_workspaces(
-    api_key: String,
-) -> Result<Vec<ClockifyWorkspace>, String> {
+pub async fn get_clockify_workspaces(api_key: String) -> Result<Vec<ClockifyWorkspace>, String> {
     let client = ClockifyClient::new(api_key);
     client.get_workspaces().await
 }
@@ -132,11 +321,7 @@ pub async fn get_settings(db: State<'_, DbPool>) -> Result<HashMap<String, Strin
 }
 
 #[tauri::command]
-pub async fn save_setting(
-    db: State<'_, DbPool>,
-    key: String,
-    value: String,
-) -> Result<(), String> {
+pub async fn save_setting(db: State<'_, DbPool>, key: String, value: String) -> Result<(), String> {
     let pool = &db.0;
     let value_to_store = if key == "clockify_ignored_emails" {
         let normalized = normalize_ignored_email_value(&value);
@@ -236,12 +421,10 @@ pub async fn get_overview(db: State<'_, DbPool>) -> Result<OverviewData, String>
     .await
     .map_err(|e| format!("db error: {e}"))?;
 
-    let total_row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM employees WHERE is_active = 1",
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("db error: {e}"))?;
+    let total_row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM employees WHERE is_active = 1")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
 
     Ok(OverviewData {
         team_hours_this_month: team_hours,
@@ -552,15 +735,14 @@ pub async fn get_presence_status(db: State<'_, DbPool>) -> Result<Vec<PresenceSt
                     .map(|seen| (now.naive_local() - seen).num_minutes())
             });
 
-            let combined_status = if r.clockify_timer_active
-                || huly_recent.map_or(false, |mins| mins <= 15)
-            {
-                CombinedStatus::Active
-            } else if huly_recent.map_or(false, |mins| mins <= 60) {
-                CombinedStatus::Idle
-            } else {
-                CombinedStatus::Offline
-            };
+            let combined_status =
+                if r.clockify_timer_active || huly_recent.map_or(false, |mins| mins <= 15) {
+                    CombinedStatus::Active
+                } else if huly_recent.map_or(false, |mins| mins <= 60) {
+                    CombinedStatus::Idle
+                } else {
+                    CombinedStatus::Offline
+                };
 
             PresenceStatus {
                 employee_name: r.employee_name,
@@ -591,12 +773,14 @@ pub async fn update_employee_quota(
     quota: f64,
 ) -> Result<(), String> {
     let pool = &db.0;
-    sqlx::query("UPDATE employees SET monthly_quota_hours = ?1, updated_at = datetime('now') WHERE id = ?2")
-        .bind(quota)
-        .bind(&employee_id)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("db error: {e}"))?;
+    sqlx::query(
+        "UPDATE employees SET monthly_quota_hours = ?1, updated_at = datetime('now') WHERE id = ?2",
+    )
+    .bind(quota)
+    .bind(&employee_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("db error: {e}"))?;
     Ok(())
 }
 
@@ -620,6 +804,26 @@ pub async fn get_sync_status(db: State<'_, DbPool>) -> Result<Vec<SyncState>, St
 pub async fn test_huly_connection(token: String) -> Result<String, String> {
     let client = HulyClient::connect(None, &token).await?;
     client.test_connection().await
+}
+
+/// Test connectivity to Slack using a bot token plus the required read scopes.
+#[tauri::command]
+pub async fn test_slack_connection(token: String) -> Result<String, String> {
+    let token = validate_slack_bot_token(&token)?;
+    let client = SlackClient::new(token);
+    let auth = client
+        .test_connection()
+        .await
+        .map_err(humanize_slack_connection_error)?;
+    let team = auth
+        .team
+        .or(auth.team_id)
+        .or(auth.url)
+        .unwrap_or_else(|| "unknown-team".to_string());
+    Ok(format!(
+        "Connected to Slack workspace {team} as {}",
+        auth.user
+    ))
 }
 
 /// Run a full Huly sync (issues + presence).
@@ -655,7 +859,10 @@ pub async fn start_background_sync(
 
     // Stop existing scheduler if running
     {
-        let mut guard = scheduler_state.0.lock().map_err(|e| format!("lock error: {e}"))?;
+        let mut guard = scheduler_state
+            .0
+            .lock()
+            .map_err(|e| format!("lock error: {e}"))?;
         if let Some(old) = guard.take() {
             old.stop();
         }
@@ -663,7 +870,10 @@ pub async fn start_background_sync(
 
     match SyncScheduler::start(pool, app_handle).await {
         Some(scheduler) => {
-            let mut guard = scheduler_state.0.lock().map_err(|e| format!("lock error: {e}"))?;
+            let mut guard = scheduler_state
+                .0
+                .lock()
+                .map_err(|e| format!("lock error: {e}"))?;
             *guard = Some(scheduler);
             Ok("Background sync started".to_string())
         }
@@ -681,16 +891,1448 @@ async fn get_huly_client(pool: &sqlx::SqlitePool) -> Result<HulyClient, String> 
     HulyClient::connect(None, &token).await
 }
 
+async fn get_optional_slack_client(pool: &sqlx::SqlitePool) -> Result<Option<SlackClient>, String> {
+    let token = queries::get_setting(pool, "slack_bot_token")
+        .await
+        .map_err(|e| format!("read slack_bot_token: {e}"))?;
+
+    match token {
+        Some(value) if !value.trim().is_empty() => {
+            let token = validate_slack_bot_token(&value)?;
+            Ok(Some(SlackClient::new(token)))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn resolve_huly_actor_social_id(account: &HulyAccountInfo) -> Option<String> {
+    account
+        .primary_social_id
+        .clone()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            account
+                .social_ids
+                .as_ref()
+                .and_then(|ids| ids.iter().find(|value| !value.is_empty()).cloned())
+        })
+}
+
+fn department_sort_key(name: &str) -> (u8, String) {
+    let rank = match normalize_key(name).as_str() {
+        "leadership" => 0,
+        "engineering" => 1,
+        "marketing" => 2,
+        "organization" => 9,
+        _ => 5,
+    };
+    (rank, name.to_lowercase())
+}
+
+fn dedupe_person_ids(ids: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::new();
+    for id in ids {
+        if !id.trim().is_empty() && seen.insert(id.clone()) {
+            deduped.push(id.clone());
+        }
+    }
+    deduped
+}
+
+fn sanitize_org_department_update(mapping: &OrgDepartmentUpdateInput) -> OrgDepartmentUpdateInput {
+    let mut member_person_ids = dedupe_person_ids(&mapping.member_person_ids);
+
+    for candidate in [&mapping.head_person_id, &mapping.team_lead_person_id] {
+        if let Some(person_id) = candidate {
+            if !member_person_ids
+                .iter()
+                .any(|existing| existing == person_id)
+            {
+                member_person_ids.push(person_id.clone());
+            }
+        }
+    }
+
+    OrgDepartmentUpdateInput {
+        department_id: mapping.department_id.clone(),
+        head_person_id: mapping
+            .head_person_id
+            .clone()
+            .filter(|value| !value.trim().is_empty()),
+        team_lead_person_id: mapping
+            .team_lead_person_id
+            .clone()
+            .filter(|value| !value.trim().is_empty()),
+        member_person_ids,
+    }
+}
+
+fn validate_unique_department_membership(
+    mappings: &[OrgDepartmentUpdateInput],
+) -> Result<(), String> {
+    let mut assignments: HashMap<String, String> = HashMap::new();
+    for mapping in mappings {
+        for person_id in &mapping.member_person_ids {
+            if let Some(previous_department) =
+                assignments.insert(person_id.clone(), mapping.department_id.clone())
+            {
+                return Err(format!(
+                    "person {person_id} is assigned to multiple departments ({previous_department}, {})",
+                    mapping.department_id
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ignored_org_person_ids(
+    db_employees: &[Employee],
+    ignored_emails: &HashSet<String>,
+) -> HashSet<String> {
+    db_employees
+        .iter()
+        .filter(|employee| ignored_emails.contains(&normalize_email(&employee.email)))
+        .filter_map(|employee| employee.huly_person_id.clone())
+        .collect()
+}
+
+fn build_org_chart_view(
+    mut departments: Vec<HulyDepartment>,
+    persons: Vec<HulyPerson>,
+    huly_employees: Vec<HulyEmployee>,
+    db_employees: Vec<Employee>,
+    ignored_emails: &HashSet<String>,
+) -> OrgChartView {
+    let ignored_person_ids = ignored_org_person_ids(&db_employees, ignored_emails);
+
+    let db_employee_by_person: HashMap<String, &Employee> = db_employees
+        .iter()
+        .filter(|employee| !ignored_emails.contains(&normalize_email(&employee.email)))
+        .filter_map(|employee| {
+            employee
+                .huly_person_id
+                .as_ref()
+                .map(|person_id| (person_id.clone(), employee))
+        })
+        .collect();
+
+    let person_by_id: HashMap<String, &HulyPerson> = persons
+        .iter()
+        .map(|person| (person.id.clone(), person))
+        .collect();
+
+    let employee_name_by_person: HashMap<String, String> = huly_employees
+        .iter()
+        .filter_map(|employee| {
+            employee.person_uuid.as_ref().and_then(|person_id| {
+                if ignored_person_ids.contains(person_id) {
+                    None
+                } else {
+                    Some((
+                        person_id.clone(),
+                        employee.name.clone().unwrap_or_else(|| person_id.clone()),
+                    ))
+                }
+            })
+        })
+        .collect();
+
+    let mut relevant_person_ids: HashSet<String> = HashSet::new();
+    for department in &departments {
+        if let Some(head) = &department.head {
+            if !ignored_person_ids.contains(head) {
+                relevant_person_ids.insert(head.clone());
+            }
+        }
+        if let Some(team_lead) = &department.team_lead {
+            if !ignored_person_ids.contains(team_lead) {
+                relevant_person_ids.insert(team_lead.clone());
+            }
+        }
+        if let Some(members) = &department.members {
+            relevant_person_ids.extend(
+                members
+                    .iter()
+                    .filter(|person_id| !ignored_person_ids.contains(*person_id))
+                    .cloned(),
+            );
+        }
+    }
+
+    for employee in &huly_employees {
+        if employee.active.unwrap_or(true) {
+            if let Some(person_id) = &employee.person_uuid {
+                if !ignored_person_ids.contains(person_id) {
+                    relevant_person_ids.insert(person_id.clone());
+                }
+            }
+        }
+    }
+
+    for employee in &db_employees {
+        if employee.is_active {
+            if let Some(person_id) = &employee.huly_person_id {
+                if !ignored_person_ids.contains(person_id) {
+                    relevant_person_ids.insert(person_id.clone());
+                }
+            }
+        }
+    }
+
+    let mut people: Vec<OrgPersonView> = relevant_person_ids
+        .into_iter()
+        .map(|person_id| {
+            let db_employee = db_employee_by_person.get(&person_id).copied();
+            let person_name = person_by_id
+                .get(&person_id)
+                .and_then(|person| person.name.clone())
+                .filter(|name| !name.trim().is_empty());
+            let employee_name = db_employee.map(|employee| employee.name.clone());
+            let huly_employee_name = employee_name_by_person.get(&person_id).cloned();
+
+            OrgPersonView {
+                person_id: person_id.clone(),
+                employee_id: db_employee.map(|employee| employee.id.clone()),
+                name: person_name
+                    .or(employee_name)
+                    .or(huly_employee_name)
+                    .unwrap_or(person_id.clone()),
+                email: db_employee.map(|employee| employee.email.clone()),
+                active: db_employee
+                    .map(|employee| employee.is_active)
+                    .unwrap_or(true),
+            }
+        })
+        .collect();
+
+    people.sort_by(|left, right| {
+        right
+            .active
+            .cmp(&left.active)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+
+    let person_name_map: HashMap<String, String> = people
+        .iter()
+        .map(|person| (person.person_id.clone(), person.name.clone()))
+        .collect();
+
+    departments.sort_by(|left, right| {
+        let left_name = left.name.clone().unwrap_or_else(|| "Unnamed".to_string());
+        let right_name = right.name.clone().unwrap_or_else(|| "Unnamed".to_string());
+        department_sort_key(&left_name).cmp(&department_sort_key(&right_name))
+    });
+
+    let department_views = departments
+        .iter()
+        .map(|department| {
+            let head_person_id = department
+                .head
+                .clone()
+                .filter(|person_id| !ignored_person_ids.contains(person_id));
+            let team_lead_person_id = department
+                .team_lead
+                .clone()
+                .filter(|person_id| !ignored_person_ids.contains(person_id));
+            let member_person_ids = dedupe_person_ids(
+                &department
+                    .members
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|person_id| !ignored_person_ids.contains(person_id))
+                    .collect::<Vec<_>>(),
+            );
+
+            OrgDepartmentMappingView {
+                id: department.id.clone(),
+                name: department
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| "Unnamed".to_string()),
+                head_person_id: head_person_id.clone(),
+                head_name: head_person_id
+                    .as_ref()
+                    .and_then(|person_id| person_name_map.get(person_id))
+                    .cloned(),
+                team_lead_person_id: team_lead_person_id.clone(),
+                team_lead_name: team_lead_person_id
+                    .as_ref()
+                    .and_then(|person_id| person_name_map.get(person_id))
+                    .cloned(),
+                member_person_ids,
+            }
+        })
+        .collect();
+
+    OrgChartView {
+        departments: department_views,
+        people,
+    }
+}
+
+const HULY_PROJECT_CLASS: &str = "tracker:class:Project";
+const HULY_ISSUE_CLASS: &str = "tracker:class:Issue";
+const HULY_DEPARTMENT_CLASS: &str = "hr:class:Department";
+const HULY_CHANNEL_CLASS: &str = "chunter:class:Channel";
+const HULY_BOARD_CLASS: &str = "board:class:Board";
+const CORE_SPACE_SPACE: &str = "core:space:Space";
+const CORE_SPACE_WORKSPACE: &str = "core:space:Workspace";
+const HR_HEAD_DEPARTMENT_ID: &str = "hr:ids:Head";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ProjectTargetKey {
+    Axtech,
+    TirakApp,
+    Vibrasonix,
+    TuyaClients,
+    OasisRnd,
+    InternalOps,
+}
+
+impl ProjectTargetKey {
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Axtech => "Axtech",
+            Self::TirakApp => "Tirak-App",
+            Self::Vibrasonix => "Vibrasonix",
+            Self::TuyaClients => "Tuya clients",
+            Self::OasisRnd => "OASIS R&D",
+            Self::InternalOps => "Internal Ops",
+        }
+    }
+
+    fn identifier(self) -> Option<&'static str> {
+        match self {
+            Self::TuyaClients => Some("TUY"),
+            Self::OasisRnd => Some("OAS"),
+            Self::InternalOps => Some("INT"),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct WorkspaceNormalizationSnapshotData {
+    account: HulyAccountInfo,
+    projects: Vec<HulyProject>,
+    issues: Vec<HulyIssue>,
+    departments: Vec<HulyDepartment>,
+    channels: Vec<HulyChannel>,
+    employees: Vec<HulyEmployee>,
+    persons: Vec<HulyPerson>,
+    documents: Vec<HulyDocument>,
+    boards: Vec<HulyBoard>,
+    board_cards: Vec<HulyBoardCard>,
+}
+
+#[derive(Debug, Clone)]
+enum WorkspaceNormalizationOperation {
+    RenameProject {
+        project_id: String,
+        from_name: String,
+        to: ProjectTargetKey,
+    },
+    CreateProject {
+        target: ProjectTargetKey,
+    },
+    MoveIssue {
+        issue_id: String,
+        issue_title: String,
+        from_project_name: Option<String>,
+        from_project_id: Option<String>,
+        to: ProjectTargetKey,
+        reason: String,
+    },
+    CreateDepartment {
+        name: &'static str,
+    },
+    CreateChannel {
+        name: &'static str,
+        description: &'static str,
+        topic: &'static str,
+    },
+    ArchiveBoard {
+        board_id: String,
+        board_name: String,
+    },
+    ManualIssueReview {
+        issue_id: String,
+        issue_title: String,
+        current_project_name: Option<String>,
+        reason: String,
+    },
+    ManualDepartmentReview {
+        employee_count: usize,
+        reason: String,
+    },
+    ManualDuplicatePerson {
+        display_name: String,
+        person_ids: Vec<String>,
+    },
+    ManualDocumentReview {
+        document_id: String,
+        title: Option<String>,
+        has_content: bool,
+    },
+    ManualBoardReview {
+        board_id: String,
+        board_name: String,
+        card_count: usize,
+    },
+}
+
+impl WorkspaceNormalizationOperation {
+    fn to_action(&self) -> HulyWorkspaceNormalizationAction {
+        match self {
+            Self::RenameProject {
+                project_id,
+                from_name,
+                to,
+            } => HulyWorkspaceNormalizationAction {
+                category: "projects".to_string(),
+                kind: "rename".to_string(),
+                target: to.display_name().to_string(),
+                reason: "Runbook rename target".to_string(),
+                safe_to_apply: true,
+                applied: false,
+                current_value: Some(from_name.clone()),
+                desired_value: Some(to.display_name().to_string()),
+                object_id: Some(project_id.clone()),
+                result_id: None,
+                error: None,
+            },
+            Self::CreateProject { target } => HulyWorkspaceNormalizationAction {
+                category: "projects".to_string(),
+                kind: "create".to_string(),
+                target: target.display_name().to_string(),
+                reason: "Missing target delivery stream".to_string(),
+                safe_to_apply: true,
+                applied: false,
+                current_value: None,
+                desired_value: Some(target.display_name().to_string()),
+                object_id: None,
+                result_id: None,
+                error: None,
+            },
+            Self::MoveIssue {
+                issue_id,
+                issue_title,
+                from_project_name,
+                to,
+                reason,
+                ..
+            } => HulyWorkspaceNormalizationAction {
+                category: "issues".to_string(),
+                kind: "move".to_string(),
+                target: issue_title.clone(),
+                reason: reason.clone(),
+                safe_to_apply: true,
+                applied: false,
+                current_value: from_project_name.clone(),
+                desired_value: Some(to.display_name().to_string()),
+                object_id: Some(issue_id.clone()),
+                result_id: None,
+                error: None,
+            },
+            Self::CreateDepartment { name } => HulyWorkspaceNormalizationAction {
+                category: "departments".to_string(),
+                kind: "create".to_string(),
+                target: (*name).to_string(),
+                reason: "Missing target department shell".to_string(),
+                safe_to_apply: true,
+                applied: false,
+                current_value: None,
+                desired_value: Some((*name).to_string()),
+                object_id: None,
+                result_id: None,
+                error: None,
+            },
+            Self::CreateChannel { name, topic, .. } => HulyWorkspaceNormalizationAction {
+                category: "channels".to_string(),
+                kind: "create".to_string(),
+                target: format!("#{name}"),
+                reason: topic.to_string(),
+                safe_to_apply: true,
+                applied: false,
+                current_value: None,
+                desired_value: Some(format!("#{name}")),
+                object_id: None,
+                result_id: None,
+                error: None,
+            },
+            Self::ArchiveBoard {
+                board_id,
+                board_name,
+            } => HulyWorkspaceNormalizationAction {
+                category: "board".to_string(),
+                kind: "archive".to_string(),
+                target: board_name.clone(),
+                reason: "Default board is empty and can be archived safely".to_string(),
+                safe_to_apply: true,
+                applied: false,
+                current_value: Some(board_name.clone()),
+                desired_value: Some("Archived".to_string()),
+                object_id: Some(board_id.clone()),
+                result_id: None,
+                error: None,
+            },
+            Self::ManualIssueReview {
+                issue_id,
+                issue_title,
+                current_project_name,
+                reason,
+            } => HulyWorkspaceNormalizationAction {
+                category: "issues".to_string(),
+                kind: "manualReview".to_string(),
+                target: issue_title.clone(),
+                reason: reason.clone(),
+                safe_to_apply: false,
+                applied: false,
+                current_value: current_project_name.clone(),
+                desired_value: None,
+                object_id: Some(issue_id.clone()),
+                result_id: None,
+                error: None,
+            },
+            Self::ManualDepartmentReview {
+                employee_count,
+                reason,
+            } => HulyWorkspaceNormalizationAction {
+                category: "departments".to_string(),
+                kind: "manualReview".to_string(),
+                target: "Department membership mapping".to_string(),
+                reason: format!("{reason} ({employee_count} active employees in scope)"),
+                safe_to_apply: false,
+                applied: false,
+                current_value: None,
+                desired_value: Some("Engineering / Marketing / Leadership assignments".to_string()),
+                object_id: None,
+                result_id: None,
+                error: None,
+            },
+            Self::ManualDuplicatePerson {
+                display_name,
+                person_ids,
+            } => HulyWorkspaceNormalizationAction {
+                category: "people".to_string(),
+                kind: "manualReview".to_string(),
+                target: display_name.clone(),
+                reason: format!("Duplicate person records detected: {}", person_ids.join(", ")),
+                safe_to_apply: false,
+                applied: false,
+                current_value: None,
+                desired_value: Some("One canonical active person record".to_string()),
+                object_id: None,
+                result_id: None,
+                error: None,
+            },
+            Self::ManualDocumentReview {
+                document_id,
+                title,
+                has_content,
+            } => HulyWorkspaceNormalizationAction {
+                category: "documents".to_string(),
+                kind: "manualReview".to_string(),
+                target: title.clone().unwrap_or_else(|| "(untitled document)".to_string()),
+                reason: if *has_content {
+                    "Untitled document has content and needs a human rename decision".to_string()
+                } else {
+                    "Untitled placeholder needs a human archive/delete decision".to_string()
+                },
+                safe_to_apply: false,
+                applied: false,
+                current_value: title.clone(),
+                desired_value: None,
+                object_id: Some(document_id.clone()),
+                result_id: None,
+                error: None,
+            },
+            Self::ManualBoardReview {
+                board_id,
+                board_name,
+                card_count,
+            } => HulyWorkspaceNormalizationAction {
+                category: "board".to_string(),
+                kind: "manualReview".to_string(),
+                target: board_name.clone(),
+                reason: format!(
+                    "Default board usage is ambiguous; inspect before archiving ({card_count} cards)"
+                ),
+                safe_to_apply: false,
+                applied: false,
+                current_value: Some(board_name.clone()),
+                desired_value: Some("Keep with starter cards or archive intentionally".to_string()),
+                object_id: Some(board_id.clone()),
+                result_id: None,
+                error: None,
+            },
+        }
+    }
+}
+
+fn normalize_key(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+fn normalize_channel_key(value: &str) -> String {
+    normalize_key(value.trim_start_matches('#'))
+}
+
+fn project_name(project: &HulyProject) -> String {
+    project.name.clone().unwrap_or_else(|| {
+        project
+            .identifier
+            .clone()
+            .unwrap_or_else(|| project.id.clone())
+    })
+}
+
+fn channel_name(channel: &HulyChannel) -> String {
+    channel
+        .name
+        .clone()
+        .or_else(|| channel.title.clone())
+        .unwrap_or_else(|| channel.id.clone())
+}
+
+fn board_name(board: &HulyBoard) -> String {
+    board.name.clone().unwrap_or_else(|| board.id.clone())
+}
+
+fn canonical_project_target(name: &str) -> Option<ProjectTargetKey> {
+    match normalize_key(name).as_str() {
+        "heyza" | "heyzack-ai" | "heyzack ai" | "axtech" => Some(ProjectTargetKey::Axtech),
+        "tirak" | "tirak-app" => Some(ProjectTargetKey::TirakApp),
+        "vibra" | "vibrasonix" => Some(ProjectTargetKey::Vibrasonix),
+        "tuya clients" => Some(ProjectTargetKey::TuyaClients),
+        "oasis r&d" | "oasis rnd" | "oasis r and d" => Some(ProjectTargetKey::OasisRnd),
+        "internal ops" => Some(ProjectTargetKey::InternalOps),
+        _ => None,
+    }
+}
+
+fn issue_title(issue: &HulyIssue) -> String {
+    issue
+        .title
+        .clone()
+        .unwrap_or_else(|| issue.identifier.clone().unwrap_or_else(|| issue.id.clone()))
+}
+
+fn issue_text(issue: &HulyIssue) -> String {
+    format!(
+        "{} {} {}",
+        issue.identifier.clone().unwrap_or_default(),
+        issue.title.clone().unwrap_or_default(),
+        issue.description.clone().unwrap_or_default()
+    )
+    .to_lowercase()
+}
+
+fn classify_issue_target(issue: &HulyIssue) -> Option<(ProjectTargetKey, String)> {
+    let text = issue_text(issue);
+
+    let find_keyword = |needles: &[&str]| -> Option<String> {
+        needles
+            .iter()
+            .find(|needle| text.contains(**needle))
+            .map(|needle| (*needle).to_string())
+    };
+
+    if let Some(keyword) = find_keyword(&["tuya"]) {
+        return Some((
+            ProjectTargetKey::TuyaClients,
+            format!("Matched Tuya keyword `{keyword}`"),
+        ));
+    }
+
+    if let Some(keyword) = find_keyword(&["oasis", "r&d", "r and d", "rnd", "research"]) {
+        return Some((
+            ProjectTargetKey::OasisRnd,
+            format!("Matched R&D keyword `{keyword}`"),
+        ));
+    }
+
+    if let Some(keyword) = find_keyword(&["axtech", "heyza"]) {
+        return Some((
+            ProjectTargetKey::Axtech,
+            format!("Matched Axtech keyword `{keyword}`"),
+        ));
+    }
+
+    if let Some(keyword) = find_keyword(&[
+        "internal",
+        "teamforge",
+        "thoughtseed",
+        "clockify",
+        "huly",
+        "workflow",
+        "process",
+        "ops",
+        "readme",
+        "documentation",
+        "docs",
+    ]) {
+        return Some((
+            ProjectTargetKey::InternalOps,
+            format!("Matched internal-ops keyword `{keyword}`"),
+        ));
+    }
+
+    None
+}
+
+fn choose_project_template(projects: &[HulyProject]) -> Option<&HulyProject> {
+    let preferred = ["HEYZA", "Axtech", "TIRAK", "VIBRA", "Vibrasonix"];
+    for preferred_name in preferred {
+        if let Some(project) = projects.iter().find(|project| {
+            normalize_key(&project_name(project)) == normalize_key(preferred_name)
+                && project.r#type.is_some()
+        }) {
+            return Some(project);
+        }
+    }
+
+    projects
+        .iter()
+        .find(|project| project.r#type.is_some() && !project.archived.unwrap_or(false))
+}
+
+fn build_project_create_attributes(
+    template: &HulyProject,
+    target: ProjectTargetKey,
+    actor_account_id: &str,
+) -> Result<serde_json::Value, String> {
+    let project_type = template
+        .r#type
+        .clone()
+        .ok_or_else(|| "project template is missing a project type".to_string())?;
+
+    let owners = template
+        .owners
+        .clone()
+        .filter(|owners| !owners.is_empty())
+        .unwrap_or_else(|| vec![actor_account_id.to_string()]);
+
+    let mut attributes = json!({
+        "name": target.display_name(),
+        "description": format!("Thoughtseed delivery stream for {}", target.display_name()),
+        "private": template.private.unwrap_or(false),
+        "members": Vec::<String>::new(),
+        "owners": owners,
+        "archived": false,
+        "autoJoin": template.auto_join.unwrap_or(false),
+        "identifier": target.identifier().unwrap_or("TSK"),
+        "sequence": 0,
+        "type": project_type,
+        "defaultIssueStatus": template.default_issue_status.clone().unwrap_or_default(),
+        "defaultTimeReportDay": template
+            .default_time_report_day
+            .clone()
+            .unwrap_or_else(|| json!("PreviousWorkDay")),
+    });
+
+    if let Some(default_assignee) = &template.default_assignee {
+        attributes["defaultAssignee"] = json!(default_assignee);
+    }
+    if let Some(icon) = &template.icon {
+        attributes["icon"] = json!(icon);
+    }
+    if let Some(color) = &template.color {
+        attributes["color"] = color.clone();
+    }
+
+    Ok(attributes)
+}
+
+fn build_snapshot_summary(
+    snapshot: &WorkspaceNormalizationSnapshotData,
+) -> HulyWorkspaceNormalizationSnapshot {
+    let duplicate_people_count = {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for person in &snapshot.persons {
+            if let Some(name) = person
+                .name
+                .as_ref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                *counts.entry(normalize_key(name)).or_default() += 1;
+            }
+        }
+        counts.values().filter(|count| **count > 1).count() as u32
+    };
+
+    let untitled_document_count = snapshot
+        .documents
+        .iter()
+        .filter(|document| {
+            document
+                .title
+                .as_ref()
+                .map(|title| {
+                    let normalized = normalize_key(title);
+                    normalized.is_empty() || normalized == "untitled"
+                })
+                .unwrap_or(true)
+        })
+        .count() as u32;
+
+    HulyWorkspaceNormalizationSnapshot {
+        project_count: snapshot.projects.len() as u32,
+        issue_count: snapshot.issues.len() as u32,
+        department_count: snapshot.departments.len() as u32,
+        channel_count: snapshot.channels.len() as u32,
+        employee_count: snapshot.employees.len() as u32,
+        duplicate_people_count,
+        untitled_document_count,
+        board_count: snapshot.boards.len() as u32,
+    }
+}
+
+async fn load_workspace_normalization_snapshot(
+    client: &HulyClient,
+) -> Result<WorkspaceNormalizationSnapshotData, String> {
+    let (
+        account,
+        projects,
+        issues,
+        departments,
+        channels,
+        employees,
+        persons,
+        documents,
+        boards,
+        board_cards,
+    ) = tokio::try_join!(
+        client.get_account_info(),
+        client.get_projects(),
+        client.get_issues(None),
+        client.get_departments(),
+        client.get_channels(),
+        client.get_employees(),
+        client.get_persons(),
+        client.get_documents(),
+        client.get_boards(),
+        client.get_board_cards(),
+    )?;
+
+    Ok(WorkspaceNormalizationSnapshotData {
+        account,
+        projects,
+        issues,
+        departments,
+        channels,
+        employees,
+        persons,
+        documents,
+        boards,
+        board_cards,
+    })
+}
+
+fn build_workspace_normalization_plan(
+    snapshot: &WorkspaceNormalizationSnapshotData,
+) -> (Vec<WorkspaceNormalizationOperation>, Vec<String>) {
+    let mut operations = Vec::new();
+    let mut warnings = Vec::new();
+
+    let projects_by_normalized_name: HashMap<String, &HulyProject> = snapshot
+        .projects
+        .iter()
+        .map(|project| (normalize_key(&project_name(project)), project))
+        .collect();
+
+    for (legacy_name, target) in [
+        ("HEYZA", ProjectTargetKey::Axtech),
+        ("Heyzack-AI", ProjectTargetKey::Axtech),
+        ("TIRAK", ProjectTargetKey::TirakApp),
+        ("VIBRA", ProjectTargetKey::Vibrasonix),
+    ] {
+        let legacy = projects_by_normalized_name
+            .get(&normalize_key(legacy_name))
+            .copied();
+        let target_existing = projects_by_normalized_name
+            .get(&normalize_key(target.display_name()))
+            .copied();
+
+        match (legacy, target_existing) {
+            (Some(legacy_project), Some(target_project))
+                if legacy_project.id != target_project.id =>
+            {
+                warnings.push(format!(
+                    "Both legacy project `{legacy_name}` and target `{}` exist; leaving rename manual.",
+                    target.display_name()
+                ));
+            }
+            (Some(legacy_project), None) => {
+                operations.push(WorkspaceNormalizationOperation::RenameProject {
+                    project_id: legacy_project.id.clone(),
+                    from_name: project_name(legacy_project),
+                    to: target,
+                })
+            }
+            _ => {}
+        }
+    }
+
+    for target in [
+        ProjectTargetKey::TuyaClients,
+        ProjectTargetKey::OasisRnd,
+        ProjectTargetKey::InternalOps,
+    ] {
+        if !projects_by_normalized_name.contains_key(&normalize_key(target.display_name())) {
+            operations.push(WorkspaceNormalizationOperation::CreateProject { target });
+        }
+    }
+
+    let project_name_by_id: HashMap<String, String> = snapshot
+        .projects
+        .iter()
+        .map(|project| (project.id.clone(), project_name(project)))
+        .collect();
+
+    for issue in &snapshot.issues {
+        let current_project_name = issue
+            .space
+            .as_ref()
+            .and_then(|space| project_name_by_id.get(space))
+            .cloned();
+        let current_target = current_project_name
+            .as_deref()
+            .and_then(canonical_project_target);
+
+        match classify_issue_target(issue) {
+            Some((target, reason))
+                if current_project_name.is_some()
+                    && issue.space.is_some()
+                    && current_target != Some(target) =>
+            {
+                operations.push(WorkspaceNormalizationOperation::MoveIssue {
+                    issue_id: issue.id.clone(),
+                    issue_title: issue_title(issue),
+                    from_project_name: current_project_name.clone(),
+                    from_project_id: issue.space.clone(),
+                    to: target,
+                    reason,
+                });
+            }
+            Some((target, _reason)) if current_target == Some(target) => {}
+            Some((_target, reason)) => {
+                operations.push(WorkspaceNormalizationOperation::ManualIssueReview {
+                    issue_id: issue.id.clone(),
+                    issue_title: issue_title(issue),
+                    current_project_name,
+                    reason: format!("{reason}; issue is missing a current project reference"),
+                });
+            }
+            None if current_target.is_some() => {}
+            None if current_project_name.is_some() => {
+                operations.push(WorkspaceNormalizationOperation::ManualIssueReview {
+                    issue_id: issue.id.clone(),
+                    issue_title: issue_title(issue),
+                    current_project_name,
+                    reason: "No safe project target could be inferred from the issue text"
+                        .to_string(),
+                });
+            }
+            None => {}
+        }
+    }
+
+    let department_names: HashSet<String> = snapshot
+        .departments
+        .iter()
+        .filter_map(|department| department.name.as_ref())
+        .map(|value| normalize_key(value))
+        .collect();
+
+    for name in ["Engineering", "Marketing", "Leadership"] {
+        if !department_names.contains(&normalize_key(name)) {
+            operations.push(WorkspaceNormalizationOperation::CreateDepartment { name });
+        }
+    }
+
+    let active_employee_count = snapshot
+        .employees
+        .iter()
+        .filter(|employee| employee.active.unwrap_or(true))
+        .count();
+    if active_employee_count > 0 {
+        operations.push(WorkspaceNormalizationOperation::ManualDepartmentReview {
+            employee_count: active_employee_count,
+            reason:
+                "Department member and team-lead mapping is not derivable from repo state alone"
+                    .to_string(),
+        });
+    }
+
+    let channel_names: HashSet<String> = snapshot
+        .channels
+        .iter()
+        .map(channel_name)
+        .map(|value| normalize_channel_key(&value))
+        .collect();
+
+    for (name, description, topic) in [
+        (
+            "standups",
+            "Daily standup updates and async check-ins.",
+            "Daily standup updates and async check-ins.",
+        ),
+        (
+            "axtech",
+            "Axtech delivery coordination and client-specific updates.",
+            "Axtech delivery coordination and client-specific updates.",
+        ),
+        (
+            "tuya-clients",
+            "Tuya client delivery stream, integrations, and blockers.",
+            "Tuya client delivery stream, integrations, and blockers.",
+        ),
+        (
+            "research-rnd",
+            "OASIS and R&D experiments, research notes, and prototypes.",
+            "OASIS and R&D experiments, research notes, and prototypes.",
+        ),
+        (
+            "tech-resources",
+            "Shared technical resources, snippets, and implementation references.",
+            "Shared technical resources, snippets, and implementation references.",
+        ),
+        (
+            "blockers-urgent",
+            "Escalate critical blockers that need fast cross-team attention.",
+            "Escalate critical blockers that need fast cross-team attention.",
+        ),
+        (
+            "training-questions",
+            "Training support, onboarding questions, and learning requests.",
+            "Training support, onboarding questions, and learning requests.",
+        ),
+    ] {
+        if !channel_names.contains(&normalize_channel_key(name)) {
+            operations.push(WorkspaceNormalizationOperation::CreateChannel {
+                name,
+                description,
+                topic,
+            });
+        }
+    }
+
+    let mut people_by_name: HashMap<String, Vec<&HulyPerson>> = HashMap::new();
+    for person in &snapshot.persons {
+        if let Some(name) = person
+            .name
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            people_by_name
+                .entry(normalize_key(name))
+                .or_default()
+                .push(person);
+        }
+    }
+    if let Some(records) = people_by_name.get(&normalize_key("Akshay Balraj")) {
+        if records.len() > 1 {
+            operations.push(WorkspaceNormalizationOperation::ManualDuplicatePerson {
+                display_name: "Akshay Balraj".to_string(),
+                person_ids: records.iter().map(|person| person.id.clone()).collect(),
+            });
+        }
+    }
+
+    for document in &snapshot.documents {
+        let normalized_title = document
+            .title
+            .as_ref()
+            .map(|title| normalize_key(title))
+            .unwrap_or_default();
+        if normalized_title.is_empty() || normalized_title == "untitled" {
+            operations.push(WorkspaceNormalizationOperation::ManualDocumentReview {
+                document_id: document.id.clone(),
+                title: document.title.clone(),
+                has_content: document
+                    .content
+                    .as_ref()
+                    .map(|content| !content.trim().is_empty())
+                    .unwrap_or(false),
+            });
+        }
+    }
+
+    let board_card_counts: HashMap<String, usize> = snapshot
+        .board_cards
+        .iter()
+        .filter_map(|card| card.space.as_ref().map(|space| space.clone()))
+        .fold(HashMap::new(), |mut acc, board_id| {
+            *acc.entry(board_id).or_default() += 1;
+            acc
+        });
+
+    for board in &snapshot.boards {
+        let board_label = board_name(board);
+        if snapshot.boards.len() == 1 || normalize_key(&board_label) == "default" {
+            let card_count = board_card_counts
+                .get(&board.id)
+                .copied()
+                .unwrap_or_default();
+            if !board.archived.unwrap_or(false) && card_count == 0 {
+                operations.push(WorkspaceNormalizationOperation::ArchiveBoard {
+                    board_id: board.id.clone(),
+                    board_name: board_label,
+                });
+            } else {
+                operations.push(WorkspaceNormalizationOperation::ManualBoardReview {
+                    board_id: board.id.clone(),
+                    board_name: board_label,
+                    card_count,
+                });
+            }
+        }
+    }
+
+    (operations, warnings)
+}
+
+fn mark_action_success(
+    actions: &mut [HulyWorkspaceNormalizationAction],
+    index: usize,
+    result_id: Option<String>,
+) {
+    if let Some(action) = actions.get_mut(index) {
+        action.applied = true;
+        action.result_id = result_id;
+        action.error = None;
+    }
+}
+
+fn mark_action_error(
+    actions: &mut [HulyWorkspaceNormalizationAction],
+    index: usize,
+    error: String,
+) {
+    if let Some(action) = actions.get_mut(index) {
+        action.applied = false;
+        action.error = Some(error);
+    }
+}
+
+async fn execute_workspace_normalization(
+    client: &HulyClient,
+    snapshot: &WorkspaceNormalizationSnapshotData,
+    operations: &[WorkspaceNormalizationOperation],
+    actions: &mut [HulyWorkspaceNormalizationAction],
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let actor_account_id = match snapshot.account.uuid.clone() {
+        Some(value) if !value.is_empty() => value,
+        _ => {
+            warnings.push(
+                "Current Huly account is missing a uuid, so live mutations were skipped."
+                    .to_string(),
+            );
+            return warnings;
+        }
+    };
+    let actor_social_id = snapshot
+        .account
+        .primary_social_id
+        .clone()
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            snapshot
+                .account
+                .social_ids
+                .as_ref()
+                .and_then(|ids| ids.iter().find(|value| !value.is_empty()).cloned())
+        });
+    let actor_social_id = match actor_social_id {
+        Some(value) => value,
+        None => {
+            warnings.push(
+                "Current Huly account is missing a primary social id, so live mutations were skipped."
+                    .to_string(),
+            );
+            return warnings;
+        }
+    };
+
+    let project_template = choose_project_template(&snapshot.projects).cloned();
+    let mut target_project_ids: HashMap<ProjectTargetKey, String> = HashMap::new();
+
+    for project in &snapshot.projects {
+        if let Some(target) = canonical_project_target(&project_name(project)) {
+            target_project_ids.insert(target, project.id.clone());
+        }
+    }
+
+    for (index, operation) in operations.iter().enumerate() {
+        match operation {
+            WorkspaceNormalizationOperation::RenameProject { project_id, to, .. } => {
+                match client
+                    .update_doc(
+                        &actor_social_id,
+                        HULY_PROJECT_CLASS,
+                        CORE_SPACE_SPACE,
+                        project_id,
+                        json!({ "name": to.display_name() }),
+                        Some(false),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        target_project_ids.insert(*to, project_id.clone());
+                        mark_action_success(actions, index, Some(project_id.clone()));
+                    }
+                    Err(error) => mark_action_error(actions, index, error),
+                }
+            }
+            WorkspaceNormalizationOperation::CreateProject { target } => {
+                let template = match project_template.as_ref() {
+                    Some(template) => template,
+                    None => {
+                        mark_action_error(
+                            actions,
+                            index,
+                            "No existing Huly project was available as a creation template."
+                                .to_string(),
+                        );
+                        continue;
+                    }
+                };
+
+                let attributes =
+                    match build_project_create_attributes(template, *target, &actor_account_id) {
+                        Ok(attributes) => attributes,
+                        Err(error) => {
+                            mark_action_error(actions, index, error);
+                            continue;
+                        }
+                    };
+
+                match client
+                    .create_doc(
+                        &actor_social_id,
+                        HULY_PROJECT_CLASS,
+                        CORE_SPACE_SPACE,
+                        attributes,
+                        None,
+                    )
+                    .await
+                {
+                    Ok(result_id) => {
+                        target_project_ids.insert(*target, result_id.clone());
+                        mark_action_success(actions, index, Some(result_id));
+                    }
+                    Err(error) => mark_action_error(actions, index, error),
+                }
+            }
+            WorkspaceNormalizationOperation::CreateDepartment { name } => {
+                match client
+                    .create_doc(
+                        &actor_social_id,
+                        HULY_DEPARTMENT_CLASS,
+                        CORE_SPACE_WORKSPACE,
+                        json!({
+                            "name": name,
+                            "description": "",
+                            "parent": HR_HEAD_DEPARTMENT_ID,
+                            "members": Vec::<String>::new(),
+                            "teamLead": Value::Null,
+                            "managers": Vec::<String>::new(),
+                        }),
+                        None,
+                    )
+                    .await
+                {
+                    Ok(result_id) => mark_action_success(actions, index, Some(result_id)),
+                    Err(error) => mark_action_error(actions, index, error),
+                }
+            }
+            WorkspaceNormalizationOperation::CreateChannel {
+                name,
+                description,
+                topic,
+            } => {
+                match client
+                    .create_doc(
+                        &actor_social_id,
+                        HULY_CHANNEL_CLASS,
+                        CORE_SPACE_SPACE,
+                        json!({
+                            "name": name,
+                            "description": description,
+                            "private": false,
+                            "archived": false,
+                            "members": vec![actor_account_id.clone()],
+                            "topic": topic,
+                            "owners": vec![actor_account_id.clone()],
+                            "autoJoin": true,
+                        }),
+                        None,
+                    )
+                    .await
+                {
+                    Ok(result_id) => mark_action_success(actions, index, Some(result_id)),
+                    Err(error) => mark_action_error(actions, index, error),
+                }
+            }
+            WorkspaceNormalizationOperation::ArchiveBoard { board_id, .. } => {
+                match client
+                    .update_doc(
+                        &actor_social_id,
+                        HULY_BOARD_CLASS,
+                        CORE_SPACE_SPACE,
+                        board_id,
+                        json!({ "archived": true }),
+                        Some(false),
+                    )
+                    .await
+                {
+                    Ok(_) => mark_action_success(actions, index, Some(board_id.clone())),
+                    Err(error) => mark_action_error(actions, index, error),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if operations
+        .iter()
+        .any(|operation| matches!(operation, WorkspaceNormalizationOperation::MoveIssue { .. }))
+    {
+        match client.get_projects().await {
+            Ok(projects) => {
+                for project in projects {
+                    if let Some(target) = canonical_project_target(&project_name(&project)) {
+                        target_project_ids.insert(target, project.id.clone());
+                    }
+                }
+            }
+            Err(error) => warnings.push(format!(
+                "Could not refresh projects after project mutations: {error}"
+            )),
+        }
+    }
+
+    for (index, operation) in operations.iter().enumerate() {
+        if let WorkspaceNormalizationOperation::MoveIssue {
+            issue_id,
+            from_project_id,
+            to,
+            ..
+        } = operation
+        {
+            let Some(current_project_id) = from_project_id.as_ref() else {
+                mark_action_error(
+                    actions,
+                    index,
+                    "Issue is missing its current project reference.".to_string(),
+                );
+                continue;
+            };
+            let Some(target_project_id) = target_project_ids.get(to) else {
+                mark_action_error(
+                    actions,
+                    index,
+                    format!(
+                        "Target project `{}` does not exist after project normalization.",
+                        to.display_name()
+                    ),
+                );
+                continue;
+            };
+            if current_project_id == target_project_id {
+                mark_action_success(actions, index, Some(issue_id.clone()));
+                continue;
+            }
+
+            match client
+                .update_doc(
+                    &actor_social_id,
+                    HULY_ISSUE_CLASS,
+                    current_project_id,
+                    issue_id,
+                    json!({ "space": target_project_id }),
+                    Some(false),
+                )
+                .await
+            {
+                Ok(_) => mark_action_success(actions, index, Some(issue_id.clone())),
+                Err(error) => mark_action_error(actions, index, error),
+            }
+        }
+    }
+
+    warnings
+}
+
+pub async fn run_huly_workspace_normalization(
+    pool: &sqlx::SqlitePool,
+    dry_run: bool,
+) -> Result<HulyWorkspaceNormalizationReport, String> {
+    let client = get_huly_client(pool).await?;
+    let snapshot = load_workspace_normalization_snapshot(&client).await?;
+    let snapshot_summary = build_snapshot_summary(&snapshot);
+    let (operations, mut warnings) = build_workspace_normalization_plan(&snapshot);
+    let mut actions: Vec<HulyWorkspaceNormalizationAction> = operations
+        .iter()
+        .map(WorkspaceNormalizationOperation::to_action)
+        .collect();
+
+    if !dry_run {
+        warnings.extend(
+            execute_workspace_normalization(&client, &snapshot, &operations, &mut actions).await,
+        );
+    }
+
+    let applied_count = actions.iter().filter(|action| action.applied).count() as u32;
+    let pending_safe_count = actions
+        .iter()
+        .filter(|action| action.safe_to_apply && !action.applied)
+        .count() as u32;
+    let manual_review_count = actions
+        .iter()
+        .filter(|action| !action.safe_to_apply)
+        .count() as u32;
+
+    Ok(HulyWorkspaceNormalizationReport {
+        dry_run,
+        workspace_id: client.workspace_id().to_string(),
+        actor_email: snapshot.account.email.clone(),
+        snapshot: snapshot_summary,
+        applied_count,
+        pending_safe_count,
+        manual_review_count,
+        warnings,
+        actions,
+    })
+}
+
+#[tauri::command]
+pub async fn preview_huly_workspace_normalization(
+    db: State<'_, DbPool>,
+) -> Result<HulyWorkspaceNormalizationReport, String> {
+    run_huly_workspace_normalization(&db.0, true).await
+}
+
+#[tauri::command]
+pub async fn apply_huly_workspace_normalization(
+    db: State<'_, DbPool>,
+) -> Result<HulyWorkspaceNormalizationReport, String> {
+    run_huly_workspace_normalization(&db.0, false).await
+}
+
 /// Format a millisecond epoch timestamp to ISO date string.
 fn ms_to_date_string(ms: i64) -> Option<String> {
-    chrono::DateTime::from_timestamp_millis(ms)
-        .map(|dt| dt.format("%Y-%m-%d").to_string())
+    chrono::DateTime::from_timestamp_millis(ms).map(|dt| dt.format("%Y-%m-%d").to_string())
 }
 
 /// Format a millisecond epoch timestamp to ISO datetime string.
 fn ms_to_datetime_string(ms: i64) -> Option<String> {
-    chrono::DateTime::from_timestamp_millis(ms)
-        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S").to_string())
+    chrono::DateTime::from_timestamp_millis(ms).map(|dt| dt.format("%Y-%m-%dT%H:%M:%S").to_string())
 }
 
 // ─── Milestones ────────────────────────────────────────────────
@@ -721,7 +2363,9 @@ pub async fn get_milestones(db: State<'_, DbPool>) -> Result<Vec<MilestoneView>,
                 i.status
                     .as_ref()
                     .and_then(|v| v.as_str())
-                    .map(|s| s.contains("Done") || s.contains("Canceled") || s.contains("Cancelled"))
+                    .map(|s| {
+                        s.contains("Done") || s.contains("Canceled") || s.contains("Cancelled")
+                    })
                     .unwrap_or(false)
             })
             .count() as u32;
@@ -765,7 +2409,10 @@ pub async fn get_time_discrepancies(db: State<'_, DbPool>) -> Result<Vec<TimeDis
         .and_utc()
         .timestamp_millis();
 
-    let reports = client.get_time_reports(Some(month_start)).await.unwrap_or_default();
+    let reports = client
+        .get_time_reports(Some(month_start))
+        .await
+        .unwrap_or_default();
 
     // Group Huly hours by employee ref
     let mut huly_hours: HashMap<String, f64> = HashMap::new();
@@ -954,13 +2601,18 @@ pub async fn get_priority_distribution(
 
     // Map priority values: 0=Urgent, 1=High, 2=Medium, 3=Low
     fn priority_label(val: &serde_json::Value) -> String {
-        let num = val.as_i64().or_else(|| val.as_str().and_then(|s| s.parse().ok()));
+        let num = val
+            .as_i64()
+            .or_else(|| val.as_str().and_then(|s| s.parse().ok()));
         match num {
             Some(0) => "Urgent".to_string(),
             Some(1) => "High".to_string(),
             Some(2) => "Medium".to_string(),
             Some(3) => "Low".to_string(),
-            _ => val.as_str().map(|s| s.to_string()).unwrap_or_else(|| "Unknown".to_string()),
+            _ => val
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "Unknown".to_string()),
         }
     }
 
@@ -1003,17 +2655,97 @@ pub async fn get_priority_distribution(
         })
         .collect();
 
-    results.sort_by_key(|p| {
-        order
-            .iter()
-            .position(|&o| o == p.priority)
-            .unwrap_or(99)
-    });
+    results.sort_by_key(|p| order.iter().position(|&o| o == p.priority).unwrap_or(99));
 
     Ok(results)
 }
 
 // ─── Departments ───────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_org_chart(db: State<'_, DbPool>) -> Result<OrgChartView, String> {
+    let pool = &db.0;
+    let client = get_huly_client(pool).await?;
+
+    let (departments, persons, huly_employees) = tokio::join!(
+        client.get_departments(),
+        client.get_persons(),
+        client.get_employees(),
+    );
+
+    let departments = departments?;
+    let persons = persons?;
+    let huly_employees = huly_employees?;
+    let db_employees = queries::get_employees(pool)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+    let ignored_emails = load_ignored_clockify_emails(pool).await?;
+
+    Ok(build_org_chart_view(
+        departments,
+        persons,
+        huly_employees,
+        db_employees,
+        &ignored_emails,
+    ))
+}
+
+#[tauri::command]
+pub async fn apply_org_chart_mapping(
+    db: State<'_, DbPool>,
+    mappings: Vec<OrgDepartmentUpdateInput>,
+) -> Result<String, String> {
+    if mappings.is_empty() {
+        return Err("No department mappings were provided".to_string());
+    }
+
+    let pool = &db.0;
+    let client = get_huly_client(pool).await?;
+    let account = client.get_account_info().await?;
+    let actor_social_id = resolve_huly_actor_social_id(&account)
+        .ok_or_else(|| "Current Huly account is missing a usable social id".to_string())?;
+
+    let current_departments = client.get_departments().await?;
+    let known_department_ids: HashSet<String> = current_departments
+        .iter()
+        .map(|department| department.id.clone())
+        .collect();
+
+    let sanitized_mappings: Vec<OrgDepartmentUpdateInput> = mappings
+        .iter()
+        .map(sanitize_org_department_update)
+        .collect();
+
+    validate_unique_department_membership(&sanitized_mappings)?;
+
+    for mapping in &sanitized_mappings {
+        if !known_department_ids.contains(&mapping.department_id) {
+            return Err(format!("Unknown department id: {}", mapping.department_id));
+        }
+    }
+
+    for mapping in &sanitized_mappings {
+        client
+            .update_doc(
+                &actor_social_id,
+                HULY_DEPARTMENT_CLASS,
+                CORE_SPACE_WORKSPACE,
+                &mapping.department_id,
+                json!({
+                    "members": mapping.member_person_ids,
+                    "head": mapping.head_person_id,
+                    "teamLead": mapping.team_lead_person_id,
+                }),
+                Some(false),
+            )
+            .await?;
+    }
+
+    Ok(format!(
+        "Updated {} department mappings in Huly",
+        sanitized_mappings.len()
+    ))
+}
 
 #[tauri::command]
 pub async fn get_departments(db: State<'_, DbPool>) -> Result<Vec<DepartmentView>, String> {
@@ -1030,9 +2762,7 @@ pub async fn get_departments(db: State<'_, DbPool>) -> Result<Vec<DepartmentView
 
     let emp_map: HashMap<String, &Employee> = employees
         .iter()
-        .filter_map(|e| {
-            e.huly_person_id.as_ref().map(|pid| (pid.clone(), e))
-        })
+        .filter_map(|e| e.huly_person_id.as_ref().map(|pid| (pid.clone(), e)))
         .collect();
 
     let mut views = Vec::with_capacity(departments.len());
@@ -1124,16 +2854,17 @@ pub async fn get_leave_requests(db: State<'_, DbPool>) -> Result<Vec<LeaveView>,
             .as_ref()
             .and_then(|e| emp_map.get(e))
             .cloned()
-            .unwrap_or_else(|| req.employee.clone().unwrap_or_else(|| "Unknown".to_string()));
+            .unwrap_or_else(|| {
+                req.employee
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string())
+            });
 
         let from_str = req
             .date_from
             .and_then(ms_to_date_string)
             .unwrap_or_default();
-        let to_str = req
-            .date_to
-            .and_then(ms_to_date_string)
-            .unwrap_or_default();
+        let to_str = req.date_to.and_then(ms_to_date_string).unwrap_or_default();
 
         // Calculate days between from and to
         let days = match (req.date_from, req.date_to) {
@@ -1179,27 +2910,11 @@ pub async fn get_holidays(db: State<'_, DbPool>) -> Result<Vec<HolidayView>, Str
 #[tauri::command]
 pub async fn get_chat_activity(db: State<'_, DbPool>) -> Result<Vec<ChatActivityView>, String> {
     let pool = &db.0;
-    let client = match get_huly_client(pool).await {
-        Ok(c) => c,
-        Err(_) => return Ok(vec![]),
-    };
-
-    // Messages from last 7 days
-    let seven_days_ago = Utc::now()
-        .checked_sub_signed(chrono::Duration::days(7))
-        .unwrap_or_else(Utc::now)
-        .timestamp_millis();
-
-    let messages = client
-        .get_chat_messages(Some(seven_days_ago))
-        .await
-        .unwrap_or_default();
-
     let employees = queries::get_employees(pool)
         .await
         .map_err(|e| format!("db error: {e}"))?;
 
-    let emp_map: HashMap<String, String> = employees
+    let huly_person_to_employee: HashMap<String, String> = employees
         .iter()
         .filter_map(|e| {
             e.huly_person_id
@@ -1208,43 +2923,147 @@ pub async fn get_chat_activity(db: State<'_, DbPool>) -> Result<Vec<ChatActivity
         })
         .collect();
 
-    // Group by created_by
-    struct ChatAccum {
-        count: u32,
-        channels: std::collections::HashSet<String>,
-        last_at: Option<i64>,
+    let employee_name_by_email: HashMap<String, String> = employees
+        .iter()
+        .map(|employee| (normalize_email(&employee.email), employee.name.clone()))
+        .collect();
+
+    let mut employee_name_aliases: HashMap<String, String> = HashMap::new();
+    for employee in &employees {
+        for alias in [
+            normalize_person_key(&employee.name),
+            person_token_signature(&employee.name),
+        ] {
+            if !alias.is_empty() {
+                employee_name_aliases.insert(alias, employee.name.clone());
+            }
+        }
     }
 
-    let mut per_user: HashMap<String, ChatAccum> = HashMap::new();
-    for msg in &messages {
-        if let Some(creator) = &msg.created_by {
-            let entry = per_user.entry(creator.clone()).or_insert(ChatAccum {
-                count: 0,
-                channels: std::collections::HashSet::new(),
-                last_at: None,
-            });
-            entry.count += 1;
-            if let Some(ch) = &msg.attached_to {
-                entry.channels.insert(ch.clone());
-            }
-            if let Some(ts) = msg.created_on {
-                entry.last_at = Some(entry.last_at.map_or(ts, |prev: i64| prev.max(ts)));
+    let mut per_user: HashMap<String, ChatActivityAccum> = HashMap::new();
+
+    if let Ok(client) = get_huly_client(pool).await {
+        let seven_days_ago = Utc::now()
+            .checked_sub_signed(chrono::Duration::days(7))
+            .unwrap_or_else(Utc::now)
+            .timestamp_millis();
+
+        let messages = client
+            .get_chat_messages(Some(seven_days_ago))
+            .await
+            .unwrap_or_default();
+
+        for msg in &messages {
+            let Some(creator) = &msg.created_by else {
+                continue;
+            };
+            let Some(employee_name) = huly_person_to_employee.get(creator) else {
+                continue;
+            };
+
+            add_chat_activity(
+                &mut per_user,
+                employee_name,
+                msg.attached_to
+                    .clone()
+                    .unwrap_or_else(|| "huly:unknown-channel".to_string()),
+                msg.created_on,
+                "Huly",
+            );
+        }
+    }
+
+    if let Some(client) = get_optional_slack_client(pool).await? {
+        let channel_filters = queries::get_setting(pool, "slack_channel_filters")
+            .await
+            .map_err(|e| format!("read slack_channel_filters: {e}"))?
+            .unwrap_or_default();
+
+        let channels = filter_slack_channels(
+            client.list_channels().await.unwrap_or_default(),
+            &channel_filters,
+        );
+        let users = client.list_users().await.unwrap_or_default();
+
+        let slack_user_to_employee: HashMap<String, String> = users
+            .iter()
+            .filter(|user| !user.deleted && !user.is_bot)
+            .filter_map(|user| {
+                if let Some(email) = user
+                    .profile
+                    .as_ref()
+                    .and_then(|profile| profile.email.as_ref())
+                    .map(|email| normalize_email(email))
+                {
+                    if let Some(employee_name) = employee_name_by_email.get(&email) {
+                        return Some((user.id.clone(), employee_name.clone()));
+                    }
+                }
+
+                for display_name in slack_user_display_names(user) {
+                    for alias in [
+                        normalize_person_key(&display_name),
+                        person_token_signature(&display_name),
+                    ] {
+                        if let Some(employee_name) = employee_name_aliases.get(&alias) {
+                            return Some((user.id.clone(), employee_name.clone()));
+                        }
+                    }
+                }
+
+                None
+            })
+            .collect();
+
+        let oldest_ts = format!(
+            "{}.000000",
+            Utc::now()
+                .checked_sub_signed(chrono::Duration::days(7))
+                .unwrap_or_else(Utc::now)
+                .timestamp()
+        );
+
+        for channel in channels {
+            let channel_id = channel.id.clone();
+            let messages = client
+                .get_channel_messages_since(&channel_id, &oldest_ts)
+                .await
+                .unwrap_or_default();
+
+            for message in messages {
+                if message.bot_id.is_some() || message.subtype.as_deref() == Some("bot_message") {
+                    continue;
+                }
+
+                let Some(slack_user_id) = message.user.as_ref() else {
+                    continue;
+                };
+                let Some(employee_name) = slack_user_to_employee.get(slack_user_id) else {
+                    continue;
+                };
+
+                add_chat_activity(
+                    &mut per_user,
+                    employee_name,
+                    channel_id.clone(),
+                    slack_ts_to_millis(&message.ts),
+                    "Slack",
+                );
             }
         }
     }
 
     let mut results: Vec<ChatActivityView> = per_user
         .into_iter()
-        .map(|(creator, data)| {
-            let name = emp_map
-                .get(&creator)
-                .cloned()
-                .unwrap_or_else(|| creator.clone());
+        .map(|(employee_name, data)| {
+            let mut sources: Vec<String> = data.sources.into_iter().collect();
+            sources.sort();
             ChatActivityView {
-                employee_name: name,
+                employee_name,
                 message_count: data.count,
                 channels_active: data.channels.len() as u32,
-                last_message_at: data.last_at.and_then(ms_to_datetime_string),
+                last_message_at: data.last_at_ms.and_then(ms_to_datetime_string),
+                sources,
             }
         })
         .collect();
@@ -1293,11 +3112,7 @@ pub async fn get_board_cards(db: State<'_, DbPool>) -> Result<Vec<BoardCardView>
                 .map(|ts| ((now_ms - ts) / 86_400_000).max(0) as u32)
                 .unwrap_or(0);
 
-            let assignee_name = c
-                .assignee
-                .as_ref()
-                .and_then(|a| emp_map.get(a))
-                .cloned();
+            let assignee_name = c.assignee.as_ref().and_then(|a| emp_map.get(a)).cloned();
 
             BoardCardView {
                 id: c.id.clone(),
@@ -1382,7 +3197,11 @@ pub async fn get_meeting_load(db: State<'_, DbPool>) -> Result<Vec<MeetingLoadVi
         }
         // Also credit the creator
         if let Some(creator) = &event.created_by {
-            if event.participants.as_ref().map_or(true, |ps| !ps.contains(creator)) {
+            if event
+                .participants
+                .as_ref()
+                .map_or(true, |ps| !ps.contains(creator))
+            {
                 let entry = per_participant.entry(creator.clone()).or_insert(MeetAccum {
                     meetings: 0,
                     total_hours: 0.0,
@@ -1441,6 +3260,413 @@ pub async fn get_meeting_load(db: State<'_, DbPool>) -> Result<Vec<MeetingLoadVi
         });
     }
 
-    results.sort_by(|a, b| b.meeting_ratio.partial_cmp(&a.meeting_ratio).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.meeting_ratio
+            .partial_cmp(&a.meeting_ratio)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn test_snapshot() -> WorkspaceNormalizationSnapshotData {
+        WorkspaceNormalizationSnapshotData {
+            account: HulyAccountInfo {
+                uuid: Some("acc-1".to_string()),
+                email: Some("test@example.com".to_string()),
+                ..HulyAccountInfo::default()
+            },
+            projects: vec![
+                HulyProject {
+                    id: "project-heyza".to_string(),
+                    name: Some("HEYZA".to_string()),
+                    description: Some(String::new()),
+                    private: Some(false),
+                    members: Some(vec![]),
+                    owners: Some(vec!["acc-1".to_string()]),
+                    archived: Some(false),
+                    auto_join: Some(false),
+                    r#type: Some("tracker:project-type:default".to_string()),
+                    identifier: Some("HEYZA".to_string()),
+                    sequence: Some(0),
+                    default_issue_status: Some("tracker:status:todo".to_string()),
+                    default_assignee: None,
+                    default_time_report_day: Some(json!("PreviousWorkDay")),
+                    icon: None,
+                    color: None,
+                    class: Some(HULY_PROJECT_CLASS.to_string()),
+                },
+                HulyProject {
+                    id: "project-vibra".to_string(),
+                    name: Some("VIBRA".to_string()),
+                    description: Some(String::new()),
+                    private: Some(false),
+                    members: Some(vec![]),
+                    owners: Some(vec!["acc-1".to_string()]),
+                    archived: Some(false),
+                    auto_join: Some(false),
+                    r#type: Some("tracker:project-type:default".to_string()),
+                    identifier: Some("VIBRA".to_string()),
+                    sequence: Some(0),
+                    default_issue_status: Some("tracker:status:todo".to_string()),
+                    default_assignee: None,
+                    default_time_report_day: Some(json!("PreviousWorkDay")),
+                    icon: None,
+                    color: None,
+                    class: Some(HULY_PROJECT_CLASS.to_string()),
+                },
+                HulyProject {
+                    id: "unknown-project".to_string(),
+                    name: Some("Misc".to_string()),
+                    description: Some(String::new()),
+                    private: Some(false),
+                    members: Some(vec![]),
+                    owners: Some(vec!["acc-1".to_string()]),
+                    archived: Some(false),
+                    auto_join: Some(false),
+                    r#type: Some("tracker:project-type:default".to_string()),
+                    identifier: Some("MISC".to_string()),
+                    sequence: Some(0),
+                    default_issue_status: Some("tracker:status:todo".to_string()),
+                    default_assignee: None,
+                    default_time_report_day: Some(json!("PreviousWorkDay")),
+                    icon: None,
+                    color: None,
+                    class: Some(HULY_PROJECT_CLASS.to_string()),
+                },
+            ],
+            issues: vec![HulyIssue {
+                id: "issue-1".to_string(),
+                identifier: Some("TSK-1".to_string()),
+                title: Some("Integrate Tuya thermostat".to_string()),
+                description: Some("Need Tuya API support for the new device".to_string()),
+                status: None,
+                priority: None,
+                assignee: None,
+                created_by: None,
+                modified_by: None,
+                modified_on: None,
+                created_on: None,
+                number: Some(1),
+                space: Some("unknown-project".to_string()),
+                estimation: None,
+                remaining_time: None,
+                class: Some(HULY_ISSUE_CLASS.to_string()),
+            }],
+            departments: vec![HulyDepartment {
+                id: "dept-org".to_string(),
+                name: Some("Organization".to_string()),
+                description: Some(String::new()),
+                parent: None,
+                team_lead: None,
+                managers: Some(vec![]),
+                head: None,
+                members: Some(vec![]),
+                class: Some(HULY_DEPARTMENT_CLASS.to_string()),
+            }],
+            channels: vec![HulyChannel {
+                id: "channel-general".to_string(),
+                name: Some("general".to_string()),
+                title: None,
+                description: Some("General".to_string()),
+                topic: Some("General".to_string()),
+                private: Some(false),
+                archived: Some(false),
+                owners: Some(vec!["acc-1".to_string()]),
+                auto_join: Some(true),
+                members: Some(vec!["acc-1".to_string()]),
+                class: Some(HULY_CHANNEL_CLASS.to_string()),
+            }],
+            employees: vec![HulyEmployee {
+                id: "employee-1".to_string(),
+                name: Some("Someone".to_string()),
+                active: Some(true),
+                position: Some("Developer".to_string()),
+                person_uuid: Some("acc-1".to_string()),
+                class: Some("contact:mixin:Employee".to_string()),
+            }],
+            persons: vec![
+                HulyPerson {
+                    id: "person-akshay-1".to_string(),
+                    name: Some("Akshay Balraj".to_string()),
+                    channels: None,
+                    city: None,
+                    class: Some("contact:class:Person".to_string()),
+                },
+                HulyPerson {
+                    id: "person-akshay-2".to_string(),
+                    name: Some("Akshay Balraj".to_string()),
+                    channels: None,
+                    city: None,
+                    class: Some("contact:class:Person".to_string()),
+                },
+            ],
+            documents: vec![HulyDocument {
+                id: "doc-1".to_string(),
+                title: Some("Untitled".to_string()),
+                content: None,
+                parent: None,
+                space: None,
+                class: Some("document:class:Document".to_string()),
+            }],
+            boards: vec![HulyBoard {
+                id: "board-default".to_string(),
+                name: Some("Default".to_string()),
+                description: Some("Default board".to_string()),
+                private: Some(false),
+                archived: Some(false),
+                members: Some(vec![]),
+                owners: Some(vec!["acc-1".to_string()]),
+                r#type: Some("board:type:default".to_string()),
+                class: Some("board:class:Board".to_string()),
+            }],
+            board_cards: vec![],
+        }
+    }
+
+    #[test]
+    fn normalization_plan_captures_safe_actions_and_manual_reviews() {
+        let snapshot = test_snapshot();
+        let (operations, warnings) = build_workspace_normalization_plan(&snapshot);
+        let actions: Vec<_> = operations
+            .iter()
+            .map(WorkspaceNormalizationOperation::to_action)
+            .collect();
+
+        assert!(warnings.is_empty());
+        assert!(actions.iter().any(|action| {
+            action.kind == "rename"
+                && action.current_value.as_deref() == Some("HEYZA")
+                && action.desired_value.as_deref() == Some("Axtech")
+        }));
+        assert!(actions.iter().any(|action| {
+            action.kind == "create" && action.desired_value.as_deref() == Some("Tuya clients")
+        }));
+        assert!(actions.iter().any(|action| {
+            action.kind == "move" && action.desired_value.as_deref() == Some("Tuya clients")
+        }));
+        assert!(actions
+            .iter()
+            .any(|action| { action.category == "people" && action.kind == "manualReview" }));
+        assert!(actions
+            .iter()
+            .any(|action| { action.category == "documents" && action.kind == "manualReview" }));
+        assert!(actions
+            .iter()
+            .any(|action| { action.category == "board" && action.kind == "archive" }));
+    }
+
+    #[test]
+    fn slack_missing_scope_error_names_exact_scope() {
+        let message = humanize_slack_connection_error(
+            "Slack API rejected conversations.list: missing_scope | needed=groups:read | provided=channels:read,users:read"
+                .to_string(),
+        );
+
+        assert!(message.contains("missing scope `groups:read`"));
+        assert!(message.contains("Reinstall to Workspace"));
+        assert!(message.contains("TeamForge expects"));
+    }
+
+    #[test]
+    fn org_chart_omits_people_from_ignored_email_list() {
+        let departments = vec![HulyDepartment {
+            id: "dept-eng".to_string(),
+            name: Some("Engineering".to_string()),
+            description: Some(String::new()),
+            parent: None,
+            team_lead: Some("person-ignored".to_string()),
+            managers: Some(vec![]),
+            head: Some("person-ignored".to_string()),
+            members: Some(vec![
+                "person-ignored".to_string(),
+                "person-kept".to_string(),
+            ]),
+            class: Some(HULY_DEPARTMENT_CLASS.to_string()),
+        }];
+        let persons = vec![
+            HulyPerson {
+                id: "person-ignored".to_string(),
+                name: Some("Admin".to_string()),
+                channels: None,
+                city: None,
+                class: Some("contact:class:Person".to_string()),
+            },
+            HulyPerson {
+                id: "person-kept".to_string(),
+                name: Some("Builder".to_string()),
+                channels: None,
+                city: None,
+                class: Some("contact:class:Person".to_string()),
+            },
+        ];
+        let huly_employees = vec![
+            HulyEmployee {
+                id: "huly-ignored".to_string(),
+                name: Some("Admin".to_string()),
+                active: Some(true),
+                position: Some("Ops".to_string()),
+                person_uuid: Some("person-ignored".to_string()),
+                class: Some("contact:mixin:Employee".to_string()),
+            },
+            HulyEmployee {
+                id: "huly-kept".to_string(),
+                name: Some("Builder".to_string()),
+                active: Some(true),
+                position: Some("Engineer".to_string()),
+                person_uuid: Some("person-kept".to_string()),
+                class: Some("contact:mixin:Employee".to_string()),
+            },
+        ];
+        let db_employees = vec![
+            Employee {
+                id: "db-ignored".to_string(),
+                clockify_user_id: "clockify-ignored".to_string(),
+                huly_person_id: Some("person-ignored".to_string()),
+                name: "Admin".to_string(),
+                email: "thoughtseedlabs@gmail.com".to_string(),
+                avatar_url: None,
+                monthly_quota_hours: 0.0,
+                is_active: false,
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                updated_at: "2026-01-01T00:00:00Z".to_string(),
+            },
+            Employee {
+                id: "db-kept".to_string(),
+                clockify_user_id: "clockify-kept".to_string(),
+                huly_person_id: Some("person-kept".to_string()),
+                name: "Builder".to_string(),
+                email: "builder@thoughtseedlabs.com".to_string(),
+                avatar_url: None,
+                monthly_quota_hours: 160.0,
+                is_active: true,
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                updated_at: "2026-01-01T00:00:00Z".to_string(),
+            },
+        ];
+        let ignored_emails = HashSet::from([DEFAULT_CLOCKIFY_IGNORED_EMAILS.to_string()]);
+
+        let org_chart = build_org_chart_view(
+            departments,
+            persons,
+            huly_employees,
+            db_employees,
+            &ignored_emails,
+        );
+
+        assert_eq!(org_chart.people.len(), 1);
+        assert_eq!(org_chart.people[0].person_id, "person-kept");
+        assert_eq!(org_chart.departments.len(), 1);
+        assert_eq!(org_chart.departments[0].head_person_id, None);
+        assert_eq!(org_chart.departments[0].team_lead_person_id, None);
+        assert_eq!(
+            org_chart.departments[0].member_person_ids,
+            vec!["person-kept".to_string()]
+        );
+    }
+
+    fn live_app_data_dir() -> Result<PathBuf, String> {
+        let home = std::env::var("HOME").map_err(|e| format!("HOME not set: {e}"))?;
+        Ok(PathBuf::from(home).join("Library/Application Support/com.thoughtseed.teamforge"))
+    }
+
+    async fn open_live_pool() -> Result<sqlx::SqlitePool, String> {
+        let app_data_dir = live_app_data_dir()?;
+        queries::init_db(&app_data_dir)
+            .await
+            .map_err(|e| format!("init live db: {e}"))
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn inspect_live_huly_org_state() {
+        let pool = open_live_pool().await.expect("live pool");
+        let client = get_huly_client(&pool).await.expect("huly client");
+
+        let (account, employees, persons, departments, boards, board_cards) = tokio::join!(
+            client.get_account_info(),
+            client.get_employees(),
+            client.get_persons(),
+            client.get_departments(),
+            client.get_boards(),
+            client.get_board_cards(),
+        );
+
+        let account = account.expect("account");
+        let employees = employees.expect("employees");
+        let persons = persons.expect("persons");
+        let departments = departments.expect("departments");
+        let boards = boards.expect("boards");
+        let board_cards = board_cards.expect("board cards");
+
+        let board_card_counts: HashMap<String, usize> = board_cards
+            .iter()
+            .filter_map(|card| card.space.as_ref().map(|space| space.clone()))
+            .fold(HashMap::new(), |mut acc, board_id| {
+                *acc.entry(board_id).or_default() += 1;
+                acc
+            });
+
+        let summary = json!({
+            "account": account,
+            "employees": employees.iter().map(|employee| json!({
+                "id": employee.id,
+                "name": employee.name,
+                "active": employee.active,
+                "position": employee.position,
+                "personUuid": employee.person_uuid,
+            })).collect::<Vec<_>>(),
+            "persons": persons.iter().map(|person| json!({
+                "id": person.id,
+                "name": person.name,
+            })).collect::<Vec<_>>(),
+            "departments": departments.iter().map(|department| json!({
+                "id": department.id,
+                "name": department.name,
+                "parent": department.parent,
+                "teamLead": department.team_lead,
+                "head": department.head,
+                "managers": department.managers,
+                "members": department.members,
+            })).collect::<Vec<_>>(),
+            "boards": boards.iter().map(|board| json!({
+                "id": board.id,
+                "name": board.name,
+                "archived": board.archived,
+                "type": board.r#type,
+                "owners": board.owners,
+                "members": board.members,
+                "cardCount": board_card_counts.get(&board.id).copied().unwrap_or_default(),
+            })).collect::<Vec<_>>(),
+        });
+
+        println!("{}", serde_json::to_string_pretty(&summary).unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn preview_live_huly_workspace_normalization() {
+        let pool = open_live_pool().await.expect("live pool");
+        let report = run_huly_workspace_normalization(&pool, true)
+            .await
+            .expect("preview normalization");
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        assert!(!report.actions.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn apply_live_huly_workspace_normalization() {
+        let pool = open_live_pool().await.expect("live pool");
+        let report = run_huly_workspace_normalization(&pool, false)
+            .await
+            .expect("apply normalization");
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+        assert!(!report.actions.is_empty());
+    }
 }

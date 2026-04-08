@@ -129,6 +129,23 @@ function Comms() {
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <Avatar name={c.employeeName} size={24} />
                         <span style={{ color: "var(--lcars-orange)" }}>{c.employeeName}</span>
+                        {c.sources.map((source) => (
+                          <span
+                            key={`${c.employeeName}-${source}`}
+                            style={{
+                              fontFamily: "'Orbitron', sans-serif",
+                              fontSize: 8,
+                              fontWeight: 600,
+                              color: "var(--lcars-lavender)",
+                              border: "1px solid rgba(153, 153, 204, 0.4)",
+                              padding: "1px 6px",
+                              borderRadius: 2,
+                              letterSpacing: "1px",
+                            }}
+                          >
+                            {source.toUpperCase()}
+                          </span>
+                        ))}
                         {isMostActive && maxMessages > 0 && (
                           <span
                             style={{

@@ -51,9 +51,10 @@ impl HulySyncEngine {
             // Each issue that was modified counts as an activity record.
             // Map modified_by to an employee if possible.
             let employee_id = match &issue.modified_by {
-                Some(person_ref) => {
-                    self.resolve_employee_id(person_ref).await.unwrap_or_default()
-                }
+                Some(person_ref) => self
+                    .resolve_employee_id(person_ref)
+                    .await
+                    .unwrap_or_default(),
                 None => String::new(),
             };
 
@@ -79,10 +80,7 @@ impl HulySyncEngine {
                 issue_title: issue.title.clone(),
                 action: "modified".to_string(),
                 old_status: None,
-                new_status: issue
-                    .status
-                    .as_ref()
-                    .map(|v| v.to_string()),
+                new_status: issue.status.as_ref().map(|v| v.to_string()),
                 occurred_at,
                 synced_at: Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
             };
@@ -147,7 +145,9 @@ impl HulySyncEngine {
                 .await;
 
                 if let Err(e) = res {
-                    eprintln!("[huly-sync] warning: failed to update presence for {employee_id}: {e}");
+                    eprintln!(
+                        "[huly-sync] warning: failed to update presence for {employee_id}: {e}"
+                    );
                 } else {
                     updated += 1;
                 }
@@ -171,13 +171,12 @@ impl HulySyncEngine {
     /// Look up the local employee ID for a given Huly person reference.
     async fn resolve_employee_id(&self, huly_person_ref: &str) -> Option<String> {
         // huly_person_id in the employees table stores the Huly person/member ID
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT id FROM employees WHERE huly_person_id = ?1 LIMIT 1",
-        )
-        .bind(huly_person_ref)
-        .fetch_optional(&self.pool)
-        .await
-        .ok()?;
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT id FROM employees WHERE huly_person_id = ?1 LIMIT 1")
+                .bind(huly_person_ref)
+                .fetch_optional(&self.pool)
+                .await
+                .ok()?;
 
         row.map(|r| r.0)
     }

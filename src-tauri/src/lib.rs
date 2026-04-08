@@ -2,14 +2,15 @@ mod clockify;
 mod commands;
 mod db;
 mod huly;
+mod slack;
 mod sync;
 
 use std::sync::{Arc, Mutex};
 
 use sqlx::SqlitePool;
-use tauri::{Emitter, Manager};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
+use tauri::{Emitter, Manager};
 
 use crate::clockify::client::ClockifyClient;
 use crate::clockify::sync::ClockifySyncEngine;
@@ -43,36 +44,37 @@ pub fn run() {
             app.manage(SchedulerState(Mutex::new(None)));
 
             // ── System tray icon ──────────────────────────────────
-            let tray_menu = Menu::with_items(app, &[
-                &MenuItem::with_id(app, "show", "Show TeamForge", true, None::<&str>)?,
-                &MenuItem::with_id(app, "live", "Live Crew Check", true, None::<&str>)?,
-                &MenuItem::with_id(app, "timeline", "Weekly Timeline", true, None::<&str>)?,
-                &MenuItem::with_id(app, "sync", "Sync Now", true, None::<&str>)?,
-                &MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
-            ])?;
+            let tray_menu = Menu::with_items(
+                app,
+                &[
+                    &MenuItem::with_id(app, "show", "Show TeamForge", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "live", "Live Crew Check", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "timeline", "Weekly Timeline", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "sync", "Sync Now", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
+                ],
+            )?;
 
             let _tray = TrayIconBuilder::with_id("teamforge-tray")
                 .menu(&tray_menu)
                 .tooltip("TeamForge")
                 .icon(app.default_window_icon().unwrap().clone())
-                .on_menu_event(move |app, event| {
-                    match event.id().as_ref() {
-                        "show" => focus_main_window(app),
-                        "live" => open_main_route(app, "/live"),
-                        "timeline" => open_main_route(app, "/activity"),
-                        "sync" => {
-                            let app_handle = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                if let Err(error) = run_tray_sync(app_handle).await {
-                                    eprintln!("[teamforge] tray sync failed: {error}");
-                                }
-                            });
-                        }
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        _ => {}
+                .on_menu_event(move |app, event| match event.id().as_ref() {
+                    "show" => focus_main_window(app),
+                    "live" => open_main_route(app, "/live"),
+                    "timeline" => open_main_route(app, "/activity"),
+                    "sync" => {
+                        let app_handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(error) = run_tray_sync(app_handle).await {
+                                eprintln!("[teamforge] tray sync failed: {error}");
+                            }
+                        });
                     }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
                 })
                 .build(app)?;
 
@@ -109,12 +111,17 @@ pub fn run() {
             commands::get_sync_status,
             commands::start_background_sync,
             commands::test_huly_connection,
+            commands::test_slack_connection,
             commands::trigger_huly_sync,
+            commands::preview_huly_workspace_normalization,
+            commands::apply_huly_workspace_normalization,
             commands::get_milestones,
             commands::get_time_discrepancies,
             commands::get_estimation_accuracy,
             commands::get_priority_distribution,
             commands::get_departments,
+            commands::get_org_chart,
+            commands::apply_org_chart_mapping,
             commands::get_leave_requests,
             commands::get_holidays,
             commands::get_chat_activity,

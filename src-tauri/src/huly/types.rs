@@ -43,9 +43,11 @@ impl AccountsResponse {
             return Some(info);
         }
         match (self.endpoint, self.token, self.workspace) {
-            (Some(endpoint), Some(token), Some(workspace)) => {
-                Some(WorkspaceLoginInfo { endpoint, token, workspace })
-            }
+            (Some(endpoint), Some(token), Some(workspace)) => Some(WorkspaceLoginInfo {
+                endpoint,
+                token,
+                workspace,
+            }),
             _ => None,
         }
     }
@@ -95,6 +97,54 @@ pub struct HulyMember {
     #[serde(rename = "_id")]
     pub id: String,
     pub role: Option<String>,
+    #[serde(rename = "_class")]
+    pub class: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HulyAccountInfo {
+    pub uuid: Option<String>,
+    pub email: Option<String>,
+    pub role: Option<String>,
+    pub primary_social_id: Option<String>,
+    pub social_ids: Option<Vec<String>>,
+    pub workspace: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HulyEmployee {
+    #[serde(rename = "_id")]
+    pub id: String,
+    pub name: Option<String>,
+    pub active: Option<bool>,
+    pub position: Option<String>,
+    pub person_uuid: Option<String>,
+    #[serde(rename = "_class")]
+    pub class: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HulyProject {
+    #[serde(rename = "_id")]
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub private: Option<bool>,
+    pub members: Option<Vec<String>>,
+    pub owners: Option<Vec<String>>,
+    pub archived: Option<bool>,
+    pub auto_join: Option<bool>,
+    pub r#type: Option<String>,
+    pub identifier: Option<String>,
+    pub sequence: Option<i64>,
+    pub default_issue_status: Option<String>,
+    pub default_assignee: Option<String>,
+    pub default_time_report_day: Option<serde_json::Value>,
+    pub icon: Option<String>,
+    pub color: Option<serde_json::Value>,
     #[serde(rename = "_class")]
     pub class: Option<String>,
 }
@@ -152,6 +202,9 @@ pub struct HulyDepartment {
     pub id: String,
     pub name: Option<String>,
     pub description: Option<String>,
+    pub parent: Option<String>,
+    pub team_lead: Option<String>,
+    pub managers: Option<Vec<String>>,
     pub head: Option<String>,
     pub members: Option<Vec<String>>,
     #[serde(rename = "_class")]
@@ -197,9 +250,48 @@ pub struct HulyHoliday {
 pub struct HulyChannel {
     #[serde(rename = "_id")]
     pub id: String,
+    pub name: Option<String>,
     pub title: Option<String>,
     pub description: Option<String>,
+    pub topic: Option<String>,
+    pub private: Option<bool>,
+    pub archived: Option<bool>,
+    pub owners: Option<Vec<String>>,
+    pub auto_join: Option<bool>,
     pub members: Option<Vec<String>>,
+    #[serde(rename = "_class")]
+    pub class: Option<String>,
+}
+
+// ─── Documents ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HulyDocument {
+    #[serde(rename = "_id")]
+    pub id: String,
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub parent: Option<String>,
+    pub space: Option<String>,
+    #[serde(rename = "_class")]
+    pub class: Option<String>,
+}
+
+// ─── Boards ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HulyBoard {
+    #[serde(rename = "_id")]
+    pub id: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub private: Option<bool>,
+    pub archived: Option<bool>,
+    pub members: Option<Vec<String>>,
+    pub owners: Option<Vec<String>>,
+    pub r#type: Option<String>,
     #[serde(rename = "_class")]
     pub class: Option<String>,
 }
@@ -262,4 +354,49 @@ pub struct HulyCalendarEvent {
 pub struct HulySyncReport {
     pub issues_synced: u32,
     pub presence_updated: u32,
+}
+
+// ─── Workspace normalization ──────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HulyWorkspaceNormalizationSnapshot {
+    pub project_count: u32,
+    pub issue_count: u32,
+    pub department_count: u32,
+    pub channel_count: u32,
+    pub employee_count: u32,
+    pub duplicate_people_count: u32,
+    pub untitled_document_count: u32,
+    pub board_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HulyWorkspaceNormalizationAction {
+    pub category: String,
+    pub kind: String,
+    pub target: String,
+    pub reason: String,
+    pub safe_to_apply: bool,
+    pub applied: bool,
+    pub current_value: Option<String>,
+    pub desired_value: Option<String>,
+    pub object_id: Option<String>,
+    pub result_id: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HulyWorkspaceNormalizationReport {
+    pub dry_run: bool,
+    pub workspace_id: String,
+    pub actor_email: Option<String>,
+    pub snapshot: HulyWorkspaceNormalizationSnapshot,
+    pub applied_count: u32,
+    pub pending_safe_count: u32,
+    pub manual_review_count: u32,
+    pub warnings: Vec<String>,
+    pub actions: Vec<HulyWorkspaceNormalizationAction>,
 }

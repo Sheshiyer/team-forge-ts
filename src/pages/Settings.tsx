@@ -4,6 +4,14 @@ import { timeAgo } from "../lib/format";
 import type { ClockifyWorkspace, Employee, SyncState } from "../lib/types";
 
 const DEFAULT_IGNORED_EMAILS = "thoughtseedlabs@gmail.com";
+const SLACK_REQUIRED_SCOPES = [
+  "channels:read",
+  "channels:history",
+  "groups:read",
+  "groups:history",
+  "users:read",
+  "users:read.email",
+];
 
 function normalizeIgnoredEmails(value: string): string {
   const normalized = value
@@ -12,6 +20,14 @@ function normalizeIgnoredEmails(value: string): string {
     .filter(Boolean);
 
   return normalized.length > 0 ? normalized.join(", ") : DEFAULT_IGNORED_EMAILS;
+}
+
+function normalizeSlackChannelFilters(value: string): string {
+  return value
+    .split(/[\n,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .join(", ");
 }
 
 function Settings() {
@@ -33,12 +49,34 @@ function Settings() {
   const [hulySyncing, setHulySyncing] = useState(false);
   const [hulySyncResult, setHulySyncResult] = useState<string | null>(null);
 
+  const [slackBotToken, setSlackBotToken] = useState("");
+  const [showSlackBotToken, setShowSlackBotToken] = useState(false);
+  const [slackChannelFilters, setSlackChannelFilters] = useState("");
+  const [slackStatus, setSlackStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
+  const [slackMessage, setSlackMessage] = useState<string | null>(null);
+
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [syncStates, setSyncStates] = useState<SyncState[]>([]);
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [editingQuotas, setEditingQuotas] = useState<Record<string, string>>({});
+
+  const trimmedSlackToken = slackBotToken.trim();
+  const normalizedSlackFilters = normalizeSlackChannelFilters(slackChannelFilters);
+  const slackFilterCount = normalizedSlackFilters
+    ? normalizedSlackFilters.split(", ").filter(Boolean).length
+    : 0;
+  const slackSetupStatus = !trimmedSlackToken
+    ? "NOT CONFIGURED"
+    : trimmedSlackToken.startsWith("xoxb-")
+      ? "BOT TOKEN READY"
+      : trimmedSlackToken.startsWith("xoxp-")
+        ? "WRONG TOKEN TYPE"
+        : "CHECK TOKEN FORMAT";
+  const slackChannelMode = slackFilterCount > 0
+    ? `${slackFilterCount} FILTER${slackFilterCount === 1 ? "" : "S"}`
+    : "ALL ACCESSIBLE CHANNELS";
 
   const loadSettings = useCallback(async () => {
     try {
@@ -47,6 +85,8 @@ function Settings() {
       if (settings.clockify_workspace_id) setSelectedWorkspace(settings.clockify_workspace_id);
       setIgnoredEmails(settings.clockify_ignored_emails || DEFAULT_IGNORED_EMAILS);
       if (settings.huly_token) setHulyToken(settings.huly_token);
+      if (settings.slack_bot_token) setSlackBotToken(settings.slack_bot_token);
+      setSlackChannelFilters(settings.slack_channel_filters || "");
     } catch { /* Settings may not exist yet */ }
   }, []);
 
@@ -150,6 +190,61 @@ function Settings() {
       await loadEmployees();
       setEditingQuotas((prev) => { const next = { ...prev }; delete next[employeeId]; return next; });
     } catch { /* ignore */ }
+  };
+
+  const handleTestSlack = async () => {
+    if (!trimmedSlackToken) return;
+    if (!trimmedSlackToken.startsWith("xoxb-")) {
+      setSlackStatus("error");
+      setSlackMessage(
+        trimmedSlackToken.startsWith("xoxp-")
+          ? "Use the Slack Bot User OAuth Token (xoxb-...), not the User OAuth Token (xoxp-...)."
+          : "Paste the Slack Bot User OAuth Token (xoxb-...) from Slack > Settings > Install App."
+      );
+      return;
+    }
+
+    setSlackStatus("testing");
+    setSlackMessage(null);
+    try {
+      const msg = await api.testSlackConnection(trimmedSlackToken);
+      setSlackStatus("success");
+      setSlackMessage(msg);
+    } catch (err) {
+      setSlackStatus("error");
+      setSlackMessage(String(err));
+    }
+  };
+
+  const handleSaveSlack = async () => {
+    if (!trimmedSlackToken) {
+      setSlackStatus("error");
+      setSlackMessage("Paste the Slack Bot User OAuth Token (xoxb-...) before saving.");
+      return;
+    }
+
+    if (!trimmedSlackToken.startsWith("xoxb-")) {
+      setSlackStatus("error");
+      setSlackMessage(
+        trimmedSlackToken.startsWith("xoxp-")
+          ? "Use the Slack Bot User OAuth Token (xoxb-...), not the User OAuth Token (xoxp-...)."
+          : "Paste the Slack Bot User OAuth Token (xoxb-...) from Slack > Settings > Install App."
+      );
+      return;
+    }
+
+    try {
+      await api.saveSetting("slack_bot_token", trimmedSlackToken);
+      await api.saveSetting("slack_channel_filters", normalizedSlackFilters);
+      setSlackBotToken(trimmedSlackToken);
+      setSlackChannelFilters(normalizedSlackFilters);
+      setSlackStatus("success");
+      setSlackMessage("Slack settings saved");
+      setTimeout(() => { if (slackStatus !== "error") setSlackMessage(null); }, 3000);
+    } catch (err) {
+      setSlackStatus("error");
+      setSlackMessage(`Error: ${err}`);
+    }
   };
 
   return (
@@ -276,6 +371,101 @@ function Settings() {
           {hulySyncResult && (
             <span style={{ ...styles.label, color: hulySyncResult.startsWith("Error") ? "var(--lcars-red)" : "var(--lcars-green)" }}>
               {hulySyncResult.toUpperCase()}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Slack Connection */}
+      <div style={styles.card}>
+        <h2 style={styles.sectionTitle}>SLACK CONNECTION</h2>
+        <div style={styles.sectionDivider} />
+
+        <div style={styles.summaryGrid}>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>STATUS</span>
+            <span
+              style={{
+                ...styles.summaryValue,
+                color: slackSetupStatus === "WRONG TOKEN TYPE"
+                  ? "var(--lcars-red)"
+                  : slackSetupStatus === "BOT TOKEN READY"
+                    ? "var(--lcars-green)"
+                    : "var(--lcars-orange)",
+              }}
+            >
+              {slackSetupStatus}
+            </span>
+          </div>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>TOKEN SOURCE</span>
+            <span style={styles.summaryValue}>INSTALL APP</span>
+          </div>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>CHANNEL MODE</span>
+            <span style={styles.summaryValue}>{slackChannelMode}</span>
+          </div>
+        </div>
+
+        <div style={styles.field}>
+          <label style={styles.label}>BOT USER OAUTH TOKEN</label>
+          <div style={styles.inputRow}>
+            <input
+              type={showSlackBotToken ? "text" : "password"}
+              value={slackBotToken}
+              onChange={(e) => setSlackBotToken(e.target.value)}
+              placeholder="PASTE THE xoxb-... BOT USER OAUTH TOKEN"
+              style={{ ...styles.input, flex: 1 }}
+            />
+            <button onClick={() => setShowSlackBotToken(!showSlackBotToken)} style={styles.ghostButton}>
+              {showSlackBotToken ? "HIDE" : "SHOW"}
+            </button>
+            <button
+              onClick={handleTestSlack}
+              disabled={slackStatus === "testing" || !trimmedSlackToken}
+              style={{ ...styles.ghostButton, opacity: slackStatus === "testing" || !trimmedSlackToken ? 0.5 : 1 }}
+            >
+              {slackStatus === "testing" ? "TESTING..." : "TEST CONNECTION"}
+            </button>
+          </div>
+          {slackStatus === "success" && slackMessage && (
+            <div style={styles.successText}>{slackMessage.toUpperCase()}</div>
+          )}
+          {slackStatus === "error" && slackMessage && (
+            <div style={styles.errorText}>{slackMessage}</div>
+          )}
+          <div style={styles.helperText}>
+            USE THE <strong>BOT USER OAUTH TOKEN</strong> FROM SLACK &gt; SETTINGS &gt; INSTALL APP.
+            DO NOT PASTE THE USER TOKEN (`xoxp-...`) FROM THE SAME SCREEN.
+          </div>
+          <div style={styles.warningBox}>
+            <div style={styles.warningTitle}>REINSTALL AFTER SCOPE CHANGES</div>
+            <div style={styles.warningBody}>
+              IF SLACK SHOWS A YELLOW BANNER ABOUT UPDATED PERMISSIONS, CLICK
+              <strong> REINSTALL TO WORKSPACE </strong>
+              BEFORE TESTING HERE. REQUIRED SCOPES: {SLACK_REQUIRED_SCOPES.join(", ")}.
+            </div>
+          </div>
+        </div>
+
+        <div style={styles.field}>
+          <label style={styles.label}>CHANNEL FILTERS</label>
+          <textarea
+            value={slackChannelFilters}
+            onChange={(e) => setSlackChannelFilters(e.target.value)}
+            placeholder="OPTIONAL: CHANNEL IDS OR NAMES, COMMA OR NEWLINE SEPARATED"
+            style={{ ...styles.input, minHeight: 72, resize: "vertical" }}
+          />
+          <div style={styles.helperText}>
+            LEAVE BLANK TO READ ALL ACCESSIBLE PUBLIC / PRIVATE CHANNELS THE BOT CAN SEE.
+          </div>
+        </div>
+
+        <div style={styles.buttonRow}>
+          <button onClick={handleSaveSlack} style={styles.primaryButton}>SAVE</button>
+          {slackMessage && (
+            <span style={{ ...styles.label, color: slackMessage.startsWith("Error") ? "var(--lcars-red)" : "var(--lcars-green)" }}>
+              {slackMessage.toUpperCase()}
             </span>
           )}
         </div>
@@ -509,6 +699,55 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 10,
     color: "var(--text-quaternary)",
     letterSpacing: "1px",
+    lineHeight: 1.6,
+  },
+  summaryGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+    gap: 12,
+    marginBottom: 16,
+  },
+  summaryItem: {
+    background: "rgba(10, 10, 26, 0.55)",
+    border: "1px solid rgba(153, 153, 204, 0.14)",
+    padding: "10px 12px",
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 6,
+  },
+  summaryLabel: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    color: "var(--text-quaternary)",
+    letterSpacing: "1.5px",
+    textTransform: "uppercase" as const,
+  },
+  summaryValue: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 11,
+    color: "var(--lcars-orange)",
+    letterSpacing: "1.25px",
+    textTransform: "uppercase" as const,
+  },
+  warningBox: {
+    marginTop: 12,
+    padding: "12px 14px",
+    border: "1px solid rgba(255, 204, 0, 0.25)",
+    background: "rgba(255, 204, 0, 0.06)",
+  },
+  warningTitle: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    color: "var(--lcars-orange)",
+    letterSpacing: "1.5px",
+    textTransform: "uppercase" as const,
+    marginBottom: 6,
+  },
+  warningBody: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    color: "var(--lcars-tan)",
+    letterSpacing: "0.75px",
     lineHeight: 1.6,
   },
   table: {
