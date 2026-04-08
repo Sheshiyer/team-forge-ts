@@ -10,15 +10,33 @@ Ship the current TeamForge changes as a new release build:
 ## Plan
 
 - [x] Inspect git state, branch, version files, and release workflow triggers
-- [ ] Bump version metadata consistently to `0.1.5`
-- [ ] Re-run verification after the version bump
-- [ ] Commit and push `main`
-- [ ] Create and push tag `v0.1.5` to trigger the DMG workflow
-- [ ] Confirm the GitHub Actions release workflow was triggered
+- [x] Bump version metadata consistently to `0.1.5`
+- [x] Re-run verification after the version bump
+- [x] Commit and push `main`
+- [x] Create and push tag `v0.1.5` to trigger the DMG workflow
+- [x] Confirm the GitHub Actions release workflow was triggered
 
 ## Review
 
-- Pending
+- Initial tag `v0.1.4` triggered the release workflow, but it failed in `Setup pnpm` because `.github/workflows/release.yml` pinned `pnpm/action-setup` to `version: 10` while the repo declares `packageManager: "pnpm@10.33.0"`.
+- Fixed the workflow by aligning `pnpm/action-setup` to `10.33.0`, then cut a follow-up release version `0.1.5` instead of rewriting the already-pushed failed `v0.1.4` tag.
+- Release metadata now points to `0.1.5` in:
+  - `package.json`
+  - `sidecar/package.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/tauri.conf.json`
+  - `src-tauri/Cargo.lock`
+- Verification after the CI fix/version bump:
+  - `pnpm build` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+- Git history / release refs:
+  - `e6618b3` pushed to `main` as `release: ship TeamForge 0.1.4`
+  - `e1bd1be` pushed to `main` as `fix(ci): cut TeamForge 0.1.5 release`
+  - tag `v0.1.4` pushed and failed in CI
+  - tag `v0.1.5` pushed and triggered the fixed release workflow
+- Current GitHub Actions status:
+  - Run `24125002100` is in progress at `https://github.com/Sheshiyer/team-forge-ts/actions/runs/24125002100`
+  - The run has already passed `Setup pnpm`, `Setup Rust`, and dependency installation, and is currently in `Build Tauri app (Apple Silicon)`
 
 ---
 
