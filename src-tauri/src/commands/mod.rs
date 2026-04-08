@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{Datelike, Local, NaiveDate, Utc, Weekday};
 use serde_json::{json, Value};
@@ -14,8 +15,9 @@ use crate::huly::client::HulyClient;
 use crate::huly::sync::HulySyncEngine;
 use crate::huly::types::{
     HulyAccountInfo, HulyBoard, HulyBoardCard, HulyChannel, HulyDepartment, HulyDocument,
-    HulyEmployee, HulyIssue, HulyPerson, HulyProject, HulyWorkspaceNormalizationAction,
-    HulyWorkspaceNormalizationReport, HulyWorkspaceNormalizationSnapshot,
+    HulyEmployee, HulyHoliday, HulyIssue, HulyLeaveRequest, HulyPerson, HulyProject,
+    HulyWorkspaceNormalizationAction, HulyWorkspaceNormalizationReport,
+    HulyWorkspaceNormalizationSnapshot,
 };
 use crate::slack::client::SlackClient;
 use crate::slack::types::{SlackConversation, SlackUser};
@@ -50,6 +52,15 @@ fn normalize_ignored_email_value(value: &str) -> String {
         .into_iter()
         .map(|item| normalize_email(&item))
         .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn normalize_multi_id_value(value: &str) -> String {
+    let mut seen = HashSet::new();
+    parse_multi_value_setting(value)
+        .into_iter()
+        .filter(|item| seen.insert(item.clone()))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -163,14 +174,39 @@ async fn load_ignored_clockify_emails(pool: &sqlx::SqlitePool) -> Result<HashSet
         .collect())
 }
 
+async fn load_ignored_clockify_employee_ids(
+    pool: &sqlx::SqlitePool,
+) -> Result<HashSet<String>, String> {
+    let raw = queries::get_setting(pool, "clockify_ignored_employee_ids")
+        .await
+        .map_err(|e| format!("read ignored Clockify employees: {e}"))?;
+
+    Ok(raw
+        .map(|value| parse_multi_value_setting(&value))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|item| !item.is_empty())
+        .collect())
+}
+
+fn employee_is_ignored(
+    employee: &Employee,
+    ignored_emails: &HashSet<String>,
+    ignored_employee_ids: &HashSet<String>,
+) -> bool {
+    ignored_employee_ids.contains(&employee.id)
+        || ignored_emails.contains(&normalize_email(&employee.email))
+}
+
 async fn apply_clockify_ignore_rules(pool: &sqlx::SqlitePool) -> Result<(), String> {
     let ignored = load_ignored_clockify_emails(pool).await?;
+    let ignored_employee_ids = load_ignored_clockify_employee_ids(pool).await?;
     let employees = queries::get_employees(pool)
         .await
         .map_err(|e| format!("load employees for ignore rules: {e}"))?;
 
     for employee in employees {
-        let should_ignore = ignored.contains(&normalize_email(&employee.email));
+        let should_ignore = employee_is_ignored(&employee, &ignored, &ignored_employee_ids);
         queries::set_employee_active(pool, &employee.id, !should_ignore)
             .await
             .map_err(|e| format!("update employee ignore state: {e}"))?;
@@ -330,6 +366,8 @@ pub async fn save_setting(db: State<'_, DbPool>, key: String, value: String) -> 
         } else {
             normalized
         }
+    } else if key == "clockify_ignored_employee_ids" {
+        normalize_multi_id_value(&value)
     } else {
         value
     };
@@ -338,7 +376,7 @@ pub async fn save_setting(db: State<'_, DbPool>, key: String, value: String) -> 
         .await
         .map_err(|e| format!("db error: {e}"))?;
 
-    if key == "clockify_ignored_emails" {
+    if key == "clockify_ignored_emails" || key == "clockify_ignored_employee_ids" {
         apply_clockify_ignore_rules(pool).await?;
     }
 
@@ -842,8 +880,8 @@ pub async fn trigger_huly_sync(db: State<'_, DbPool>) -> Result<String, String> 
     let report = engine.full_sync().await?;
 
     Ok(format!(
-        "Huly sync complete: {} issue activities, {} presence updates",
-        report.issues_synced, report.presence_updated
+        "Huly sync complete: {} issue activities, {} presence updates, {} cached Team records",
+        report.issues_synced, report.presence_updated, report.team_cache_items
     ))
 }
 
@@ -990,10 +1028,14 @@ fn validate_unique_department_membership(
 fn ignored_org_person_ids(
     db_employees: &[Employee],
     ignored_emails: &HashSet<String>,
+    ignored_employee_ids: &HashSet<String>,
 ) -> HashSet<String> {
     db_employees
         .iter()
-        .filter(|employee| ignored_emails.contains(&normalize_email(&employee.email)))
+        .filter(|employee| {
+            !employee.is_active
+                || employee_is_ignored(employee, ignored_emails, ignored_employee_ids)
+        })
         .filter_map(|employee| employee.huly_person_id.clone())
         .collect()
 }
@@ -1004,12 +1046,17 @@ fn build_org_chart_view(
     huly_employees: Vec<HulyEmployee>,
     db_employees: Vec<Employee>,
     ignored_emails: &HashSet<String>,
+    ignored_employee_ids: &HashSet<String>,
 ) -> OrgChartView {
-    let ignored_person_ids = ignored_org_person_ids(&db_employees, ignored_emails);
+    let ignored_person_ids =
+        ignored_org_person_ids(&db_employees, ignored_emails, ignored_employee_ids);
 
     let db_employee_by_person: HashMap<String, &Employee> = db_employees
         .iter()
-        .filter(|employee| !ignored_emails.contains(&normalize_email(&employee.email)))
+        .filter(|employee| {
+            employee.is_active
+                && !employee_is_ignored(employee, ignored_emails, ignored_employee_ids)
+        })
         .filter_map(|employee| {
             employee
                 .huly_person_id
@@ -2335,6 +2382,82 @@ fn ms_to_datetime_string(ms: i64) -> Option<String> {
     chrono::DateTime::from_timestamp_millis(ms).map(|dt| dt.format("%Y-%m-%dT%H:%M:%S").to_string())
 }
 
+fn normalize_optional_text(value: Option<String>) -> Option<String> {
+    value.and_then(|item| {
+        let trimmed = item.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn sanitize_required_text(label: &str, value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        Err(format!("{label} is required"))
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+
+fn sanitize_iso_date(label: &str, value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
+        .map_err(|_| format!("{label} must use YYYY-MM-DD"))?;
+    Ok(trimmed.to_string())
+}
+
+fn validate_manual_leave_date_order(date_from: &str, date_to: &str) -> Result<(), String> {
+    let from = NaiveDate::parse_from_str(date_from, "%Y-%m-%d")
+        .map_err(|_| "Leave start date must use YYYY-MM-DD".to_string())?;
+    let to = NaiveDate::parse_from_str(date_to, "%Y-%m-%d")
+        .map_err(|_| "Leave end date must use YYYY-MM-DD".to_string())?;
+
+    if to < from {
+        Err("Leave end date cannot be before the start date".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn calculate_leave_days(date_from: &str, date_to: &str) -> u32 {
+    match (
+        NaiveDate::parse_from_str(date_from, "%Y-%m-%d"),
+        NaiveDate::parse_from_str(date_to, "%Y-%m-%d"),
+    ) {
+        (Ok(from), Ok(to)) => (to.signed_duration_since(from).num_days().max(1)) as u32,
+        _ => 0,
+    }
+}
+
+fn generate_manual_id(prefix: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or_default();
+    format!("{prefix}-{nanos}")
+}
+
+fn sort_leave_views(views: &mut [LeaveView]) {
+    views.sort_by(|left, right| {
+        left.date_from
+            .cmp(&right.date_from)
+            .then(left.employee_name.cmp(&right.employee_name))
+            .then(left.id.cmp(&right.id))
+    });
+}
+
+fn sort_holiday_views(views: &mut [HolidayView]) {
+    views.sort_by(|left, right| {
+        left.date
+            .cmp(&right.date)
+            .then(left.title.cmp(&right.title))
+            .then(left.id.cmp(&right.id))
+    });
+}
+
 // ─── Milestones ────────────────────────────────────────────────
 
 #[tauri::command]
@@ -2662,6 +2785,341 @@ pub async fn get_priority_distribution(
 
 // ─── Departments ───────────────────────────────────────────────
 
+async fn build_department_views(
+    pool: &sqlx::SqlitePool,
+    departments: &[HulyDepartment],
+    employees: &[Employee],
+    ignored_emails: &HashSet<String>,
+    ignored_employee_ids: &HashSet<String>,
+) -> Vec<DepartmentView> {
+    let ignored_person_ids =
+        ignored_org_person_ids(employees, ignored_emails, ignored_employee_ids);
+
+    let emp_map: HashMap<String, &Employee> = employees
+        .iter()
+        .filter(|employee| {
+            employee.is_active
+                && !employee_is_ignored(employee, ignored_emails, ignored_employee_ids)
+        })
+        .filter_map(|employee| {
+            employee
+                .huly_person_id
+                .as_ref()
+                .map(|person_id| (person_id.clone(), employee))
+        })
+        .collect();
+
+    let mut views = Vec::with_capacity(departments.len());
+    for dept in departments {
+        let members = dept.members.as_deref().unwrap_or(&[]);
+        let visible_members: Vec<&String> = members
+            .iter()
+            .filter(|person_id| !ignored_person_ids.contains(*person_id))
+            .collect();
+        let member_count = visible_members.len() as u32;
+
+        let head_name = dept
+            .head
+            .as_ref()
+            .filter(|person_id| !ignored_person_ids.contains(*person_id))
+            .and_then(|person_id| emp_map.get(person_id))
+            .map(|employee| employee.name.clone());
+
+        let mut total_hours = 0.0;
+        let mut quota_total = 0.0;
+        for person_id in visible_members {
+            if let Some(emp) = emp_map.get(person_id.as_str()) {
+                quota_total += emp.monthly_quota_hours;
+                let now = Local::now();
+                let month_start = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
+                    .unwrap()
+                    .format("%Y-%m-%d")
+                    .to_string();
+                let month_end = if now.month() == 12 {
+                    NaiveDate::from_ymd_opt(now.year() + 1, 1, 1)
+                } else {
+                    NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1)
+                }
+                .unwrap()
+                .format("%Y-%m-%d")
+                .to_string();
+
+                if let Ok((hours,)) = sqlx::query_as::<_, (f64,)>(
+                    "SELECT COALESCE(SUM(duration_seconds), 0) / 3600.0 FROM time_entries WHERE employee_id = ?1 AND start_time >= ?2 AND start_time < ?3",
+                )
+                .bind(&emp.id)
+                .bind(&month_start)
+                .bind(&month_end)
+                .fetch_one(pool)
+                .await
+                {
+                    total_hours += hours;
+                }
+            }
+        }
+
+        views.push(DepartmentView {
+            id: dept.id.clone(),
+            name: dept.name.clone().unwrap_or_else(|| "Unnamed".to_string()),
+            head_name,
+            member_count,
+            total_hours,
+            quota_total,
+        });
+    }
+
+    views
+}
+
+fn build_leave_views(
+    requests: &[HulyLeaveRequest],
+    employees: &[Employee],
+    ignored_emails: &HashSet<String>,
+    ignored_employee_ids: &HashSet<String>,
+) -> Vec<LeaveView> {
+    let ignored_person_ids =
+        ignored_org_person_ids(employees, ignored_emails, ignored_employee_ids);
+
+    let emp_map: HashMap<String, String> = employees
+        .iter()
+        .filter(|employee| {
+            employee.is_active
+                && !employee_is_ignored(employee, ignored_emails, ignored_employee_ids)
+        })
+        .filter_map(|employee| {
+            employee
+                .huly_person_id
+                .as_ref()
+                .map(|person_id| (person_id.clone(), employee.name.clone()))
+        })
+        .collect();
+
+    let mut views = Vec::with_capacity(requests.len());
+    for req in requests {
+        if req
+            .employee
+            .as_ref()
+            .map(|person_id| ignored_person_ids.contains(person_id))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let emp_name = req
+            .employee
+            .as_ref()
+            .and_then(|person_id| emp_map.get(person_id))
+            .cloned()
+            .unwrap_or_else(|| {
+                req.employee
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string())
+            });
+
+        let from_str = req
+            .date_from
+            .and_then(ms_to_date_string)
+            .unwrap_or_default();
+        let to_str = req.date_to.and_then(ms_to_date_string).unwrap_or_default();
+
+        let days = match (req.date_from, req.date_to) {
+            (Some(f), Some(t)) => ((t - f) / 86_400_000).max(1) as u32,
+            _ => 0,
+        };
+
+        views.push(LeaveView {
+            id: req.id.clone(),
+            employee_id: req.employee.clone(),
+            source: "huly".to_string(),
+            editable: false,
+            employee_name: emp_name,
+            leave_type: req.r#type.clone().unwrap_or_else(|| "Unknown".to_string()),
+            date_from: from_str,
+            date_to: to_str,
+            status: req.status.clone().unwrap_or_else(|| "Unknown".to_string()),
+            days,
+            note: None,
+        });
+    }
+
+    views
+}
+
+fn build_holiday_views(holidays: &[HulyHoliday]) -> Vec<HolidayView> {
+    holidays
+        .iter()
+        .map(|holiday| HolidayView {
+            id: holiday.id.clone(),
+            source: "huly".to_string(),
+            editable: false,
+            title: holiday
+                .title
+                .clone()
+                .unwrap_or_else(|| "Untitled".to_string()),
+            date: holiday.date.and_then(ms_to_date_string).unwrap_or_default(),
+            note: None,
+        })
+        .collect()
+}
+
+fn build_manual_leave_views(
+    entries: &[ManualLeaveEntry],
+    employees: &[Employee],
+    ignored_emails: &HashSet<String>,
+    ignored_employee_ids: &HashSet<String>,
+) -> Vec<LeaveView> {
+    let employee_map: HashMap<String, &Employee> = employees
+        .iter()
+        .map(|employee| (employee.id.clone(), employee))
+        .collect();
+
+    let mut views = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if let Some(employee) = employee_map.get(&entry.employee_id) {
+            if employee_is_ignored(employee, ignored_emails, ignored_employee_ids) {
+                continue;
+            }
+        }
+
+        let employee_name = employee_map
+            .get(&entry.employee_id)
+            .map(|employee| employee.name.clone())
+            .unwrap_or_else(|| entry.employee_id.clone());
+
+        views.push(LeaveView {
+            id: entry.id.clone(),
+            employee_id: Some(entry.employee_id.clone()),
+            source: "manual".to_string(),
+            editable: true,
+            employee_name,
+            leave_type: entry.leave_type.clone(),
+            date_from: entry.date_from.clone(),
+            date_to: entry.date_to.clone(),
+            status: entry.status.clone(),
+            days: calculate_leave_days(&entry.date_from, &entry.date_to),
+            note: entry.note.clone(),
+        });
+    }
+
+    views
+}
+
+fn build_manual_holiday_views(entries: &[ManualHoliday]) -> Vec<HolidayView> {
+    entries
+        .iter()
+        .map(|holiday| HolidayView {
+            id: holiday.id.clone(),
+            source: "manual".to_string(),
+            editable: true,
+            title: holiday.title.clone(),
+            date: holiday.date.clone(),
+            note: holiday.note.clone(),
+        })
+        .collect()
+}
+
+async fn build_team_snapshot_from_cache(
+    pool: &sqlx::SqlitePool,
+    huly_error: Option<String>,
+) -> Result<TeamSnapshotView, String> {
+    let ignored_emails = load_ignored_clockify_emails(pool).await?;
+    let ignored_employee_ids = load_ignored_clockify_employee_ids(pool).await?;
+    let db_employees = queries::get_employees(pool)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    let departments = queries::get_huly_departments_cache(pool).await?;
+    let persons = queries::get_huly_people_cache(pool).await?;
+    let huly_employees = queries::get_huly_employees_cache(pool).await?;
+    let leave_requests = queries::get_huly_leave_requests_cache(pool).await?;
+    let holidays = queries::get_huly_holidays_cache(pool).await?;
+    let manual_leave_entries = queries::get_manual_leave_entries(pool)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+    let manual_holidays = queries::get_manual_holidays(pool)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+    let cache_updated_at = queries::get_sync_state(pool, "huly", "team_snapshot")
+        .await
+        .map_err(|e| format!("db error: {e}"))?
+        .map(|state| state.last_sync_at);
+
+    let department_views = build_department_views(
+        pool,
+        &departments,
+        &db_employees,
+        &ignored_emails,
+        &ignored_employee_ids,
+    )
+    .await;
+
+    let org_chart = if departments.is_empty() && persons.is_empty() && huly_employees.is_empty() {
+        None
+    } else {
+        Some(build_org_chart_view(
+            departments,
+            persons,
+            huly_employees,
+            db_employees.clone(),
+            &ignored_emails,
+            &ignored_employee_ids,
+        ))
+    };
+
+    let mut leave_views = build_leave_views(
+        &leave_requests,
+        &db_employees,
+        &ignored_emails,
+        &ignored_employee_ids,
+    );
+    leave_views.extend(build_manual_leave_views(
+        &manual_leave_entries,
+        &db_employees,
+        &ignored_emails,
+        &ignored_employee_ids,
+    ));
+    sort_leave_views(&mut leave_views);
+
+    let mut holiday_views = build_holiday_views(&holidays);
+    holiday_views.extend(build_manual_holiday_views(&manual_holidays));
+    sort_holiday_views(&mut holiday_views);
+
+    Ok(TeamSnapshotView {
+        departments: department_views,
+        org_chart,
+        leaves: leave_views,
+        holidays: holiday_views,
+        cache_updated_at,
+        huly_error,
+    })
+}
+
+#[tauri::command]
+pub async fn get_team_snapshot(db: State<'_, DbPool>) -> Result<TeamSnapshotView, String> {
+    build_team_snapshot_from_cache(&db.0, None).await
+}
+
+#[tauri::command]
+pub async fn refresh_team_snapshot(db: State<'_, DbPool>) -> Result<TeamSnapshotView, String> {
+    let pool = &db.0;
+    let token = queries::get_setting(pool, "huly_token")
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    let refresh_error = match token {
+        Some(token) if !token.trim().is_empty() => match HulyClient::connect(None, &token).await {
+            Ok(client) => {
+                let engine = HulySyncEngine::new(Arc::new(client), pool.clone());
+                engine.sync_team_cache().await.err()
+            }
+            Err(error) => Some(error),
+        },
+        _ => Some("Huly token not configured".to_string()),
+    };
+
+    build_team_snapshot_from_cache(pool, refresh_error).await
+}
+
 #[tauri::command]
 pub async fn get_org_chart(db: State<'_, DbPool>) -> Result<OrgChartView, String> {
     let pool = &db.0;
@@ -2680,6 +3138,7 @@ pub async fn get_org_chart(db: State<'_, DbPool>) -> Result<OrgChartView, String
         .await
         .map_err(|e| format!("db error: {e}"))?;
     let ignored_emails = load_ignored_clockify_emails(pool).await?;
+    let ignored_employee_ids = load_ignored_clockify_employee_ids(pool).await?;
 
     Ok(build_org_chart_view(
         departments,
@@ -2687,6 +3146,7 @@ pub async fn get_org_chart(db: State<'_, DbPool>) -> Result<OrgChartView, String
         huly_employees,
         db_employees,
         &ignored_emails,
+        &ignored_employee_ids,
     ))
 }
 
@@ -2741,168 +3201,169 @@ pub async fn apply_org_chart_mapping(
             .await?;
     }
 
+    let engine = HulySyncEngine::new(Arc::new(client), pool.clone());
+    engine.sync_team_cache().await?;
+
     Ok(format!(
-        "Updated {} department mappings in Huly",
+        "Updated {} department mappings in Huly and refreshed the Team cache",
         sanitized_mappings.len()
     ))
 }
 
 #[tauri::command]
 pub async fn get_departments(db: State<'_, DbPool>) -> Result<Vec<DepartmentView>, String> {
-    let pool = &db.0;
-    let client = match get_huly_client(pool).await {
-        Ok(c) => c,
-        Err(_) => return Ok(vec![]),
-    };
-
-    let departments = client.get_departments().await.unwrap_or_default();
-    let employees = queries::get_employees(pool)
-        .await
-        .map_err(|e| format!("db error: {e}"))?;
-
-    let emp_map: HashMap<String, &Employee> = employees
-        .iter()
-        .filter_map(|e| e.huly_person_id.as_ref().map(|pid| (pid.clone(), e)))
-        .collect();
-
-    let mut views = Vec::with_capacity(departments.len());
-    for dept in &departments {
-        let members = dept.members.as_deref().unwrap_or(&[]);
-        let member_count = members.len() as u32;
-
-        let head_name = dept
-            .head
-            .as_ref()
-            .and_then(|h| emp_map.get(h))
-            .map(|e| e.name.clone());
-
-        let mut total_hours = 0.0;
-        let mut quota_total = 0.0;
-        for mid in members {
-            if let Some(emp) = emp_map.get(mid) {
-                quota_total += emp.monthly_quota_hours;
-                // Sum hours from DB for this employee this month
-                let now = Local::now();
-                let month_start = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
-                    .unwrap()
-                    .format("%Y-%m-%d")
-                    .to_string();
-                let month_end = if now.month() == 12 {
-                    NaiveDate::from_ymd_opt(now.year() + 1, 1, 1)
-                } else {
-                    NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1)
-                }
-                .unwrap()
-                .format("%Y-%m-%d")
-                .to_string();
-
-                if let Ok((h,)) = sqlx::query_as::<_, (f64,)>(
-                    "SELECT COALESCE(SUM(duration_seconds), 0) / 3600.0 FROM time_entries WHERE employee_id = ?1 AND start_time >= ?2 AND start_time < ?3",
-                )
-                .bind(&emp.id)
-                .bind(&month_start)
-                .bind(&month_end)
-                .fetch_one(pool)
-                .await
-                {
-                    total_hours += h;
-                }
-            }
-        }
-
-        views.push(DepartmentView {
-            id: dept.id.clone(),
-            name: dept.name.clone().unwrap_or_else(|| "Unnamed".to_string()),
-            head_name,
-            member_count,
-            total_hours,
-            quota_total,
-        });
-    }
-    Ok(views)
+    Ok(build_team_snapshot_from_cache(&db.0, None)
+        .await?
+        .departments)
 }
 
 // ─── Leave requests ────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_leave_requests(db: State<'_, DbPool>) -> Result<Vec<LeaveView>, String> {
-    let pool = &db.0;
-    let client = match get_huly_client(pool).await {
-        Ok(c) => c,
-        Err(_) => return Ok(vec![]),
-    };
-
-    let requests = client.get_leave_requests().await.unwrap_or_default();
-
-    let employees = queries::get_employees(pool)
-        .await
-        .map_err(|e| format!("db error: {e}"))?;
-
-    let emp_map: HashMap<String, String> = employees
-        .iter()
-        .filter_map(|e| {
-            e.huly_person_id
-                .as_ref()
-                .map(|pid| (pid.clone(), e.name.clone()))
-        })
-        .collect();
-
-    let mut views = Vec::with_capacity(requests.len());
-    for req in &requests {
-        let emp_name = req
-            .employee
-            .as_ref()
-            .and_then(|e| emp_map.get(e))
-            .cloned()
-            .unwrap_or_else(|| {
-                req.employee
-                    .clone()
-                    .unwrap_or_else(|| "Unknown".to_string())
-            });
-
-        let from_str = req
-            .date_from
-            .and_then(ms_to_date_string)
-            .unwrap_or_default();
-        let to_str = req.date_to.and_then(ms_to_date_string).unwrap_or_default();
-
-        // Calculate days between from and to
-        let days = match (req.date_from, req.date_to) {
-            (Some(f), Some(t)) => ((t - f) / 86_400_000).max(1) as u32,
-            _ => 0,
-        };
-
-        views.push(LeaveView {
-            employee_name: emp_name,
-            leave_type: req.r#type.clone().unwrap_or_else(|| "Unknown".to_string()),
-            date_from: from_str,
-            date_to: to_str,
-            status: req.status.clone().unwrap_or_else(|| "Unknown".to_string()),
-            days,
-        });
-    }
-    Ok(views)
+    Ok(build_team_snapshot_from_cache(&db.0, None).await?.leaves)
 }
 
 // ─── Holidays ──────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_holidays(db: State<'_, DbPool>) -> Result<Vec<HolidayView>, String> {
+    Ok(build_team_snapshot_from_cache(&db.0, None).await?.holidays)
+}
+
+#[tauri::command]
+pub async fn save_manual_leave(
+    db: State<'_, DbPool>,
+    input: ManualLeaveInput,
+) -> Result<TeamSnapshotView, String> {
     let pool = &db.0;
-    let client = match get_huly_client(pool).await {
-        Ok(c) => c,
-        Err(_) => return Ok(vec![]),
+    let id = normalize_optional_text(input.id);
+    let employee_id = sanitize_required_text("Employee", &input.employee_id)?;
+    let leave_type = sanitize_required_text("Leave type", &input.leave_type)?;
+    let date_from = sanitize_iso_date("Leave start date", &input.date_from)?;
+    let date_to = sanitize_iso_date("Leave end date", &input.date_to)?;
+    let status = sanitize_required_text("Leave status", &input.status)?;
+    let note = normalize_optional_text(input.note);
+
+    validate_manual_leave_date_order(&date_from, &date_to)?;
+
+    let employee = queries::get_employee_by_id(pool, &employee_id)
+        .await
+        .map_err(|e| format!("db error: {e}"))?
+        .ok_or_else(|| format!("Unknown employee id: {employee_id}"))?;
+
+    let ignored_emails = load_ignored_clockify_emails(pool).await?;
+    let ignored_employee_ids = load_ignored_clockify_employee_ids(pool).await?;
+    if employee_is_ignored(&employee, &ignored_emails, &ignored_employee_ids) {
+        return Err(format!(
+            "{} is excluded from Team views and cannot be used for manual leave tracking.",
+            employee.name
+        ));
+    }
+
+    let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+    let created_at = if let Some(existing_id) = id.as_ref() {
+        queries::get_manual_leave_entries(pool)
+            .await
+            .map_err(|e| format!("db error: {e}"))?
+            .into_iter()
+            .find(|entry| entry.id == *existing_id)
+            .map(|entry| entry.created_at)
+            .unwrap_or_else(|| now.clone())
+    } else {
+        now.clone()
     };
 
-    let holidays = client.get_holidays().await.unwrap_or_default();
+    let entry = ManualLeaveEntry {
+        id: id.unwrap_or_else(|| generate_manual_id("manual-leave")),
+        employee_id,
+        leave_type,
+        date_from,
+        date_to,
+        status,
+        note,
+        created_at,
+        updated_at: now,
+    };
 
-    Ok(holidays
-        .iter()
-        .map(|h| HolidayView {
-            title: h.title.clone().unwrap_or_else(|| "Untitled".to_string()),
-            date: h.date.and_then(ms_to_date_string).unwrap_or_default(),
-        })
-        .collect())
+    queries::upsert_manual_leave_entry(pool, &entry)
+        .await
+        .map_err(|e| format!("save manual leave entry: {e}"))?;
+
+    build_team_snapshot_from_cache(pool, None).await
+}
+
+#[tauri::command]
+pub async fn delete_manual_leave(
+    db: State<'_, DbPool>,
+    id: String,
+) -> Result<TeamSnapshotView, String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return Err("Manual leave id is required".to_string());
+    }
+
+    queries::delete_manual_leave_entry(&db.0, trimmed)
+        .await
+        .map_err(|e| format!("delete manual leave entry: {e}"))?;
+
+    build_team_snapshot_from_cache(&db.0, None).await
+}
+
+#[tauri::command]
+pub async fn save_manual_holiday(
+    db: State<'_, DbPool>,
+    input: ManualHolidayInput,
+) -> Result<TeamSnapshotView, String> {
+    let pool = &db.0;
+    let id = normalize_optional_text(input.id);
+    let title = sanitize_required_text("Holiday title", &input.title)?;
+    let date = sanitize_iso_date("Holiday date", &input.date)?;
+    let note = normalize_optional_text(input.note);
+    let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+    let created_at = if let Some(existing_id) = id.as_ref() {
+        queries::get_manual_holidays(pool)
+            .await
+            .map_err(|e| format!("db error: {e}"))?
+            .into_iter()
+            .find(|holiday| holiday.id == *existing_id)
+            .map(|holiday| holiday.created_at)
+            .unwrap_or_else(|| now.clone())
+    } else {
+        now.clone()
+    };
+
+    let holiday = ManualHoliday {
+        id: id.unwrap_or_else(|| generate_manual_id("manual-holiday")),
+        title,
+        date,
+        note,
+        created_at,
+        updated_at: now,
+    };
+
+    queries::upsert_manual_holiday(pool, &holiday)
+        .await
+        .map_err(|e| format!("save manual holiday: {e}"))?;
+
+    build_team_snapshot_from_cache(pool, None).await
+}
+
+#[tauri::command]
+pub async fn delete_manual_holiday(
+    db: State<'_, DbPool>,
+    id: String,
+) -> Result<TeamSnapshotView, String> {
+    let trimmed = id.trim();
+    if trimmed.is_empty() {
+        return Err("Manual holiday id is required".to_string());
+    }
+
+    queries::delete_manual_holiday(&db.0, trimmed)
+        .await
+        .map_err(|e| format!("delete manual holiday: {e}"))?;
+
+    build_team_snapshot_from_cache(&db.0, None).await
 }
 
 // ─── Chat activity ─────────────────────────────────────────────
@@ -2916,6 +3377,7 @@ pub async fn get_chat_activity(db: State<'_, DbPool>) -> Result<Vec<ChatActivity
 
     let huly_person_to_employee: HashMap<String, String> = employees
         .iter()
+        .filter(|employee| employee.is_active)
         .filter_map(|e| {
             e.huly_person_id
                 .as_ref()
@@ -2925,11 +3387,12 @@ pub async fn get_chat_activity(db: State<'_, DbPool>) -> Result<Vec<ChatActivity
 
     let employee_name_by_email: HashMap<String, String> = employees
         .iter()
+        .filter(|employee| employee.is_active)
         .map(|employee| (normalize_email(&employee.email), employee.name.clone()))
         .collect();
 
     let mut employee_name_aliases: HashMap<String, String> = HashMap::new();
-    for employee in &employees {
+    for employee in employees.iter().filter(|employee| employee.is_active) {
         for alias in [
             normalize_person_key(&employee.name),
             person_token_signature(&employee.name),
@@ -3091,6 +3554,7 @@ pub async fn get_board_cards(db: State<'_, DbPool>) -> Result<Vec<BoardCardView>
 
     let emp_map: HashMap<String, String> = employees
         .iter()
+        .filter(|employee| employee.is_active)
         .filter_map(|e| {
             e.huly_person_id
                 .as_ref()
@@ -3144,6 +3608,7 @@ pub async fn get_meeting_load(db: State<'_, DbPool>) -> Result<Vec<MeetingLoadVi
 
     let emp_map: HashMap<String, String> = employees
         .iter()
+        .filter(|employee| employee.is_active)
         .filter_map(|e| {
             e.huly_person_id
                 .as_ref()
@@ -3550,6 +4015,7 @@ mod tests {
             },
         ];
         let ignored_emails = HashSet::from([DEFAULT_CLOCKIFY_IGNORED_EMAILS.to_string()]);
+        let ignored_employee_ids = HashSet::new();
 
         let org_chart = build_org_chart_view(
             departments,
@@ -3557,11 +4023,110 @@ mod tests {
             huly_employees,
             db_employees,
             &ignored_emails,
+            &ignored_employee_ids,
         );
 
         assert_eq!(org_chart.people.len(), 1);
         assert_eq!(org_chart.people[0].person_id, "person-kept");
         assert_eq!(org_chart.departments.len(), 1);
+        assert_eq!(org_chart.departments[0].head_person_id, None);
+        assert_eq!(org_chart.departments[0].team_lead_person_id, None);
+        assert_eq!(
+            org_chart.departments[0].member_person_ids,
+            vec!["person-kept".to_string()]
+        );
+    }
+
+    #[test]
+    fn org_chart_omits_people_from_ignored_employee_id_list() {
+        let departments = vec![HulyDepartment {
+            id: "dept-engineering".to_string(),
+            name: Some("Engineering".to_string()),
+            description: None,
+            parent: None,
+            team_lead: Some("person-ignored".to_string()),
+            managers: None,
+            head: Some("person-ignored".to_string()),
+            members: Some(vec![
+                "person-ignored".to_string(),
+                "person-kept".to_string(),
+            ]),
+            class: Some("hr:class:Department".to_string()),
+        }];
+        let persons = vec![
+            HulyPerson {
+                id: "person-ignored".to_string(),
+                name: Some("Ghost".to_string()),
+                channels: None,
+                city: None,
+                class: Some("contact:class:Person".to_string()),
+            },
+            HulyPerson {
+                id: "person-kept".to_string(),
+                name: Some("Builder".to_string()),
+                channels: None,
+                city: None,
+                class: Some("contact:class:Person".to_string()),
+            },
+        ];
+        let huly_employees = vec![
+            HulyEmployee {
+                id: "huly-ignored".to_string(),
+                name: Some("Ghost".to_string()),
+                active: Some(true),
+                position: Some("Support".to_string()),
+                person_uuid: Some("person-ignored".to_string()),
+                class: Some("contact:mixin:Employee".to_string()),
+            },
+            HulyEmployee {
+                id: "huly-kept".to_string(),
+                name: Some("Builder".to_string()),
+                active: Some(true),
+                position: Some("Engineer".to_string()),
+                person_uuid: Some("person-kept".to_string()),
+                class: Some("contact:mixin:Employee".to_string()),
+            },
+        ];
+        let db_employees = vec![
+            Employee {
+                id: "db-ignored".to_string(),
+                clockify_user_id: "clockify-ignored".to_string(),
+                huly_person_id: Some("person-ignored".to_string()),
+                name: "Ghost".to_string(),
+                email: "".to_string(),
+                avatar_url: None,
+                monthly_quota_hours: 160.0,
+                is_active: true,
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                updated_at: "2026-01-01T00:00:00Z".to_string(),
+            },
+            Employee {
+                id: "db-kept".to_string(),
+                clockify_user_id: "clockify-kept".to_string(),
+                huly_person_id: Some("person-kept".to_string()),
+                name: "Builder".to_string(),
+                email: "".to_string(),
+                avatar_url: None,
+                monthly_quota_hours: 160.0,
+                is_active: true,
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                updated_at: "2026-01-01T00:00:00Z".to_string(),
+            },
+        ];
+        let ignored_emails = HashSet::new();
+        let ignored_employee_ids = HashSet::from(["db-ignored".to_string()]);
+
+        let org_chart = build_org_chart_view(
+            departments,
+            persons,
+            huly_employees,
+            db_employees,
+            &ignored_emails,
+            &ignored_employee_ids,
+        );
+
+        assert_eq!(org_chart.people.len(), 1);
+        assert_eq!(org_chart.people[0].person_id, "person-kept");
         assert_eq!(org_chart.departments[0].head_person_id, None);
         assert_eq!(org_chart.departments[0].team_lead_person_id, None);
         assert_eq!(

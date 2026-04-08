@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useInvoke } from "../hooks/useInvoke";
 import { formatDuration } from "../lib/format";
 import { exportCsv } from "../lib/export";
+import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import Avatar from "../components/ui/Avatar";
 import type { TimeEntry, Employee } from "../lib/types";
@@ -257,34 +258,18 @@ function Timesheet() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  pageTitle: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 20,
-    fontWeight: 700,
-    marginBottom: 8,
-    color: "var(--lcars-orange)",
-    letterSpacing: "4px",
-    textTransform: "uppercase" as const,
-  },
-  pageTitleBar: {
-    height: 3,
-    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
-    marginBottom: 24,
-  },
-  controls: {
-    display: "flex",
-    gap: 12,
-    alignItems: "center",
-    marginBottom: 20,
-  },
+  pageTitle: lcarsPageStyles.pageTitle,
+  pageTitleBar: lcarsPageStyles.pageTitleBar,
+  controls: lcarsPageStyles.toolbar,
   toggleGroup: {
     display: "flex",
-    border: "1px solid rgba(255, 153, 0, 0.3)",
-    borderRadius: 2,
+    border: "1px solid rgba(255, 153, 0, 0.26)",
+    borderRadius: "0 16px 16px 0",
     overflow: "hidden",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
   },
   toggleBtn: {
-    background: "transparent",
+    background: "rgba(10, 10, 20, 0.72)",
     border: "none",
     borderRight: "1px solid rgba(255, 153, 0, 0.2)",
     color: "var(--lcars-lavender)",
@@ -297,77 +282,37 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "1px",
   },
   toggleActive: {
-    background: "var(--lcars-orange)",
-    color: "#000",
+    background: "linear-gradient(90deg, var(--lcars-orange), #ffb347)",
+    color: "#111",
   },
   select: {
-    background: "rgba(26, 26, 46, 0.8)",
-    border: "1px solid rgba(255, 153, 0, 0.3)",
-    borderRadius: 2,
-    color: "var(--lcars-tan)",
+    ...lcarsPageStyles.input,
+    width: "auto",
+    minWidth: 170,
     padding: "8px 14px",
-    fontSize: 11,
     fontFamily: "'Orbitron', sans-serif",
-    outline: "none",
     letterSpacing: "1px",
     textTransform: "uppercase" as const,
   },
   ghostBtn: {
-    background: "transparent",
-    border: "1px solid rgba(255, 153, 0, 0.3)",
-    borderRadius: 2,
+    ...lcarsPageStyles.ghostButton,
     color: "var(--lcars-orange)",
+    borderColor: "rgba(255, 153, 0, 0.28)",
     padding: "8px 14px",
-    fontSize: 10,
-    fontWeight: 600,
-    fontFamily: "'Orbitron', sans-serif",
-    cursor: "pointer",
-    transition: "background 0.15s, color 0.15s",
     marginLeft: "auto",
-    letterSpacing: "1px",
-    textTransform: "uppercase" as const,
   },
   card: {
-    background: "rgba(26, 26, 46, 0.6)",
-    borderLeft: "4px solid var(--lcars-blue)",
-    padding: 24,
+    ...lcarsPageStyles.card,
+    borderLeftColor: "var(--lcars-blue)",
   },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse" as const,
-    fontSize: 13,
-  },
+  table: lcarsPageStyles.table,
   th: {
-    textAlign: "left" as const,
-    color: "var(--lcars-lavender)",
-    fontFamily: "'Orbitron', sans-serif",
-    fontWeight: 500,
-    padding: "8px 12px",
-    borderBottom: "1px solid rgba(255, 153, 0, 0.15)",
-    fontSize: 10,
-    textTransform: "uppercase" as const,
-    letterSpacing: "1.5px",
-    background: "rgba(255, 153, 0, 0.05)",
+    ...lcarsPageStyles.th,
     userSelect: "none" as const,
   },
-  td: {
-    padding: "10px 12px",
-    color: "var(--lcars-tan)",
-    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
-  },
-  tdMono: {
-    padding: "10px 12px",
-    color: "var(--lcars-lavender)",
-    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
-    fontFamily: "'JetBrains Mono', monospace",
-  },
-  emptyText: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 11,
-    color: "var(--text-quaternary)",
-    letterSpacing: "2px",
-    textTransform: "uppercase" as const,
-  },
+  td: lcarsPageStyles.td,
+  tdMono: lcarsPageStyles.tdMono,
+  emptyText: lcarsPageStyles.emptyText,
 };
 
 export default Timesheet;

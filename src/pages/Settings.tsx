@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { useInvoke } from "../hooks/useInvoke";
 import { timeAgo } from "../lib/format";
+import { useViewportWidth } from "../hooks/useViewportWidth";
+import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 import type { ClockifyWorkspace, Employee, SyncState } from "../lib/types";
 
 const DEFAULT_IGNORED_EMAILS = "thoughtseedlabs@gmail.com";
@@ -13,25 +15,32 @@ const SLACK_REQUIRED_SCOPES = [
   "users:read.email",
 ];
 
-function normalizeIgnoredEmails(value: string): string {
-  const normalized = value
+function parseMultiValueSetting(value: string): string[] {
+  return value
     .split(/[\n,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeIgnoredEmails(value: string): string {
+  const normalized = parseMultiValueSetting(value)
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
 
   return normalized.length > 0 ? normalized.join(", ") : DEFAULT_IGNORED_EMAILS;
 }
 
+function normalizeIgnoredEmployeeIds(ids: string[]): string {
+  return [...new Set(ids.map((item) => item.trim()).filter(Boolean))].join(", ");
+}
+
 function normalizeSlackChannelFilters(value: string): string {
-  return value
-    .split(/[\n,;]+/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .join(", ");
+  return parseMultiValueSetting(value).join(", ");
 }
 
 function Settings() {
   const api = useInvoke();
+  const viewportWidth = useViewportWidth();
 
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
@@ -40,6 +49,8 @@ function Settings() {
   const [workspaces, setWorkspaces] = useState<ClockifyWorkspace[]>([]);
   const [selectedWorkspace, setSelectedWorkspace] = useState("");
   const [ignoredEmails, setIgnoredEmails] = useState(DEFAULT_IGNORED_EMAILS);
+  const [ignoredEmployeeIds, setIgnoredEmployeeIds] = useState<string[]>([]);
+  const [ignoreSearch, setIgnoreSearch] = useState("");
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
 
   const [hulyToken, setHulyToken] = useState("");
@@ -63,6 +74,8 @@ function Settings() {
   const [editingQuotas, setEditingQuotas] = useState<Record<string, string>>({});
 
   const trimmedSlackToken = slackBotToken.trim();
+  const normalizedIgnoredEmployeeIdString =
+    normalizeIgnoredEmployeeIds(ignoredEmployeeIds);
   const normalizedSlackFilters = normalizeSlackChannelFilters(slackChannelFilters);
   const slackFilterCount = normalizedSlackFilters
     ? normalizedSlackFilters.split(", ").filter(Boolean).length
@@ -77,6 +90,7 @@ function Settings() {
   const slackChannelMode = slackFilterCount > 0
     ? `${slackFilterCount} FILTER${slackFilterCount === 1 ? "" : "S"}`
     : "ALL ACCESSIBLE CHANNELS";
+  const isCompactLayout = viewportWidth < 1080;
 
   const loadSettings = useCallback(async () => {
     try {
@@ -84,6 +98,9 @@ function Settings() {
       if (settings.clockify_api_key) setApiKey(settings.clockify_api_key);
       if (settings.clockify_workspace_id) setSelectedWorkspace(settings.clockify_workspace_id);
       setIgnoredEmails(settings.clockify_ignored_emails || DEFAULT_IGNORED_EMAILS);
+      setIgnoredEmployeeIds(
+        parseMultiValueSetting(settings.clockify_ignored_employee_ids || "")
+      );
       if (settings.huly_token) setHulyToken(settings.huly_token);
       if (settings.slack_bot_token) setSlackBotToken(settings.slack_bot_token);
       setSlackChannelFilters(settings.slack_channel_filters || "");
@@ -127,13 +144,51 @@ function Settings() {
     try {
       await api.saveSetting("clockify_api_key", apiKey);
       if (selectedWorkspace) await api.saveSetting("clockify_workspace_id", selectedWorkspace);
+      await api.saveSetting(
+        "clockify_ignored_employee_ids",
+        normalizedIgnoredEmployeeIdString
+      );
       await api.saveSetting("clockify_ignored_emails", normalizeIgnoredEmails(ignoredEmails));
       setSaveStatus("Settings saved");
       setIgnoredEmails(normalizeIgnoredEmails(ignoredEmails));
+      setIgnoredEmployeeIds(
+        parseMultiValueSetting(normalizedIgnoredEmployeeIdString)
+      );
       await loadEmployees();
       setTimeout(() => setSaveStatus(null), 3000);
     } catch (err) { setSaveStatus(`Error: ${err}`); }
   };
+
+  const toggleIgnoredEmployee = (employeeId: string) => {
+    setIgnoredEmployeeIds((current) =>
+      current.includes(employeeId)
+        ? current.filter((id) => id !== employeeId)
+        : [...current, employeeId]
+    );
+  };
+
+  const ignoredEmployeeIdSet = new Set(ignoredEmployeeIds);
+  const ignoreSearchQuery = ignoreSearch.trim().toLowerCase();
+  const selectedIgnoredEmployees = employees
+    .filter((employee) => ignoredEmployeeIdSet.has(employee.id))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const visibleIgnoreCandidates = [...employees]
+    .filter((employee) => {
+      if (!ignoreSearchQuery) return true;
+      const haystack = [employee.name, employee.email, employee.hulyPersonId ?? ""]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(ignoreSearchQuery);
+    })
+    .sort((left, right) => {
+      const leftSelected = ignoredEmployeeIdSet.has(left.id) ? 1 : 0;
+      const rightSelected = ignoredEmployeeIdSet.has(right.id) ? 1 : 0;
+      return (
+        rightSelected - leftSelected ||
+        Number(right.isActive) - Number(left.isActive) ||
+        left.name.localeCompare(right.name)
+      );
+    });
 
   const handleSync = async () => {
     setSyncing(true);
@@ -253,7 +308,7 @@ function Settings() {
       <div style={styles.pageTitleBar} />
 
       {/* Clockify Connection */}
-      <div style={styles.card}>
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-orange)" }}>
         <h2 style={styles.sectionTitle}>CLOCKIFY CONNECTION</h2>
         <div style={styles.sectionDivider} />
 
@@ -302,7 +357,87 @@ function Settings() {
         )}
 
         <div style={styles.field}>
-          <label style={styles.label}>IGNORED CLOCKIFY EMAILS</label>
+          <label style={styles.label}>IGNORED CREW</label>
+          <input
+            value={ignoreSearch}
+            onChange={(e) => setIgnoreSearch(e.target.value)}
+            placeholder="SEARCH CREW NAME, EMAIL, OR HULY LINK"
+            style={styles.input}
+          />
+          <div style={styles.helperText}>
+            SELECT PEOPLE TO EXCLUDE FROM CLOCKIFY METRICS, CREW STATUS, TIMELINES,
+            AND THE TEAM ORG MAPPING. THIS WORKS EVEN WHEN EMAILS ARE MISSING OR
+            UNRELIABLE.
+          </div>
+
+          {selectedIgnoredEmployees.length > 0 && (
+            <div style={styles.selectedChipRow}>
+              {selectedIgnoredEmployees.map((employee) => (
+                <button
+                  key={`ignored-chip-${employee.id}`}
+                  type="button"
+                  onClick={() => toggleIgnoredEmployee(employee.id)}
+                  style={styles.selectedChip}
+                >
+                  {employee.name.toUpperCase()} ×
+                </button>
+              ))}
+            </div>
+          )}
+
+          {employees.length === 0 ? (
+            <div style={styles.helperText}>
+              RUN A SYNC FIRST TO LOAD THE CREW ROSTER FOR MULTISELECT IGNORING.
+            </div>
+          ) : (
+            <div
+              style={{
+                ...styles.ignoreGrid,
+                maxHeight: isCompactLayout ? "none" : 280,
+              }}
+            >
+              {visibleIgnoreCandidates.map((employee) => {
+                const selected = ignoredEmployeeIdSet.has(employee.id);
+                return (
+                  <button
+                    key={employee.id}
+                    type="button"
+                    onClick={() => toggleIgnoredEmployee(employee.id)}
+                    style={{
+                      ...styles.ignoreCard,
+                      ...(selected ? styles.ignoreCardSelected : null),
+                    }}
+                  >
+                    <div style={styles.ignoreCardHeader}>
+                      <span style={styles.ignoreCardName}>{employee.name}</span>
+                      <span
+                        style={{
+                          ...styles.ignoreCardState,
+                          color: selected
+                            ? "#000"
+                            : employee.isActive
+                              ? "var(--lcars-green)"
+                              : "var(--text-quaternary)",
+                        }}
+                      >
+                        {selected ? "IGNORED" : employee.isActive ? "ACTIVE" : "INACTIVE"}
+                      </span>
+                    </div>
+                    <div style={styles.ignoreCardMeta}>
+                      {employee.email || "NO EMAIL AVAILABLE"}
+                    </div>
+                    <div style={styles.ignoreCardMeta}>
+                      {employee.hulyPersonId ? "HULY LINKED" : "CLOCKIFY ONLY"}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div style={styles.field}>
+          <label style={styles.label}>MANUAL EMAIL FALLBACK</label>
           <textarea
             value={ignoredEmails}
             onChange={(e) => setIgnoredEmails(e.target.value)}
@@ -310,8 +445,8 @@ function Settings() {
             style={{ ...styles.input, minHeight: 72, resize: "vertical" }}
           />
           <div style={styles.helperText}>
-            COMMA OR NEWLINE SEPARATED. THESE PEOPLE ARE EXCLUDED FROM CLOCKIFY HOURS,
-            CREW STATUS, TIMELINES, AND OVERVIEW METRICS.
+            USE THIS FOR SERVICE ACCOUNTS OR UNMAPPED PEOPLE THAT ARE NOT YET IN THE
+            CREW LIST. COMMA OR NEWLINE SEPARATED.
           </div>
         </div>
 
@@ -326,7 +461,7 @@ function Settings() {
       </div>
 
       {/* Huly Connection */}
-      <div style={styles.card}>
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
         <h2 style={styles.sectionTitle}>HULY CONNECTION</h2>
         <div style={styles.sectionDivider} />
 
@@ -377,7 +512,7 @@ function Settings() {
       </div>
 
       {/* Slack Connection */}
-      <div style={styles.card}>
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-lavender)" }}>
         <h2 style={styles.sectionTitle}>SLACK CONNECTION</h2>
         <div style={styles.sectionDivider} />
 
@@ -472,7 +607,7 @@ function Settings() {
       </div>
 
       {/* Sync Controls */}
-      <div style={styles.card}>
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-green)" }}>
         <h2 style={styles.sectionTitle}>SYNC CONTROLS</h2>
         <div style={styles.sectionDivider} />
 
@@ -517,7 +652,7 @@ function Settings() {
       </div>
 
       {/* Employee Management */}
-      <div style={styles.card}>
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-peach)" }}>
         <h2 style={styles.sectionTitle}>CREW MANAGEMENT</h2>
         <div style={styles.sectionDivider} />
 
@@ -534,7 +669,7 @@ function Settings() {
               </tr>
             </thead>
             <tbody>
-              {employees.filter((emp) => emp.isActive).map((emp) => (
+              {employees.map((emp) => (
                 <tr key={emp.id}>
                   <td style={{ ...styles.td, color: "var(--lcars-orange)" }}>{emp.name}</td>
                   <td style={styles.td}>{emp.email}</td>
@@ -575,40 +710,11 @@ function Settings() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  pageTitle: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 20,
-    fontWeight: 700,
-    marginBottom: 8,
-    color: "var(--lcars-orange)",
-    letterSpacing: "4px",
-    textTransform: "uppercase" as const,
-  },
-  pageTitleBar: {
-    height: 3,
-    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
-    marginBottom: 24,
-  },
-  card: {
-    background: "rgba(26, 26, 46, 0.6)",
-    borderLeft: "4px solid var(--lcars-lavender)",
-    padding: 24,
-    marginBottom: 20,
-  },
-  sectionTitle: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 12,
-    fontWeight: 600,
-    color: "var(--lcars-orange)",
-    marginBottom: 8,
-    letterSpacing: "2px",
-    textTransform: "uppercase" as const,
-  },
-  sectionDivider: {
-    height: 2,
-    background: "rgba(153, 153, 204, 0.15)",
-    marginBottom: 16,
-  },
+  pageTitle: lcarsPageStyles.pageTitle,
+  pageTitleBar: lcarsPageStyles.pageTitleBar,
+  card: lcarsPageStyles.card,
+  sectionTitle: lcarsPageStyles.sectionTitle,
+  sectionDivider: lcarsPageStyles.sectionDivider,
   field: {
     marginBottom: 16,
   },
@@ -622,55 +728,22 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "1.5px",
     textTransform: "uppercase" as const,
   },
-  input: {
-    background: "rgba(10, 10, 26, 0.8)",
-    border: "1px solid rgba(255, 153, 0, 0.25)",
-    borderRadius: 0,
-    color: "var(--lcars-orange)",
-    padding: "12px 14px",
-    fontSize: 13,
-    fontFamily: "'JetBrains Mono', monospace",
-    outline: "none",
-    width: "100%",
-  },
+  input: lcarsPageStyles.input,
   inputRow: {
     display: "flex",
     gap: 8,
     alignItems: "center",
+    flexWrap: "wrap" as const,
   },
-  primaryButton: {
-    background: "var(--lcars-orange)",
-    color: "#000",
-    border: "none",
-    borderRadius: 2,
-    padding: "8px 16px",
-    fontSize: 10,
-    fontWeight: 700,
-    fontFamily: "'Orbitron', sans-serif",
-    cursor: "pointer",
-    letterSpacing: "1.5px",
-    textTransform: "uppercase" as const,
-    transition: "opacity 0.15s",
-  },
+  primaryButton: lcarsPageStyles.primaryButton,
   ghostButton: {
-    background: "transparent",
-    border: "1px solid rgba(255, 153, 0, 0.3)",
-    borderRadius: 2,
+    ...lcarsPageStyles.ghostButton,
     color: "var(--lcars-orange)",
-    padding: "8px 16px",
-    fontSize: 10,
-    fontWeight: 600,
-    fontFamily: "'Orbitron', sans-serif",
-    cursor: "pointer",
-    letterSpacing: "1px",
-    textTransform: "uppercase" as const,
-    whiteSpace: "nowrap",
-    transition: "opacity 0.15s",
+    borderColor: "rgba(255, 153, 0, 0.28)",
+    whiteSpace: "nowrap" as const,
   },
   buttonRow: {
-    display: "flex",
-    gap: 12,
-    alignItems: "center",
+    ...lcarsPageStyles.buttonRow,
     marginTop: 8,
   },
   successText: {
@@ -686,30 +759,91 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--lcars-red)",
     marginTop: 8,
   },
-  emptyText: {
+  emptyText: lcarsPageStyles.emptyText,
+  helperText: {
+    ...lcarsPageStyles.helperText,
+    marginTop: 8,
+  },
+  selectedChipRow: {
+    display: "flex",
+    flexWrap: "wrap" as const,
+    gap: 8,
+    marginTop: 12,
+  },
+  selectedChip: {
+    background: "rgba(255, 153, 0, 0.12)",
+    border: "1px solid rgba(255, 153, 0, 0.3)",
+    color: "var(--lcars-orange)",
+    padding: "6px 10px",
+    fontSize: 10,
+    fontFamily: "'Orbitron', sans-serif",
+    letterSpacing: "1px",
+    cursor: "pointer",
+    textTransform: "uppercase" as const,
+    borderRadius: "0 12px 12px 0",
+  },
+  ignoreGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: 10,
+    marginTop: 12,
+    overflowY: "auto" as const,
+    paddingRight: 4,
+  },
+  ignoreCard: {
+    background: "var(--bg-console-soft)",
+    border: "1px solid rgba(153, 153, 204, 0.16)",
+    color: "var(--lcars-tan)",
+    padding: "12px 14px",
+    textAlign: "left" as const,
+    cursor: "pointer",
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 6,
+    borderRadius: "0 16px 16px 0",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+  },
+  ignoreCardSelected: {
+    background: "linear-gradient(90deg, rgba(255, 153, 0, 0.92), #ffb347)",
+    border: "1px solid rgba(255, 179, 71, 0.7)",
+    color: "#111",
+    boxShadow: "0 0 16px rgba(255, 153, 0, 0.18)",
+  },
+  ignoreCardHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 10,
+    alignItems: "baseline",
+  },
+  ignoreCardName: {
     fontFamily: "'Orbitron', sans-serif",
     fontSize: 11,
-    color: "var(--text-quaternary)",
-    letterSpacing: "2px",
+    letterSpacing: "1px",
     textTransform: "uppercase" as const,
   },
-  helperText: {
-    marginTop: 8,
+  ignoreCardState: {
     fontFamily: "'Orbitron', sans-serif",
-    fontSize: 10,
-    color: "var(--text-quaternary)",
-    letterSpacing: "1px",
-    lineHeight: 1.6,
+    fontSize: 9,
+    letterSpacing: "1.25px",
+    textTransform: "uppercase" as const,
+    whiteSpace: "nowrap" as const,
+  },
+  ignoreCardMeta: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "inherit",
+    opacity: 0.88,
+    wordBreak: "break-word" as const,
   },
   summaryGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
     gap: 12,
     marginBottom: 16,
   },
   summaryItem: {
-    background: "rgba(10, 10, 26, 0.55)",
-    border: "1px solid rgba(153, 153, 204, 0.14)",
+    ...lcarsPageStyles.subtleCard,
+    borderLeftColor: "var(--lcars-cyan)",
     padding: "10px 12px",
     display: "flex",
     flexDirection: "column" as const,
@@ -734,6 +868,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "12px 14px",
     border: "1px solid rgba(255, 204, 0, 0.25)",
     background: "rgba(255, 204, 0, 0.06)",
+    borderRadius: "0 14px 14px 0",
   },
   warningTitle: {
     fontFamily: "'Orbitron', sans-serif",
@@ -750,34 +885,10 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.75px",
     lineHeight: 1.6,
   },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse" as const,
-    fontSize: 13,
-  },
-  th: {
-    textAlign: "left" as const,
-    color: "var(--lcars-lavender)",
-    fontFamily: "'Orbitron', sans-serif",
-    fontWeight: 500,
-    padding: "8px 12px",
-    borderBottom: "1px solid rgba(255, 153, 0, 0.15)",
-    fontSize: 10,
-    textTransform: "uppercase" as const,
-    letterSpacing: "1.5px",
-    background: "rgba(255, 153, 0, 0.05)",
-  },
-  td: {
-    padding: "10px 12px",
-    color: "var(--lcars-tan)",
-    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
-  },
-  tdMono: {
-    padding: "10px 12px",
-    color: "var(--lcars-lavender)",
-    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
-    fontFamily: "'JetBrains Mono', monospace",
-  },
+  table: lcarsPageStyles.table,
+  th: lcarsPageStyles.th,
+  td: lcarsPageStyles.td,
+  tdMono: lcarsPageStyles.tdMono,
 };
 
 export default Settings;

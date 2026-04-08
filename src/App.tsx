@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Routes, Route, NavLink, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import Overview from "./pages/Overview";
 import Timesheet from "./pages/Timesheet";
@@ -15,6 +16,7 @@ import Live from "./pages/Live";
 import Settings from "./pages/Settings";
 import Avatar from "./components/ui/Avatar";
 import DateRangePicker from "./components/ui/DateRangePicker";
+import { useViewportWidth } from "./hooks/useViewportWidth";
 import { useAppStore } from "./stores/appStore";
 import type { PresenceStatus } from "./lib/types";
 
@@ -65,10 +67,16 @@ function getStardate(): string {
 
 function App() {
   const navigate = useNavigate();
+  const viewportWidth = useViewportWidth();
   const [teamPresence, setTeamPresence] = useState<PresenceStatus[]>([]);
+  const [appVersion, setAppVersion] = useState<string>("--");
   const dateRange = useAppStore((s) => s.dateRange);
   const setDateRange = useAppStore((s) => s.setDateRange);
   const [syncActive, setSyncActive] = useState(false);
+  const isTightShell = viewportWidth < 1240;
+  const isCompactShell = viewportWidth < 1080;
+  const sidebarWidth = isCompactShell ? 208 : isTightShell ? 224 : 240;
+  const visiblePresence = teamPresence.slice(0, isCompactShell ? 6 : 8);
 
   // Background sync on launch
   useEffect(() => {
@@ -142,17 +150,64 @@ function App() {
     };
   }, [navigate]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    getVersion()
+      .then((version) => {
+        if (!cancelled) {
+          setAppVersion(version);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAppVersion("--");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div style={styles.shell}>
       {/* LCARS Sidebar */}
-      <aside style={styles.sidebar}>
+      <aside
+        style={{
+          ...styles.sidebar,
+          width: sidebarWidth,
+          borderRight: isCompactShell
+            ? "1px solid rgba(255, 153, 0, 0.18)"
+            : styles.sidebar.borderRight,
+        }}
+      >
         {/* Top bar with title */}
-        <div style={styles.sidebarTopBar}>
-          <span style={styles.logoText}>TEAMFORGE</span>
+        <div
+          style={{
+            ...styles.sidebarTopBar,
+            paddingLeft: isCompactShell ? 12 : 16,
+            paddingRight: isCompactShell ? 10 : 12,
+          }}
+        >
+          <span
+            style={{
+              ...styles.logoText,
+              fontSize: isCompactShell ? 12 : 14,
+              letterSpacing: isCompactShell ? "3px" : "4px",
+            }}
+          >
+            TEAMFORGE
+          </span>
         </div>
 
         {/* Connector bar */}
-        <div style={styles.connectorBar} />
+        <div
+          style={{
+            ...styles.connectorBar,
+            marginRight: isCompactShell ? 28 : 40,
+          }}
+        />
 
         {/* Nav sections */}
         <nav style={styles.nav}>
@@ -176,6 +231,8 @@ function App() {
                   end={item.path === "/"}
                   style={({ isActive }) => ({
                     ...styles.navItem,
+                    padding: isCompactShell ? "6px 10px 6px 14px" : styles.navItem.padding,
+                    fontSize: isCompactShell ? 11 : 12,
                     color: isActive
                       ? "var(--lcars-orange)"
                       : "var(--lcars-lavender)",
@@ -204,7 +261,7 @@ function App() {
           <div style={styles.teamBar}>
             <span style={styles.sectionBarLabel}>CREW STATUS</span>
           </div>
-          {teamPresence.map((p) => (
+          {visiblePresence.map((p) => (
             <div key={p.employeeName} style={styles.teamMember}>
               <Avatar name={p.employeeName} size={22} />
               <span
@@ -232,7 +289,7 @@ function App() {
               <span
                 style={{
                   color: "var(--lcars-lavender)",
-                  fontSize: 12,
+                  fontSize: isCompactShell ? 11 : 12,
                   fontFamily: "var(--font-mono)",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -247,21 +304,53 @@ function App() {
           ))}
         </div>
 
+        <div style={styles.sidebarVersionWrap}>
+          <span style={styles.sidebarVersionLabel}>BUILD</span>
+          <span style={styles.sidebarVersionValue}>v{appVersion}</span>
+        </div>
+
         {/* Bottom bar */}
         <div style={styles.sidebarBottomBar} />
       </aside>
 
       <main style={styles.main}>
         {/* LCARS Top Bar */}
-        <div style={styles.topBar}>
+        <div
+          style={{
+            ...styles.topBar,
+            height: isCompactShell ? 44 : 36,
+            flexWrap: isCompactShell ? ("wrap" as const) : ("nowrap" as const),
+            rowGap: isCompactShell ? 6 : 0,
+          }}
+        >
           <div style={styles.topBarLeft}>
             <div style={styles.topBarEndcap} />
-            <span style={styles.stardateText}>{getStardate()}</span>
+            <span
+              style={{
+                ...styles.stardateText,
+                fontSize: isCompactShell ? 10 : 11,
+                letterSpacing: isCompactShell ? "2px" : "3px",
+                padding: isCompactShell ? "0 10px" : "0 16px",
+              }}
+            >
+              {getStardate()}
+            </span>
             <div style={styles.topBarLine} />
           </div>
-          <div style={styles.topBarRight}>
+          <div
+            style={{
+              ...styles.topBarRight,
+              gap: isCompactShell ? 8 : 12,
+              paddingRight: isCompactShell ? 0 : styles.topBarRight.paddingRight,
+            }}
+          >
             {/* Status indicators */}
-            <div style={styles.statusIndicators}>
+            <div
+              style={{
+                ...styles.statusIndicators,
+                paddingRight: isCompactShell ? 2 : 8,
+              }}
+            >
               <span
                 style={{
                   ...styles.statusDot,
@@ -293,7 +382,16 @@ function App() {
         </div>
 
         {/* Main content */}
-        <div style={styles.content}>
+        <div
+          style={{
+            ...styles.content,
+            padding: isCompactShell
+              ? "20px 16px 24px"
+              : isTightShell
+                ? "24px"
+                : styles.content.padding,
+          }}
+        >
           <Routes>
             <Route path="/" element={<Overview />} />
             <Route path="/timesheet" element={<Timesheet />} />
@@ -322,15 +420,17 @@ const styles: Record<string, React.CSSProperties> = {
   sidebar: {
     width: 240,
     flexShrink: 0,
-    backgroundColor: "var(--bg-sidebar)",
+    background:
+      "linear-gradient(180deg, rgba(10, 10, 26, 0.98) 0%, rgba(6, 6, 18, 0.98) 100%)",
     display: "flex",
     flexDirection: "column",
     borderRight: "2px solid rgba(255, 153, 0, 0.15)",
     overflow: "hidden",
+    boxShadow: "inset -1px 0 0 rgba(153, 153, 204, 0.08)",
   },
   sidebarTopBar: {
     height: 40,
-    background: "var(--lcars-orange)",
+    background: "linear-gradient(90deg, var(--lcars-orange), #ffb347)",
     borderRadius: "0 0 20px 0",
     display: "flex",
     alignItems: "center",
@@ -347,8 +447,8 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase" as const,
   },
   connectorBar: {
-    height: 4,
-    background: "var(--lcars-orange)",
+    height: 5,
+    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
     marginRight: 40,
     flexShrink: 0,
   },
@@ -383,7 +483,7 @@ const styles: Record<string, React.CSSProperties> = {
     textDecoration: "none",
     fontFamily: "'Orbitron', sans-serif",
     letterSpacing: "1.5px",
-    transition: "background-color 0.15s, color 0.15s",
+    transition: "background-color 0.15s, color 0.15s, border-color 0.15s",
   },
   teamSection: {
     marginTop: "auto",
@@ -404,9 +504,31 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 8,
     padding: "4px 12px 4px 16px",
   },
+  sidebarVersionWrap: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: 8,
+    padding: "8px 12px 6px 16px",
+    flexShrink: 0,
+  },
+  sidebarVersionLabel: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    fontWeight: 600,
+    color: "var(--lcars-lavender)",
+    letterSpacing: "1.8px",
+    textTransform: "uppercase" as const,
+  },
+  sidebarVersionValue: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+    fontWeight: 700,
+    color: "var(--lcars-tan)",
+    letterSpacing: "0.08em",
+  },
   sidebarBottomBar: {
     height: 32,
-    background: "var(--lcars-tan)",
+    background: "linear-gradient(90deg, var(--lcars-tan), #d7a677)",
     borderRadius: "0 16px 0 0",
     flexShrink: 0,
   },
@@ -424,6 +546,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
     height: 36,
     gap: 0,
+    marginBottom: 8,
   },
   topBarLeft: {
     display: "flex",

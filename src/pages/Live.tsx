@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useInvoke } from "../hooks/useInvoke";
 import { formatDuration, timeAgo } from "../lib/format";
+import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 import { SkeletonCard } from "../components/ui/Skeleton";
 import Avatar from "../components/ui/Avatar";
 import type { PresenceStatus } from "../lib/types";
@@ -122,19 +123,10 @@ function PresenceCard({ data }: { data: PresenceStatus }) {
 
 const styles: Record<string, React.CSSProperties> = {
   pageTitle: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 20,
-    fontWeight: 700,
-    color: "var(--lcars-orange)",
-    letterSpacing: "4px",
-    textTransform: "uppercase" as const,
+    ...lcarsPageStyles.pageTitle,
     marginBottom: 0,
   },
-  pageTitleBar: {
-    height: 3,
-    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
-    marginBottom: 24,
-  },
+  pageTitleBar: lcarsPageStyles.pageTitleBar,
   lastUpdated: {
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: 11,
@@ -143,12 +135,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   grid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
     gap: 16,
   },
   presenceCard: {
-    background: "rgba(26, 26, 46, 0.6)",
-    borderLeft: "4px solid var(--lcars-lavender)",
+    ...lcarsPageStyles.card,
+    borderLeftColor: "var(--lcars-lavender)",
     padding: 20,
   },
   employeeName: {
@@ -178,13 +170,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     color: "var(--lcars-lavender)",
   },
-  emptyText: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 11,
-    color: "var(--text-quaternary)",
-    letterSpacing: "2px",
-    textTransform: "uppercase" as const,
-  },
+  emptyText: lcarsPageStyles.emptyText,
 };
 
 export default Live;

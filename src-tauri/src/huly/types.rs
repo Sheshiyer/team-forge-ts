@@ -354,6 +354,7 @@ pub struct HulyCalendarEvent {
 pub struct HulySyncReport {
     pub issues_synced: u32,
     pub presence_updated: u32,
+    pub team_cache_items: u32,
 }
 
 // ─── Workspace normalization ──────────────────────────────────

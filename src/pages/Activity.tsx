@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useInvoke } from "../hooks/useInvoke";
 import { timeAgo } from "../lib/format";
+import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import Avatar from "../components/ui/Avatar";
 import type { ActivityItem } from "../lib/types";
@@ -195,25 +196,11 @@ function EngagementHeatmap({ activities }: { activities: ActivityItem[] }) {
 
 const heatmapStyles: Record<string, React.CSSProperties> = {
   wrapper: {
-    background: "rgba(26, 26, 46, 0.6)",
-    borderLeft: "4px solid var(--lcars-orange)",
-    padding: 24,
-    marginBottom: 20,
+    ...lcarsPageStyles.card,
+    borderLeftColor: "var(--lcars-orange)",
   },
-  title: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 12,
-    fontWeight: 600,
-    color: "var(--lcars-orange)",
-    marginBottom: 8,
-    letterSpacing: "2px",
-    textTransform: "uppercase" as const,
-  },
-  divider: {
-    height: 2,
-    background: "rgba(153, 153, 204, 0.15)",
-    marginBottom: 16,
-  },
+  title: lcarsPageStyles.sectionTitle,
+  divider: lcarsPageStyles.sectionDivider,
   cornerCell: {
     padding: "4px 12px 4px 0",
   },
@@ -238,15 +225,14 @@ const heatmapStyles: Record<string, React.CSSProperties> = {
 
 const timelineStyles: Record<string, React.CSSProperties> = {
   wrapper: {
-    background: "rgba(26, 26, 46, 0.6)",
-    borderLeft: "4px solid var(--lcars-cyan)",
-    padding: 24,
-    marginBottom: 20,
+    ...lcarsPageStyles.card,
+    borderLeftColor: "var(--lcars-cyan)",
   },
   headerRow: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "flex-start",
+    flexWrap: "wrap" as const,
     gap: 16,
   },
   title: {
@@ -265,29 +251,33 @@ const timelineStyles: Record<string, React.CSSProperties> = {
     letterSpacing: "1px",
   },
   rangePill: {
-    border: "1px solid rgba(0, 204, 255, 0.25)",
+    border: "1px solid rgba(0, 204, 255, 0.28)",
     color: "var(--lcars-cyan)",
-    padding: "6px 10px",
+    padding: "7px 12px",
     fontFamily: "'Orbitron', sans-serif",
     fontSize: 9,
     letterSpacing: "1.5px",
     whiteSpace: "nowrap",
+    borderRadius: "0 12px 12px 0",
+    background: "rgba(0, 204, 255, 0.08)",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
   },
   divider: {
-    height: 2,
-    background: "rgba(153, 153, 204, 0.15)",
+    ...lcarsPageStyles.sectionDivider,
     margin: "16px 0",
   },
   grid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
     gap: 12,
   },
   dayCard: {
-    background: "rgba(10, 10, 26, 0.55)",
-    border: "1px solid rgba(0, 204, 255, 0.12)",
+    background: "var(--bg-console-soft)",
+    border: "1px solid rgba(0, 204, 255, 0.14)",
     padding: 14,
     minHeight: 170,
+    borderRadius: "0 16px 16px 0",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
   },
   dayHeader: {
     display: "flex",
@@ -459,24 +449,11 @@ function SourceBadge({ source }: { source: string }) {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  pageTitle: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 20,
-    fontWeight: 700,
-    marginBottom: 8,
-    color: "var(--lcars-orange)",
-    letterSpacing: "4px",
-    textTransform: "uppercase" as const,
-  },
-  pageTitleBar: {
-    height: 3,
-    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
-    marginBottom: 24,
-  },
+  pageTitle: lcarsPageStyles.pageTitle,
+  pageTitleBar: lcarsPageStyles.pageTitleBar,
   card: {
-    background: "rgba(26, 26, 46, 0.6)",
-    borderLeft: "4px solid var(--lcars-green)",
-    padding: 24,
+    ...lcarsPageStyles.card,
+    borderLeftColor: "var(--lcars-green)",
   },
   feedItem: {
     padding: "12px 0",
@@ -503,13 +480,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
     marginLeft: 12,
   },
-  emptyText: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 11,
-    color: "var(--text-quaternary)",
-    letterSpacing: "2px",
-    textTransform: "uppercase" as const,
-  },
+  emptyText: lcarsPageStyles.emptyText,
 };
 
 export default Activity;

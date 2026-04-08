@@ -1,14 +1,20 @@
 import { useState, useEffect, useCallback } from "react";
 import { useInvoke } from "../hooks/useInvoke";
+import { useViewportWidth } from "../hooks/useViewportWidth";
+import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import Avatar from "../components/ui/Avatar";
 import type {
   DepartmentView,
+  Employee,
   HolidayView,
   LeaveView,
+  ManualHolidayInput,
+  ManualLeaveInput,
   OrgChartView,
   OrgDepartmentMappingView,
   OrgPersonView,
+  TeamSnapshotView,
 } from "../lib/types";
 
 type RoleField = "headPersonId" | "teamLeadPersonId";
@@ -56,6 +62,30 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
+function SourcePill({ source }: { source: string }) {
+  const isManual = source.toLowerCase() === "manual";
+  const color = isManual ? "var(--lcars-cyan)" : "var(--lcars-lavender)";
+
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "2px 8px",
+        borderRadius: 2,
+        border: `1px solid ${color}`,
+        color,
+        fontSize: 9,
+        fontWeight: 600,
+        fontFamily: "'Orbitron', sans-serif",
+        letterSpacing: "1px",
+        textTransform: "uppercase" as const,
+      }}
+    >
+      {isManual ? "LOCAL" : "HULY"}
+    </span>
+  );
+}
+
 function ProgressBar({ current, total }: { current: number; total: number }) {
   const pct = total > 0 ? Math.min((current / total) * 100, 100) : 0;
   const color =
@@ -98,13 +128,25 @@ function ProgressBar({ current, total }: { current: number; total: number }) {
   );
 }
 
+function parseTeamDate(dateStr: string): Date {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    const [year, month, day] = dateStr.split("-").map(Number);
+    return new Date(year, month - 1, day);
+  }
+
+  return new Date(dateStr);
+}
+
 function isCurrentlyOnLeave(dateFrom: string, dateTo: string): boolean {
   const now = new Date();
-  return now >= new Date(dateFrom) && now <= new Date(dateTo);
+  const start = parseTeamDate(dateFrom);
+  const end = parseTeamDate(dateTo);
+  end.setHours(23, 59, 59, 999);
+  return now >= start && now <= end;
 }
 
 function isToday(dateStr: string): boolean {
-  const d = new Date(dateStr);
+  const d = parseTeamDate(dateStr);
   const now = new Date();
   return (
     d.getFullYear() === now.getFullYear() &&
@@ -114,10 +156,41 @@ function isToday(dateStr: string): boolean {
 }
 
 function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString("en-US", {
+  return parseTeamDate(dateStr).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
+  });
+}
+
+function formatMonthLabel(year: number, monthIndex: number): string {
+  return new Date(year, monthIndex, 1).toLocaleDateString("en-US", {
+    month: "long",
+  });
+}
+
+function yearFromDate(dateStr: string): number {
+  return parseTeamDate(dateStr).getFullYear();
+}
+
+function monthFromDate(dateStr: string): number {
+  return parseTeamDate(dateStr).getMonth();
+}
+
+function formatSnapshotTimestamp(value: string): string {
+  const normalized = value.includes("T") ? value : value.replace(" ", "T");
+  const date = new Date(normalized);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
   });
 }
 
@@ -315,8 +388,27 @@ function CrewCard({
   );
 }
 
+const EMPTY_LEAVE_FORM: ManualLeaveInput = {
+  id: null,
+  employeeId: "",
+  leaveType: "Vacation",
+  dateFrom: "",
+  dateTo: "",
+  status: "Approved",
+  note: "",
+};
+
+const EMPTY_HOLIDAY_FORM: ManualHolidayInput = {
+  id: null,
+  title: "",
+  date: "",
+  note: "",
+};
+
 function Team() {
   const api = useInvoke();
+  const viewportWidth = useViewportWidth();
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [departments, setDepartments] = useState<DepartmentView[]>([]);
   const [orgChart, setOrgChart] = useState<OrgChartView | null>(null);
   const [draftDepartments, setDraftDepartments] = useState<
@@ -331,42 +423,112 @@ function Team() {
   const [leaves, setLeaves] = useState<LeaveView[]>([]);
   const [holidays, setHolidays] = useState<HolidayView[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [snapshotMessage, setSnapshotMessage] = useState<string | null>(null);
+  const [cacheUpdatedAt, setCacheUpdatedAt] = useState<string | null>(null);
+  const [leaveForm, setLeaveForm] = useState<ManualLeaveInput>(EMPTY_LEAVE_FORM);
+  const [holidayForm, setHolidayForm] =
+    useState<ManualHolidayInput>(EMPTY_HOLIDAY_FORM);
+  const [leaveSaving, setLeaveSaving] = useState(false);
+  const [holidaySaving, setHolidaySaving] = useState(false);
+  const [teamActionMessage, setTeamActionMessage] = useState<string | null>(null);
+  const [selectedHolidayYear, setSelectedHolidayYear] = useState<number>(
+    new Date().getFullYear()
+  );
+  const isCompactLayout = viewportWidth < 1180;
+  const isTightForms = viewportWidth < 920;
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setOrgMessage(null);
+  const applySnapshot = useCallback((snapshot: TeamSnapshotView) => {
+    setDepartments(snapshot.departments);
+    setLeaves(snapshot.leaves);
+    setHolidays(snapshot.holidays);
+    setCacheUpdatedAt(snapshot.cacheUpdatedAt);
 
-    const [departmentResult, leaveResult, holidayResult, orgChartResult] =
-      await Promise.allSettled([
-        api.getDepartments(),
-        api.getLeaveRequests(),
-        api.getHolidays(),
-        api.getOrgChart(),
-      ]);
-
-    if (departmentResult.status === "fulfilled") {
-      setDepartments(departmentResult.value);
-    }
-    if (leaveResult.status === "fulfilled") {
-      setLeaves(leaveResult.value);
-    }
-    if (holidayResult.status === "fulfilled") {
-      setHolidays(holidayResult.value);
-    }
-    if (orgChartResult.status === "fulfilled") {
-      const normalized = normalizeDraftDepartments(orgChartResult.value.departments);
-      setOrgChart(orgChartResult.value);
+    if (snapshot.orgChart) {
+      const normalized = normalizeDraftDepartments(snapshot.orgChart.departments);
+      setOrgChart(snapshot.orgChart);
       setDraftDepartments(normalized);
       setDepartmentOrder(normalized.map((department) => department.id));
+      setOrgMessage(null);
     } else {
       setOrgChart(null);
       setDraftDepartments([]);
       setDepartmentOrder([]);
-      setOrgMessage(`Error: ${String(orgChartResult.reason)}`);
+      setOrgMessage(
+        snapshot.hulyError
+          ? `Error: ${String(snapshot.hulyError)}`
+          : "HULY ORG CHART DATA IS NOT AVAILABLE"
+      );
+    }
+  }, []);
+
+  const load = useCallback(async () => {
+    let cachedSnapshot: TeamSnapshotView | null = null;
+
+    setLoading(true);
+    setRefreshing(true);
+    setSnapshotMessage(null);
+    setTeamActionMessage(null);
+    setOrgMessage(null);
+
+    try {
+      const roster = await api.getEmployees();
+      setEmployees(roster);
+      setLeaveForm((current) =>
+        current.employeeId || roster.length === 0
+          ? current
+          : { ...current, employeeId: roster.find((item) => item.isActive)?.id ?? roster[0].id }
+      );
+    } catch (err) {
+      setEmployees([]);
+      setSnapshotMessage(`Team roster read failed: ${String(err)}`);
     }
 
-    setLoading(false);
-  }, [api]);
+    try {
+      cachedSnapshot = await api.getTeamSnapshot();
+      applySnapshot(cachedSnapshot);
+
+      if (cachedSnapshot.cacheUpdatedAt) {
+        setSnapshotMessage("Showing cached Team data while live Huly refresh runs.");
+      } else {
+        setSnapshotMessage("No Team cache yet. Hydrating Team data from Huly.");
+      }
+    } catch (err) {
+      setDepartments([]);
+      setLeaves([]);
+      setHolidays([]);
+      setOrgChart(null);
+      setDraftDepartments([]);
+      setDepartmentOrder([]);
+      setCacheUpdatedAt(null);
+      setOrgMessage(null);
+      setSnapshotMessage(`Team cache read failed: ${String(err)}`);
+    } finally {
+      setLoading(false);
+    }
+
+    try {
+      const refreshed = await api.refreshTeamSnapshot();
+      applySnapshot(refreshed);
+      if (refreshed.hulyError) {
+        setSnapshotMessage(
+          `Live Huly refresh failed. Showing cached Team data. Details: ${refreshed.hulyError}`
+        );
+      } else {
+        setSnapshotMessage("Live Team refresh complete.");
+      }
+    } catch (err) {
+      if (cachedSnapshot?.cacheUpdatedAt) {
+        setSnapshotMessage(
+          `Live Huly refresh failed. Showing cached Team data. Details: ${String(err)}`
+        );
+      } else {
+        setSnapshotMessage(`Live Team refresh failed: ${String(err)}`);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, [api, applySnapshot]);
 
   useEffect(() => {
     load();
@@ -381,6 +543,154 @@ function Team() {
       return [...retained, ...missing];
     });
   }, [draftDepartments]);
+
+  const activeEmployees = employees.filter((employee) => employee.isActive);
+  const holidayYears = Array.from(
+    new Set([
+      selectedHolidayYear,
+      new Date().getFullYear(),
+      ...holidays.map((holiday) => yearFromDate(holiday.date)),
+    ])
+  ).sort((left, right) => left - right);
+  const yearHolidays = holidays.filter(
+    (holiday) => yearFromDate(holiday.date) === selectedHolidayYear
+  );
+  const holidayMonths = Array.from({ length: 12 }, (_, monthIndex) => ({
+    monthIndex,
+    label: formatMonthLabel(selectedHolidayYear, monthIndex),
+    holidays: yearHolidays.filter(
+      (holiday) => monthFromDate(holiday.date) === monthIndex
+    ),
+  }));
+
+  function resetLeaveForm() {
+    setLeaveForm({
+      ...EMPTY_LEAVE_FORM,
+      employeeId: activeEmployees[0]?.id ?? "",
+    });
+  }
+
+  function resetHolidayForm() {
+    setHolidayForm(EMPTY_HOLIDAY_FORM);
+  }
+
+  useEffect(() => {
+    if (activeEmployees.length === 0) return;
+
+    setLeaveForm((current) => {
+      if (
+        current.employeeId &&
+        activeEmployees.some((employee) => employee.id === current.employeeId)
+      ) {
+        return current;
+      }
+
+      return { ...current, employeeId: activeEmployees[0].id };
+    });
+  }, [activeEmployees]);
+
+  function beginEditLeave(leave: LeaveView) {
+    setLeaveForm({
+      id: leave.id,
+      employeeId: leave.employeeId ?? "",
+      leaveType: leave.leaveType,
+      dateFrom: leave.dateFrom,
+      dateTo: leave.dateTo,
+      status: leave.status,
+      note: leave.note ?? "",
+    });
+    setTeamActionMessage(`Editing local leave entry for ${leave.employeeName}.`);
+  }
+
+  function beginEditHoliday(holiday: HolidayView) {
+    setHolidayForm({
+      id: holiday.id,
+      title: holiday.title,
+      date: holiday.date,
+      note: holiday.note ?? "",
+    });
+    setSelectedHolidayYear(yearFromDate(holiday.date));
+    setTeamActionMessage(`Editing local holiday ${holiday.title}.`);
+  }
+
+  async function handleSaveLeave(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLeaveSaving(true);
+    setTeamActionMessage(null);
+
+    try {
+      const snapshot = await api.saveManualLeave({
+        ...leaveForm,
+        note: leaveForm.note?.trim() || null,
+      });
+      applySnapshot(snapshot);
+      resetLeaveForm();
+      setTeamActionMessage("Local leave tracker updated.");
+    } catch (err) {
+      setTeamActionMessage(`Leave save failed: ${String(err)}`);
+    } finally {
+      setLeaveSaving(false);
+    }
+  }
+
+  async function handleDeleteLeave(id: string) {
+    setLeaveSaving(true);
+    setTeamActionMessage(null);
+
+    try {
+      const snapshot = await api.deleteManualLeave(id);
+      applySnapshot(snapshot);
+      if (leaveForm.id === id) {
+        resetLeaveForm();
+      }
+      setTeamActionMessage("Local leave entry removed.");
+    } catch (err) {
+      setTeamActionMessage(`Leave delete failed: ${String(err)}`);
+    } finally {
+      setLeaveSaving(false);
+    }
+  }
+
+  async function handleSaveHoliday(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setHolidaySaving(true);
+    setTeamActionMessage(null);
+
+    try {
+      const snapshot = await api.saveManualHoliday({
+        ...holidayForm,
+        note: holidayForm.note?.trim() || null,
+      });
+      applySnapshot(snapshot);
+      if (holidayForm.date) {
+        setSelectedHolidayYear(yearFromDate(holidayForm.date));
+      }
+      resetHolidayForm();
+      setTeamActionMessage("Holiday calendar updated.");
+    } catch (err) {
+      setTeamActionMessage(`Holiday save failed: ${String(err)}`);
+    } finally {
+      setHolidaySaving(false);
+    }
+  }
+
+  async function handleDeleteHoliday(id: string) {
+    setHolidaySaving(true);
+    setTeamActionMessage(null);
+
+    try {
+      const snapshot = await api.deleteManualHoliday(id);
+      applySnapshot(snapshot);
+      if (holidayForm.id === id) {
+        resetHolidayForm();
+      }
+      setTeamActionMessage("Local holiday removed.");
+    } catch (err) {
+      setTeamActionMessage(`Holiday delete failed: ${String(err)}`);
+    } finally {
+      setHolidaySaving(false);
+    }
+  }
 
   function clearDragState() {
     setDragPayload(null);
@@ -564,13 +874,52 @@ function Team() {
   const dragPersonId = dragPayload?.kind === "person" ? dragPayload.personId : null;
   const dragDepartmentId =
     dragPayload?.kind === "department" ? dragPayload.departmentId : null;
+  const orgWorkspaceStyle = {
+    ...styles.orgWorkspace,
+    gridTemplateColumns: isCompactLayout ? "1fr" : styles.orgWorkspace.gridTemplateColumns,
+  };
+  const teamRailStyle = {
+    ...styles.teamRail,
+    position: isCompactLayout ? "static" : styles.teamRail.position,
+    top: isCompactLayout ? undefined : styles.teamRail.top,
+  };
+  const editorGridStyle = {
+    ...styles.editorGrid,
+    gridTemplateColumns: isTightForms ? "1fr" : styles.editorGrid.gridTemplateColumns,
+  };
+  const holidayCalendarGridStyle = {
+    ...styles.yearCalendarGrid,
+    gridTemplateColumns: isCompactLayout
+      ? "repeat(auto-fit, minmax(180px, 1fr))"
+      : styles.yearCalendarGrid.gridTemplateColumns,
+  };
 
   return (
     <div>
       <h1 style={styles.pageTitle}>TEAM</h1>
       <div style={styles.pageTitleBar} />
+      {(snapshotMessage || cacheUpdatedAt || refreshing) && (
+        <div style={styles.statusBanner}>
+          <div>
+            <div style={styles.statusBannerLabel}>
+              {refreshing ? "SYNCING SQLITE CACHE" : "TEAM CACHE"}
+            </div>
+            {snapshotMessage ? (
+              <div style={styles.statusBannerText}>{snapshotMessage}</div>
+            ) : null}
+          </div>
+          {cacheUpdatedAt ? (
+            <div style={styles.statusBannerMeta}>
+              LAST CACHE {formatSnapshotTimestamp(cacheUpdatedAt)}
+            </div>
+          ) : null}
+        </div>
+      )}
+      {teamActionMessage ? (
+        <div style={styles.actionBanner}>{teamActionMessage}</div>
+      ) : null}
 
-      <div style={styles.card}>
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
         <h2 style={styles.sectionTitle}>ORG CHART MAPPING</h2>
         <div style={styles.sectionDivider} />
 
@@ -636,13 +985,13 @@ function Team() {
               <div style={styles.helperText}>
                 DRAG CREW FROM THE LEFT RAIL INTO HEAD, TEAM LEAD, OR MEMBER DROP
                 ZONES. DRAG A DEPARTMENT CARD BY ITS HEADER TO REORDER THE BENTO
-                GRID. PEOPLE MATCHING THE IGNORED EMAILS LIST IN SETTINGS ARE
-                EXCLUDED FROM THIS MAPPING VIEW.
+                GRID. PEOPLE EXCLUDED IN SETTINGS ARE HIDDEN FROM THIS MAPPING
+                VIEW.
               </div>
             </div>
 
-            <div style={styles.orgWorkspace}>
-              <aside style={styles.teamRail}>
+            <div style={orgWorkspaceStyle}>
+              <aside style={teamRailStyle}>
                 <div style={styles.teamRailHeader}>
                   <div style={styles.teamRailTitle}>CREW DIRECTORY</div>
                   <div style={styles.teamRailMeta}>
@@ -815,7 +1164,7 @@ function Team() {
                         }}
                         style={{
                           ...styles.bentoCard,
-                          ...(spansWide ? styles.bentoCardWide : null),
+                          ...(spansWide && !isCompactLayout ? styles.bentoCardWide : null),
                           borderTop: `3px solid ${accent}`,
                           opacity: isDepartmentDragging ? 0.6 : 1,
                           boxShadow:
@@ -1048,20 +1397,25 @@ function Team() {
         )}
       </div>
 
-      <div style={styles.card}>
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-peach)" }}>
         <h2 style={styles.sectionTitle}>DEPARTMENT STRUCTURE</h2>
         <div style={styles.sectionDivider} />
         {departments.length === 0 ? (
           <p style={styles.emptyText}>NO DEPARTMENT DATA AVAILABLE</p>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+              gap: 12,
+            }}
+          >
             {departments.map((dept) => (
               <div
                 key={dept.id}
                 style={{
-                  background: "rgba(26, 26, 46, 0.8)",
-                  borderLeft: "3px solid var(--lcars-peach)",
-                  padding: 16,
+                  ...lcarsPageStyles.subtleCard,
+                  borderLeftColor: "var(--lcars-peach)",
                 }}
               >
                 <div
@@ -1103,7 +1457,7 @@ function Team() {
                       color: "var(--lcars-lavender)",
                       background: "rgba(153, 153, 204, 0.1)",
                       padding: "2px 8px",
-                      borderRadius: 2,
+                      borderRadius: "0 10px 10px 0",
                     }}
                   >
                     {dept.memberCount} CREW
@@ -1116,9 +1470,144 @@ function Team() {
         )}
       </div>
 
-      <div style={styles.card}>
-        <h2 style={styles.sectionTitle}>LEAVE CALENDAR</h2>
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-green)" }}>
+        <div style={styles.sectionHeaderRow}>
+          <div>
+            <h2 style={styles.sectionTitle}>LEAVE TRACKER</h2>
+            <p style={styles.sectionHelperText}>
+              Add or edit local leave entries here. Huly leave rows remain
+              visible but read-only.
+            </p>
+          </div>
+        </div>
         <div style={styles.sectionDivider} />
+        <form onSubmit={handleSaveLeave} style={editorGridStyle}>
+          <div style={styles.field}>
+            <label style={styles.label}>Crew Member</label>
+            <select
+              value={leaveForm.employeeId}
+              onChange={(event) =>
+                setLeaveForm((current) => ({
+                  ...current,
+                  employeeId: event.target.value,
+                }))
+              }
+              style={styles.input}
+              disabled={leaveSaving || activeEmployees.length === 0}
+            >
+              {activeEmployees.length === 0 ? (
+                <option value="">No active crew available</option>
+              ) : null}
+              {activeEmployees.map((employee) => (
+                <option key={employee.id} value={employee.id}>
+                  {employee.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div style={styles.field}>
+            <label style={styles.label}>Leave Type</label>
+            <input
+              value={leaveForm.leaveType}
+              onChange={(event) =>
+                setLeaveForm((current) => ({
+                  ...current,
+                  leaveType: event.target.value,
+                }))
+              }
+              placeholder="Vacation"
+              style={styles.input}
+              disabled={leaveSaving}
+            />
+          </div>
+          <div style={styles.field}>
+            <label style={styles.label}>From</label>
+            <input
+              type="date"
+              value={leaveForm.dateFrom}
+              onChange={(event) =>
+                setLeaveForm((current) => ({
+                  ...current,
+                  dateFrom: event.target.value,
+                }))
+              }
+              style={styles.input}
+              disabled={leaveSaving}
+            />
+          </div>
+          <div style={styles.field}>
+            <label style={styles.label}>To</label>
+            <input
+              type="date"
+              value={leaveForm.dateTo}
+              onChange={(event) =>
+                setLeaveForm((current) => ({
+                  ...current,
+                  dateTo: event.target.value,
+                }))
+              }
+              style={styles.input}
+              disabled={leaveSaving}
+            />
+          </div>
+          <div style={styles.field}>
+            <label style={styles.label}>Status</label>
+            <select
+              value={leaveForm.status}
+              onChange={(event) =>
+                setLeaveForm((current) => ({
+                  ...current,
+                  status: event.target.value,
+                }))
+              }
+              style={styles.input}
+              disabled={leaveSaving}
+            >
+              <option value="Approved">Approved</option>
+              <option value="Pending">Pending</option>
+              <option value="Rejected">Rejected</option>
+            </select>
+          </div>
+          <div style={{ ...styles.field, gridColumn: "1 / -1" }}>
+            <label style={styles.label}>Note</label>
+            <textarea
+              value={leaveForm.note ?? ""}
+              onChange={(event) =>
+                setLeaveForm((current) => ({
+                  ...current,
+                  note: event.target.value,
+                }))
+              }
+              placeholder="Optional context for the leave entry"
+              style={{ ...styles.input, minHeight: 76, resize: "vertical" }}
+              disabled={leaveSaving}
+            />
+          </div>
+          <div style={styles.buttonRow}>
+            <button
+              type="submit"
+              disabled={leaveSaving || activeEmployees.length === 0}
+              style={{
+                ...styles.primaryButton,
+                opacity: leaveSaving || activeEmployees.length === 0 ? 0.55 : 1,
+              }}
+            >
+              {leaveSaving
+                ? "Saving..."
+                : leaveForm.id
+                  ? "Update Leave"
+                  : "Add Leave"}
+            </button>
+            <button
+              type="button"
+              onClick={resetLeaveForm}
+              style={styles.ghostButton}
+              disabled={leaveSaving}
+            >
+              Clear
+            </button>
+          </div>
+        </form>
         {leaves.length === 0 ? (
           <p style={styles.emptyText}>NO LEAVE REQUESTS FOUND</p>
         ) : (
@@ -1126,19 +1615,21 @@ function Team() {
             <thead>
               <tr>
                 <th style={styles.th}>CREW MEMBER</th>
+                <th style={styles.th}>SOURCE</th>
                 <th style={styles.th}>TYPE</th>
                 <th style={styles.th}>FROM</th>
                 <th style={styles.th}>TO</th>
                 <th style={styles.th}>DAYS</th>
                 <th style={styles.th}>STATUS</th>
+                <th style={styles.th}>ACTIONS</th>
               </tr>
             </thead>
             <tbody>
-              {leaves.map((leave, idx) => {
+              {leaves.map((leave) => {
                 const onLeave = isCurrentlyOnLeave(leave.dateFrom, leave.dateTo);
                 return (
                   <tr
-                    key={`${leave.employeeName}-${idx}`}
+                    key={leave.id}
                     style={{
                       cursor: "default",
                       backgroundColor: onLeave
@@ -1149,9 +1640,14 @@ function Team() {
                     <td style={styles.td}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <Avatar name={leave.employeeName} size={24} />
-                        <span style={{ color: "var(--lcars-orange)" }}>
-                          {leave.employeeName}
-                        </span>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ color: "var(--lcars-orange)" }}>
+                            {leave.employeeName}
+                          </div>
+                          {leave.note ? (
+                            <div style={styles.inlineNote}>{leave.note}</div>
+                          ) : null}
+                        </div>
                         {onLeave && (
                           <span
                             style={{
@@ -1170,6 +1666,9 @@ function Team() {
                         )}
                       </div>
                     </td>
+                    <td style={styles.td}>
+                      <SourcePill source={leave.source} />
+                    </td>
                     <td style={{ ...styles.td, textTransform: "uppercase" as const }}>
                       {leave.leaveType}
                     </td>
@@ -1179,6 +1678,29 @@ function Team() {
                     <td style={styles.td}>
                       <StatusPill status={leave.status} />
                     </td>
+                    <td style={styles.td}>
+                      {leave.editable ? (
+                        <div style={styles.inlineActionRow}>
+                          <button
+                            type="button"
+                            onClick={() => beginEditLeave(leave)}
+                            style={styles.inlineActionButton}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteLeave(leave.id)}
+                            style={styles.inlineActionButton}
+                            disabled={leaveSaving}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ) : (
+                        <span style={styles.rowMetaText}>SYNCED</span>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
@@ -1187,16 +1709,119 @@ function Team() {
         )}
       </div>
 
-      <div style={styles.card}>
-        <h2 style={styles.sectionTitle}>UPCOMING HOLIDAYS</h2>
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-orange)" }}>
+        <div style={styles.sectionHeaderRow}>
+          <div>
+            <h2 style={styles.sectionTitle}>HOLIDAY TRACKER</h2>
+            <p style={styles.sectionHelperText}>
+              Maintain a local yearly holiday calendar here. Huly holidays stay
+              read-only and merge into the same Team view.
+            </p>
+          </div>
+        </div>
         <div style={styles.sectionDivider} />
+        <form onSubmit={handleSaveHoliday} style={editorGridStyle}>
+          <div style={styles.field}>
+            <label style={styles.label}>Holiday Name</label>
+            <input
+              value={holidayForm.title}
+              onChange={(event) =>
+                setHolidayForm((current) => ({
+                  ...current,
+                  title: event.target.value,
+                }))
+              }
+              placeholder="Republic Day"
+              style={styles.input}
+              disabled={holidaySaving}
+            />
+          </div>
+          <div style={styles.field}>
+            <label style={styles.label}>Date</label>
+            <input
+              type="date"
+              value={holidayForm.date}
+              onChange={(event) =>
+                setHolidayForm((current) => ({
+                  ...current,
+                  date: event.target.value,
+                }))
+              }
+              style={styles.input}
+              disabled={holidaySaving}
+            />
+          </div>
+          <div style={{ ...styles.field, gridColumn: "1 / -1" }}>
+            <label style={styles.label}>Note</label>
+            <textarea
+              value={holidayForm.note ?? ""}
+              onChange={(event) =>
+                setHolidayForm((current) => ({
+                  ...current,
+                  note: event.target.value,
+                }))
+              }
+              placeholder="Optional note or office-closure context"
+              style={{ ...styles.input, minHeight: 76, resize: "vertical" }}
+              disabled={holidaySaving}
+            />
+          </div>
+          <div style={styles.buttonRow}>
+            <button
+              type="submit"
+              disabled={holidaySaving}
+              style={{
+                ...styles.primaryButton,
+                opacity: holidaySaving ? 0.55 : 1,
+              }}
+            >
+              {holidaySaving
+                ? "Saving..."
+                : holidayForm.id
+                  ? "Update Holiday"
+                  : "Add Holiday"}
+            </button>
+            <button
+              type="button"
+              onClick={resetHolidayForm}
+              style={styles.ghostButton}
+              disabled={holidaySaving}
+            >
+              Clear
+            </button>
+          </div>
+        </form>
+        <div style={styles.yearToolbar}>
+          <div style={styles.yearToolbarLabel}>Year View</div>
+          <select
+            value={selectedHolidayYear}
+            onChange={(event) => setSelectedHolidayYear(Number(event.target.value))}
+            style={{ ...styles.input, width: 180 }}
+          >
+            {holidayYears.map((year) => (
+              <option key={year} value={year}>
+                {year}
+              </option>
+            ))}
+          </select>
+          <div style={styles.rowMetaText}>
+            {yearHolidays.length} HOLIDAY{yearHolidays.length === 1 ? "" : "S"} IN{" "}
+            {selectedHolidayYear}
+          </div>
+        </div>
         {holidays.length === 0 ? (
           <p style={styles.emptyText}>NO HOLIDAYS CONFIGURED</p>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-            {holidays.map((holiday, idx) => (
+          <>
+            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+              {yearHolidays.length === 0 ? (
+                <p style={styles.emptyText}>
+                  NO HOLIDAYS SAVED FOR {selectedHolidayYear}
+                </p>
+              ) : (
+                yearHolidays.map((holiday) => (
               <div
-                key={idx}
+                key={holiday.id}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -1208,45 +1833,107 @@ function Team() {
                   borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span
-                    style={{
-                      fontSize: 13,
-                      color: "var(--lcars-orange)",
-                      fontWeight: 500,
-                    }}
-                  >
-                    {holiday.title.toUpperCase()}
-                  </span>
-                  {isToday(holiday.date) && (
-                    <span
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div>
+                    <div
                       style={{
-                        fontFamily: "'Orbitron', sans-serif",
-                        fontSize: 8,
-                        fontWeight: 600,
-                        color: "var(--lcars-cyan)",
-                        border: "1px solid var(--lcars-cyan)",
-                        padding: "1px 6px",
-                        borderRadius: 2,
-                        letterSpacing: "1px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        marginBottom: holiday.note ? 4 : 0,
                       }}
                     >
-                      TODAY
-                    </span>
+                      <span
+                        style={{
+                          fontSize: 13,
+                          color: "var(--lcars-orange)",
+                          fontWeight: 500,
+                        }}
+                      >
+                        {holiday.title.toUpperCase()}
+                      </span>
+                      <SourcePill source={holiday.source} />
+                      {isToday(holiday.date) && (
+                        <span
+                          style={{
+                            fontFamily: "'Orbitron', sans-serif",
+                            fontSize: 8,
+                            fontWeight: 600,
+                            color: "var(--lcars-cyan)",
+                            border: "1px solid var(--lcars-cyan)",
+                            padding: "1px 6px",
+                            borderRadius: 2,
+                            letterSpacing: "1px",
+                          }}
+                        >
+                          TODAY
+                        </span>
+                      )}
+                    </div>
+                    {holiday.note ? (
+                      <div style={styles.inlineNote}>{holiday.note}</div>
+                    ) : null}
+                  </div>
+                </div>
+                <div style={styles.inlineActionRow}>
+                  <span
+                    style={{
+                      fontSize: 12,
+                      fontFamily: "'JetBrains Mono', monospace",
+                      color: "var(--lcars-lavender)",
+                    }}
+                  >
+                    {formatDate(holiday.date)}
+                  </span>
+                  {holiday.editable ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => beginEditHoliday(holiday)}
+                        style={styles.inlineActionButton}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteHoliday(holiday.id)}
+                        style={styles.inlineActionButton}
+                        disabled={holidaySaving}
+                      >
+                        Remove
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+                ))
+              )}
+            </div>
+            <div style={holidayCalendarGridStyle}>
+              {holidayMonths.map((month) => (
+                <div key={month.monthIndex} style={styles.monthCard}>
+                  <div style={styles.monthCardHeader}>{month.label}</div>
+                  {month.holidays.length === 0 ? (
+                    <div style={styles.monthCardEmpty}>No holidays</div>
+                  ) : (
+                    <div style={styles.monthHolidayList}>
+                      {month.holidays.map((holiday) => (
+                        <div key={holiday.id} style={styles.monthHolidayItem}>
+                          <span style={styles.monthHolidayDate}>
+                            {parseTeamDate(holiday.date).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                            })}
+                          </span>
+                          <span style={styles.monthHolidayTitle}>{holiday.title}</span>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
-                <span
-                  style={{
-                    fontSize: 12,
-                    fontFamily: "'JetBrains Mono', monospace",
-                    color: "var(--lcars-lavender)",
-                  }}
-                >
-                  {formatDate(holiday.date)}
-                </span>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -1254,40 +1941,66 @@ function Team() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  pageTitle: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 20,
-    fontWeight: 700,
-    marginBottom: 8,
-    color: "var(--lcars-orange)",
-    letterSpacing: "4px",
-    textTransform: "uppercase" as const,
-  },
-  pageTitleBar: {
-    height: 3,
-    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
-    marginBottom: 24,
-  },
-  card: {
-    background: "rgba(26, 26, 46, 0.6)",
-    borderLeft: "4px solid var(--lcars-peach)",
-    padding: 24,
+  pageTitle: lcarsPageStyles.pageTitle,
+  pageTitleBar: lcarsPageStyles.pageTitleBar,
+  statusBanner: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    flexWrap: "wrap" as const,
+    gap: 16,
     marginBottom: 20,
+    padding: "12px 16px",
+    background: "var(--bg-console-soft)",
+    border: "1px solid rgba(153, 153, 204, 0.16)",
+    borderLeft: "8px solid var(--lcars-cyan)",
+    borderRadius: "0 18px 18px 0",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
   },
-  sectionTitle: {
+  statusBannerLabel: {
     fontFamily: "'Orbitron', sans-serif",
-    fontSize: 12,
-    fontWeight: 600,
-    color: "var(--lcars-orange)",
-    marginBottom: 8,
-    letterSpacing: "2px",
+    fontSize: 10,
+    color: "var(--lcars-cyan)",
+    letterSpacing: "1.6px",
     textTransform: "uppercase" as const,
+    marginBottom: 4,
   },
-  sectionDivider: {
-    height: 2,
-    background: "rgba(153, 153, 204, 0.15)",
-    marginBottom: 16,
+  statusBannerText: {
+    fontSize: 12,
+    color: "var(--lcars-tan)",
+    lineHeight: 1.5,
   },
+  statusBannerMeta: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-lavender)",
+    whiteSpace: "nowrap" as const,
+  },
+  actionBanner: {
+    marginBottom: 20,
+    padding: "10px 14px",
+    background: "var(--bg-console-soft)",
+    border: "1px solid rgba(0, 204, 255, 0.18)",
+    borderLeft: "8px solid var(--lcars-cyan)",
+    color: "var(--lcars-tan)",
+    fontSize: 12,
+    lineHeight: 1.5,
+    borderRadius: "0 16px 16px 0",
+  },
+  card: lcarsPageStyles.card,
+  sectionTitle: lcarsPageStyles.sectionTitle,
+  sectionHeaderRow: {
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    flexWrap: "wrap" as const,
+    gap: 16,
+  },
+  sectionHelperText: {
+    ...lcarsPageStyles.helperText,
+    marginBottom: 8,
+  },
+  sectionDivider: lcarsPageStyles.sectionDivider,
   field: {
     marginBottom: 14,
   },
@@ -1300,98 +2013,126 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "1.5px",
     textTransform: "uppercase" as const,
   },
-  input: {
-    width: "100%",
-    background: "rgba(10, 10, 20, 0.75)",
-    border: "1px solid rgba(153, 153, 204, 0.18)",
-    color: "var(--lcars-tan)",
-    padding: "10px 12px",
-    fontSize: 13,
-    fontFamily: "'JetBrains Mono', monospace",
-    outline: "none",
+  input: lcarsPageStyles.input,
+  editorGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gap: 12,
+    marginBottom: 18,
+    alignItems: "end",
   },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse" as const,
-    fontSize: 13,
-  },
-  th: {
-    textAlign: "left" as const,
+  table: lcarsPageStyles.table,
+  th: lcarsPageStyles.th,
+  td: lcarsPageStyles.td,
+  tdMono: lcarsPageStyles.tdMono,
+  emptyText: lcarsPageStyles.emptyText,
+  buttonRow: lcarsPageStyles.buttonRow,
+  primaryButton: lcarsPageStyles.primaryButton,
+  ghostButton: lcarsPageStyles.ghostButton,
+  helperText: lcarsPageStyles.helperText,
+  inlineNote: {
     color: "var(--lcars-lavender)",
-    fontFamily: "'Orbitron', sans-serif",
-    fontWeight: 500,
-    padding: "8px 12px",
-    borderBottom: "1px solid rgba(255, 153, 0, 0.15)",
-    fontSize: 10,
-    textTransform: "uppercase" as const,
-    letterSpacing: "1.5px",
-    background: "rgba(255, 153, 0, 0.05)",
-  },
-  td: {
-    padding: "10px 12px",
-    color: "var(--lcars-tan)",
-    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
-  },
-  tdMono: {
-    padding: "10px 12px",
-    color: "var(--lcars-lavender)",
-    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
-    fontFamily: "'JetBrains Mono', monospace",
-  },
-  emptyText: {
-    fontFamily: "'Orbitron', sans-serif",
     fontSize: 11,
-    color: "var(--text-quaternary)",
-    letterSpacing: "2px",
-    textTransform: "uppercase" as const,
+    lineHeight: 1.45,
   },
-  buttonRow: {
+  inlineActionRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flexWrap: "wrap" as const,
+  },
+  inlineActionButton: {
+    background: "transparent",
+    border: "1px solid rgba(153, 153, 204, 0.24)",
+    color: "var(--lcars-lavender)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    letterSpacing: "1px",
+    padding: "5px 8px",
+    cursor: "pointer",
+  },
+  rowMetaText: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    color: "var(--lcars-lavender)",
+    letterSpacing: "1px",
+  },
+  yearToolbar: {
     display: "flex",
     alignItems: "center",
     gap: 12,
     flexWrap: "wrap" as const,
-    marginBottom: 12,
+    marginBottom: 16,
   },
-  primaryButton: {
-    background: "var(--lcars-orange)",
-    color: "#111",
-    border: "none",
-    padding: "10px 16px",
+  yearToolbarLabel: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    color: "var(--lcars-orange)",
+    letterSpacing: "1.4px",
+    textTransform: "uppercase" as const,
+  },
+  yearCalendarGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: 12,
+    marginTop: 18,
+  },
+  monthCard: {
+    background: "var(--bg-console-soft)",
+    border: "1px solid rgba(153, 153, 204, 0.14)",
+    padding: 14,
+    minHeight: 150,
+    borderRadius: "0 18px 18px 0",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+  },
+  monthCardHeader: {
     fontFamily: "'Orbitron', sans-serif",
     fontSize: 11,
-    fontWeight: 600,
-    letterSpacing: "1px",
-    cursor: "pointer",
+    color: "var(--lcars-orange)",
+    letterSpacing: "1.4px",
+    marginBottom: 10,
+    textTransform: "uppercase" as const,
   },
-  ghostButton: {
-    background: "transparent",
-    color: "var(--lcars-lavender)",
-    border: "1px solid rgba(153, 153, 204, 0.25)",
-    padding: "10px 16px",
+  monthCardEmpty: {
+    color: "var(--text-quaternary)",
+    fontSize: 11,
     fontFamily: "'Orbitron', sans-serif",
-    fontSize: 11,
-    fontWeight: 600,
     letterSpacing: "1px",
-    cursor: "pointer",
+    textTransform: "uppercase" as const,
   },
-  helperText: {
+  monthHolidayList: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 8,
+  },
+  monthHolidayItem: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: 8,
+  },
+  monthHolidayDate: {
+    color: "var(--lcars-cyan)",
+    fontFamily: "'JetBrains Mono', monospace",
     fontSize: 11,
-    color: "var(--lcars-lavender)",
-    lineHeight: 1.6,
-    letterSpacing: "0.45px",
+    whiteSpace: "nowrap" as const,
+  },
+  monthHolidayTitle: {
+    color: "var(--lcars-tan)",
+    fontSize: 12,
+    lineHeight: 1.4,
   },
   orgTopBar: {
     marginBottom: 20,
   },
   orgStatGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
     gap: 12,
     marginBottom: 16,
   },
   orgStatCard: {
-    background: "rgba(10, 10, 20, 0.72)",
-    border: "1px solid rgba(153, 153, 204, 0.12)",
+    ...lcarsPageStyles.subtleCard,
+    borderLeftColor: "var(--lcars-orange)",
     padding: 14,
   },
   orgStatValue: {
@@ -1419,9 +2160,11 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column" as const,
     gap: 14,
-    background: "rgba(10, 10, 20, 0.82)",
+    background: "var(--bg-console-soft)",
     border: "1px solid rgba(153, 153, 204, 0.12)",
     padding: 16,
+    borderRadius: "0 18px 18px 0",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
   },
   teamRailHeader: {
     display: "flex",
@@ -1449,24 +2192,27 @@ const styles: Record<string, React.CSSProperties> = {
     paddingRight: 4,
   },
   unassignedDropZone: {
-    background: "rgba(26, 26, 46, 0.82)",
+    background: "rgba(18, 18, 34, 0.88)",
     border: "1px dashed rgba(255, 204, 0, 0.35)",
     padding: 12,
+    borderRadius: "0 16px 16px 0",
   },
   orgCanvas: {
     minWidth: 0,
   },
   bentoGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
     gap: 16,
     alignItems: "start",
   },
   bentoCard: {
-    background: "rgba(10, 10, 20, 0.84)",
+    background: "var(--bg-console-soft)",
     border: "1px solid rgba(153, 153, 204, 0.14)",
     padding: 16,
     minHeight: 260,
+    borderRadius: "0 20px 20px 0",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
   },
   bentoCardWide: {
     gridColumn: "span 2",
@@ -1511,16 +2257,18 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 12,
   },
   roleDropZone: {
-    background: "rgba(18, 18, 34, 0.9)",
+    background: "rgba(18, 18, 34, 0.92)",
     border: "1px solid rgba(153, 153, 204, 0.18)",
     padding: 12,
     minHeight: 92,
+    borderRadius: "0 14px 14px 0",
   },
   memberDropZone: {
-    background: "rgba(18, 18, 34, 0.9)",
+    background: "rgba(18, 18, 34, 0.92)",
     border: "1px solid rgba(153, 153, 204, 0.18)",
     padding: 12,
     minHeight: 128,
+    borderRadius: "0 14px 14px 0",
   },
   dropZoneLabelRow: {
     display: "flex",
@@ -1561,9 +2309,11 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     gap: 10,
-    background: "rgba(26, 26, 46, 0.88)",
+    background: "rgba(26, 26, 46, 0.92)",
     padding: "10px 12px",
     minWidth: 0,
+    borderRadius: "0 14px 14px 0",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
   },
   crewCardCompact: {
     padding: "8px 10px",

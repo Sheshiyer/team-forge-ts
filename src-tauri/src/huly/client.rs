@@ -203,7 +203,7 @@ impl HulyClient {
 
         if !status.is_success() {
             return Err(format!(
-                "find_all returned {status}: {}",
+                "find_all class={class} returned {status}: {}",
                 &body[..body.len().min(500)]
             ));
         }
@@ -252,6 +252,27 @@ impl HulyClient {
             }
         }
         Ok(parsed)
+    }
+
+    async fn find_all_typed_optional_class<T>(
+        &self,
+        class: &str,
+        query: Value,
+        limit: Option<u32>,
+    ) -> Result<Vec<T>, String>
+    where
+        T: DeserializeOwned,
+    {
+        match self.find_all_typed(class, query, limit).await {
+            Ok(items) => Ok(items),
+            Err(error) if is_invalid_class_error(&error) => {
+                eprintln!(
+                    "[huly] optional class {class} is unavailable in this workspace: {error}"
+                );
+                Ok(vec![])
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn post_tx_value(&self, tx: &Value) -> Result<Value, String> {
@@ -461,19 +482,19 @@ impl HulyClient {
 
     /// Fetch HR departments.
     pub async fn get_departments(&self) -> Result<Vec<HulyDepartment>, String> {
-        self.find_all_typed("hr:class:Department", json!({}), Some(100))
+        self.find_all_typed_optional_class("hr:class:Department", json!({}), Some(100))
             .await
     }
 
     /// Fetch HR leave requests.
     pub async fn get_leave_requests(&self) -> Result<Vec<HulyLeaveRequest>, String> {
-        self.find_all_typed("hr:class:Request", json!({}), Some(500))
+        self.find_all_typed_optional_class("hr:class:Request", json!({}), Some(500))
             .await
     }
 
     /// Fetch HR holidays.
     pub async fn get_holidays(&self) -> Result<Vec<HulyHoliday>, String> {
-        self.find_all_typed("hr:class:Holiday", json!({}), Some(200))
+        self.find_all_typed_optional_class("hr:class:Holiday", json!({}), Some(200))
             .await
     }
 
@@ -597,6 +618,11 @@ fn generate_huly_id() -> String {
     )
 }
 
+fn is_invalid_class_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("invalid class name") || normalized.contains("404")
+}
+
 fn base64_decode(input: &str) -> Option<Vec<u8>> {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = Vec::new();
@@ -618,7 +644,7 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::generate_huly_id;
+    use super::{generate_huly_id, is_invalid_class_error};
 
     #[test]
     fn generated_huly_ids_match_expected_shape() {
@@ -634,5 +660,13 @@ mod tests {
             .chars()
             .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()));
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn invalid_class_errors_are_detected() {
+        assert!(is_invalid_class_error(
+            "find_all class=hr:class:Holiday returned 404 NOT FOUND: {\"error\":\"INVALID CLASS NAME IS PASSED. FAILED TO FINDALL.\"}"
+        ));
+        assert!(!is_invalid_class_error("network timeout"));
     }
 }

@@ -158,13 +158,60 @@ impl HulySyncEngine {
         Ok(updated)
     }
 
+    /// Refresh Team-facing Huly entities into the persistent SQLite cache.
+    pub async fn sync_team_cache(&self) -> Result<u32, String> {
+        let (departments, people, employees, leave_requests, holidays) = tokio::try_join!(
+            self.client.get_departments(),
+            self.client.get_persons(),
+            self.client.get_employees(),
+            self.client.get_leave_requests(),
+            self.client.get_holidays(),
+        )?;
+
+        queries::replace_huly_departments_cache(&self.pool, &departments).await?;
+        queries::replace_huly_people_cache(&self.pool, &people).await?;
+        queries::replace_huly_employees_cache(&self.pool, &employees).await?;
+        queries::replace_huly_leave_requests_cache(&self.pool, &leave_requests).await?;
+        queries::replace_huly_holidays_cache(&self.pool, &holidays).await?;
+
+        let now = Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
+        let state = SyncState {
+            source: "huly".to_string(),
+            entity: "team_snapshot".to_string(),
+            last_sync_at: now,
+            last_cursor: None,
+        };
+        queries::set_sync_state(&self.pool, &state)
+            .await
+            .map_err(|e| format!("db error setting team cache sync state: {e}"))?;
+
+        let item_count = departments.len()
+            + people.len()
+            + employees.len()
+            + leave_requests.len()
+            + holidays.len();
+
+        eprintln!(
+            "[huly-sync] team cache refreshed: {} departments, {} people, {} employees, {} leave requests, {} holidays",
+            departments.len(),
+            people.len(),
+            employees.len(),
+            leave_requests.len(),
+            holidays.len()
+        );
+
+        Ok(item_count as u32)
+    }
+
     /// Run both issue sync and presence update.
     pub async fn full_sync(&self) -> Result<HulySyncReport, String> {
         let issues_synced = self.sync_issues().await?;
         let presence_updated = self.sync_presence().await?;
+        let team_cache_items = self.sync_team_cache().await?;
         Ok(HulySyncReport {
             issues_synced,
             presence_updated,
+            team_cache_items,
         })
     }
 

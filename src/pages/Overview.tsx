@@ -3,6 +3,7 @@ import { useInvoke } from "../hooks/useInvoke";
 import { SkeletonCard, SkeletonTable } from "../components/ui/Skeleton";
 import Avatar from "../components/ui/Avatar";
 import type { OverviewData, QuotaRow } from "../lib/types";
+import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 
 // ── ProgressRing ──────────────────────────────────────────────
 
@@ -385,38 +386,30 @@ function StatusPill({ status }: { status: string }) {
 // ── Styles ────────────────────────────────────────────────────
 
 const styles: Record<string, React.CSSProperties> = {
-  pageTitle: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 20,
-    fontWeight: 700,
-    marginBottom: 8,
-    color: "var(--lcars-orange)",
-    letterSpacing: "4px",
-    textTransform: "uppercase" as const,
-  },
-  pageTitleBar: {
-    height: 3,
-    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
-    marginBottom: 24,
-  },
+  pageTitle: lcarsPageStyles.pageTitle,
+  pageTitleBar: lcarsPageStyles.pageTitleBar,
   metricsRow: {
     display: "grid",
-    gridTemplateColumns: "repeat(3, 1fr)",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
     gap: 16,
     marginBottom: 20,
   },
   metricCard: {
-    background: "rgba(26, 26, 46, 0.6)",
-    borderLeft: "4px solid var(--lcars-orange)",
+    background: "var(--bg-console-soft)",
+    border: "1px solid rgba(153, 153, 204, 0.16)",
+    borderLeft: "8px solid var(--lcars-orange)",
+    borderRadius: "0 22px 0 0",
     padding: 24,
     position: "relative" as const,
+    boxShadow:
+      "inset 0 1px 0 rgba(255,255,255,0.03), 0 18px 30px rgba(0, 0, 0, 0.2)",
   },
   metricCardBar: {
     position: "absolute" as const,
     top: 0,
-    left: -4,
+    left: -8,
     right: 0,
-    height: 3,
+    height: 5,
   },
   metricLabel: {
     fontFamily: "'Orbitron', sans-serif",
@@ -435,60 +428,16 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "-0.5px",
   },
   card: {
-    background: "rgba(26, 26, 46, 0.6)",
-    borderLeft: "4px solid var(--lcars-lavender)",
-    padding: 24,
-    marginBottom: 20,
+    ...lcarsPageStyles.card,
+    borderLeft: "8px solid var(--lcars-lavender)",
   },
-  sectionTitle: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 12,
-    fontWeight: 600,
-    color: "var(--lcars-orange)",
-    marginBottom: 8,
-    letterSpacing: "2px",
-    textTransform: "uppercase" as const,
-  },
-  sectionDivider: {
-    height: 2,
-    background: "rgba(153, 153, 204, 0.15)",
-    marginBottom: 16,
-  },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse" as const,
-    fontSize: 13,
-  },
-  th: {
-    textAlign: "left" as const,
-    color: "var(--lcars-lavender)",
-    fontFamily: "'Orbitron', sans-serif",
-    fontWeight: 500,
-    padding: "8px 12px",
-    borderBottom: "1px solid rgba(255, 153, 0, 0.15)",
-    fontSize: 10,
-    textTransform: "uppercase" as const,
-    letterSpacing: "1.5px",
-    background: "rgba(255, 153, 0, 0.05)",
-  },
-  td: {
-    padding: "10px 12px",
-    color: "var(--lcars-tan)",
-    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
-  },
-  tdMono: {
-    padding: "10px 12px",
-    color: "var(--lcars-lavender)",
-    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
-    fontFamily: "'JetBrains Mono', monospace",
-  },
-  emptyText: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 11,
-    color: "var(--text-quaternary)",
-    letterSpacing: "2px",
-    textTransform: "uppercase" as const,
-  },
+  sectionTitle: lcarsPageStyles.sectionTitle,
+  sectionDivider: lcarsPageStyles.sectionDivider,
+  table: lcarsPageStyles.table,
+  th: lcarsPageStyles.th,
+  td: lcarsPageStyles.td,
+  tdMono: lcarsPageStyles.tdMono,
+  emptyText: lcarsPageStyles.emptyText,
 };
 
 export default Overview;

@@ -152,6 +152,15 @@ export interface OrgChartView {
   people: OrgPersonView[];
 }
 
+export interface TeamSnapshotView {
+  departments: DepartmentView[];
+  orgChart: OrgChartView | null;
+  leaves: LeaveView[];
+  holidays: HolidayView[];
+  cacheUpdatedAt: string | null;
+  hulyError: string | null;
+}
+
 export interface OrgDepartmentUpdateInput {
   departmentId: string;
   headPersonId: string | null;
@@ -160,17 +169,43 @@ export interface OrgDepartmentUpdateInput {
 }
 
 export interface LeaveView {
+  id: string;
+  employeeId: string | null;
+  source: string;
+  editable: boolean;
   employeeName: string;
   leaveType: string;
   dateFrom: string;
   dateTo: string;
   status: string;
   days: number;
+  note: string | null;
 }
 
 export interface HolidayView {
+  id: string;
+  source: string;
+  editable: boolean;
   title: string;
   date: string;
+  note: string | null;
+}
+
+export interface ManualLeaveInput {
+  id?: string | null;
+  employeeId: string;
+  leaveType: string;
+  dateFrom: string;
+  dateTo: string;
+  status: string;
+  note?: string | null;
+}
+
+export interface ManualHolidayInput {
+  id?: string | null;
+  title: string;
+  date: string;
+  note?: string | null;
 }
 
 export interface ChatActivityView {

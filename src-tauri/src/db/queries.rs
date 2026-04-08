@@ -1,3 +1,5 @@
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::path::Path;
 
@@ -26,6 +28,16 @@ pub async fn init_db(app_data_dir: &Path) -> Result<SqlitePool, sqlx::Error> {
 pub async fn get_employees(pool: &SqlitePool) -> Result<Vec<Employee>, sqlx::Error> {
     sqlx::query_as::<_, Employee>("SELECT * FROM employees ORDER BY name")
         .fetch_all(pool)
+        .await
+}
+
+pub async fn get_employee_by_id(
+    pool: &SqlitePool,
+    employee_id: &str,
+) -> Result<Option<Employee>, sqlx::Error> {
+    sqlx::query_as::<_, Employee>("SELECT * FROM employees WHERE id = ?1")
+        .bind(employee_id)
+        .fetch_optional(pool)
         .await
 }
 
@@ -232,6 +244,243 @@ pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<()
     Ok(())
 }
 
+async fn replace_json_cache_rows<T, F>(
+    pool: &SqlitePool,
+    table: &str,
+    items: &[T],
+    id_of: F,
+) -> Result<(), String>
+where
+    T: Serialize,
+    F: Fn(&T) -> &str,
+{
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("begin {table} cache tx: {e}"))?;
+    let delete_sql = format!("DELETE FROM {table}");
+    let insert_sql =
+        format!("INSERT INTO {table} (id, payload, updated_at) VALUES (?1, ?2, datetime('now'))");
+
+    sqlx::query(&delete_sql)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("clear {table} cache: {e}"))?;
+
+    for item in items {
+        let payload =
+            serde_json::to_string(item).map_err(|e| format!("serialize {table} cache: {e}"))?;
+        sqlx::query(&insert_sql)
+            .bind(id_of(item))
+            .bind(payload)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("write {table} cache: {e}"))?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| format!("commit {table} cache tx: {e}"))?;
+
+    Ok(())
+}
+
+async fn load_json_cache_rows<T>(pool: &SqlitePool, table: &str) -> Result<Vec<T>, String>
+where
+    T: DeserializeOwned,
+{
+    let query = format!("SELECT id, payload, updated_at FROM {table} ORDER BY id");
+    let rows = sqlx::query_as::<_, HulyCachedEntityRow>(&query)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("read {table} cache: {e}"))?;
+
+    let mut values = Vec::with_capacity(rows.len());
+    for row in rows {
+        match serde_json::from_str::<T>(&row.payload) {
+            Ok(value) => values.push(value),
+            Err(error) => eprintln!(
+                "[db] warning: failed to deserialize {table} cache row {}: {error}",
+                row.id
+            ),
+        }
+    }
+
+    Ok(values)
+}
+
+pub async fn replace_huly_departments_cache(
+    pool: &SqlitePool,
+    items: &[crate::huly::types::HulyDepartment],
+) -> Result<(), String> {
+    replace_json_cache_rows(pool, "huly_departments_cache", items, |item| &item.id).await
+}
+
+pub async fn get_huly_departments_cache(
+    pool: &SqlitePool,
+) -> Result<Vec<crate::huly::types::HulyDepartment>, String> {
+    load_json_cache_rows(pool, "huly_departments_cache").await
+}
+
+pub async fn replace_huly_people_cache(
+    pool: &SqlitePool,
+    items: &[crate::huly::types::HulyPerson],
+) -> Result<(), String> {
+    replace_json_cache_rows(pool, "huly_people_cache", items, |item| &item.id).await
+}
+
+pub async fn get_huly_people_cache(
+    pool: &SqlitePool,
+) -> Result<Vec<crate::huly::types::HulyPerson>, String> {
+    load_json_cache_rows(pool, "huly_people_cache").await
+}
+
+pub async fn replace_huly_employees_cache(
+    pool: &SqlitePool,
+    items: &[crate::huly::types::HulyEmployee],
+) -> Result<(), String> {
+    replace_json_cache_rows(pool, "huly_employees_cache", items, |item| &item.id).await
+}
+
+pub async fn get_huly_employees_cache(
+    pool: &SqlitePool,
+) -> Result<Vec<crate::huly::types::HulyEmployee>, String> {
+    load_json_cache_rows(pool, "huly_employees_cache").await
+}
+
+pub async fn replace_huly_leave_requests_cache(
+    pool: &SqlitePool,
+    items: &[crate::huly::types::HulyLeaveRequest],
+) -> Result<(), String> {
+    replace_json_cache_rows(pool, "huly_leave_requests_cache", items, |item| &item.id).await
+}
+
+pub async fn get_huly_leave_requests_cache(
+    pool: &SqlitePool,
+) -> Result<Vec<crate::huly::types::HulyLeaveRequest>, String> {
+    load_json_cache_rows(pool, "huly_leave_requests_cache").await
+}
+
+pub async fn replace_huly_holidays_cache(
+    pool: &SqlitePool,
+    items: &[crate::huly::types::HulyHoliday],
+) -> Result<(), String> {
+    replace_json_cache_rows(pool, "huly_holidays_cache", items, |item| &item.id).await
+}
+
+pub async fn get_huly_holidays_cache(
+    pool: &SqlitePool,
+) -> Result<Vec<crate::huly::types::HulyHoliday>, String> {
+    load_json_cache_rows(pool, "huly_holidays_cache").await
+}
+
+// ─── Manual Team calendar data ──────────────────────────────────
+
+pub async fn get_manual_leave_entries(
+    pool: &SqlitePool,
+) -> Result<Vec<ManualLeaveEntry>, sqlx::Error> {
+    sqlx::query_as::<_, ManualLeaveEntry>(
+        "SELECT * FROM manual_leave_entries ORDER BY date_from ASC, employee_id ASC, id ASC",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn upsert_manual_leave_entry(
+    pool: &SqlitePool,
+    entry: &ManualLeaveEntry,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO manual_leave_entries (
+            id,
+            employee_id,
+            leave_type,
+            date_from,
+            date_to,
+            status,
+            note,
+            created_at,
+            updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        ON CONFLICT(id) DO UPDATE SET
+          employee_id = excluded.employee_id,
+          leave_type = excluded.leave_type,
+          date_from = excluded.date_from,
+          date_to = excluded.date_to,
+          status = excluded.status,
+          note = excluded.note,
+          updated_at = datetime('now')",
+    )
+    .bind(&entry.id)
+    .bind(&entry.employee_id)
+    .bind(&entry.leave_type)
+    .bind(&entry.date_from)
+    .bind(&entry.date_to)
+    .bind(&entry.status)
+    .bind(&entry.note)
+    .bind(&entry.created_at)
+    .bind(&entry.updated_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_manual_leave_entry(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM manual_leave_entries WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_manual_holidays(pool: &SqlitePool) -> Result<Vec<ManualHoliday>, sqlx::Error> {
+    sqlx::query_as::<_, ManualHoliday>(
+        "SELECT * FROM manual_holidays ORDER BY date ASC, title ASC, id ASC",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn upsert_manual_holiday(
+    pool: &SqlitePool,
+    holiday: &ManualHoliday,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO manual_holidays (
+            id,
+            title,
+            date,
+            note,
+            created_at,
+            updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        ON CONFLICT(id) DO UPDATE SET
+          title = excluded.title,
+          date = excluded.date,
+          note = excluded.note,
+          updated_at = datetime('now')",
+    )
+    .bind(&holiday.id)
+    .bind(&holiday.title)
+    .bind(&holiday.date)
+    .bind(&holiday.note)
+    .bind(&holiday.created_at)
+    .bind(&holiday.updated_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_manual_holiday(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM manual_holidays WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 // ─── Sync State ──────────────────────────────────────────────────
 
 pub async fn get_sync_state(
@@ -298,4 +547,156 @@ pub async fn get_huly_issue_activities(
     .bind(since)
     .fetch_all(pool)
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::huly::types::HulyDepartment;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEST_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_test_dir() -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|value| value.as_nanos())
+            .unwrap_or_default();
+        let seq = TEST_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "teamforge-db-test-{}-{nanos}-{seq}",
+            std::process::id()
+        ))
+    }
+
+    #[tokio::test]
+    async fn team_department_cache_round_trips_through_sqlite() {
+        let dir = unique_test_dir();
+        let pool = init_db(&dir).await.expect("init db");
+
+        let departments = vec![HulyDepartment {
+            id: "dept-engineering".to_string(),
+            name: Some("Engineering".to_string()),
+            description: Some("Core product engineering".to_string()),
+            parent: None,
+            team_lead: Some("person-lead".to_string()),
+            managers: Some(vec!["person-manager".to_string()]),
+            head: Some("person-head".to_string()),
+            members: Some(vec![
+                "person-head".to_string(),
+                "person-lead".to_string(),
+                "person-crew".to_string(),
+            ]),
+            class: Some("hr:class:Department".to_string()),
+        }];
+
+        replace_huly_departments_cache(&pool, &departments)
+            .await
+            .expect("cache departments");
+
+        let loaded = get_huly_departments_cache(&pool)
+            .await
+            .expect("load departments");
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, "dept-engineering");
+        assert_eq!(loaded[0].name.as_deref(), Some("Engineering"));
+        assert_eq!(
+            loaded[0].members.clone().unwrap_or_default(),
+            vec![
+                "person-head".to_string(),
+                "person-lead".to_string(),
+                "person-crew".to_string(),
+            ]
+        );
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn manual_team_calendar_entries_round_trip_through_sqlite() {
+        let dir = unique_test_dir();
+        let pool = init_db(&dir).await.expect("init db");
+
+        let employee = Employee {
+            id: "emp-1".to_string(),
+            clockify_user_id: "clockify-1".to_string(),
+            huly_person_id: Some("person-1".to_string()),
+            name: "Pavun Kumar R".to_string(),
+            email: "pavun@example.com".to_string(),
+            avatar_url: None,
+            monthly_quota_hours: 160.0,
+            is_active: true,
+            created_at: "2026-04-08T00:00:00".to_string(),
+            updated_at: "2026-04-08T00:00:00".to_string(),
+        };
+        upsert_employee(&pool, &employee)
+            .await
+            .expect("upsert employee");
+
+        let leave = ManualLeaveEntry {
+            id: "manual-leave-1".to_string(),
+            employee_id: employee.id.clone(),
+            leave_type: "Vacation".to_string(),
+            date_from: "2026-04-10".to_string(),
+            date_to: "2026-04-12".to_string(),
+            status: "Approved".to_string(),
+            note: Some("Family trip".to_string()),
+            created_at: "2026-04-08T00:00:00".to_string(),
+            updated_at: "2026-04-08T00:00:00".to_string(),
+        };
+        upsert_manual_leave_entry(&pool, &leave)
+            .await
+            .expect("upsert manual leave");
+
+        let holiday = ManualHoliday {
+            id: "manual-holiday-1".to_string(),
+            title: "Founders Day".to_string(),
+            date: "2026-08-21".to_string(),
+            note: Some("Company-wide shutdown".to_string()),
+            created_at: "2026-04-08T00:00:00".to_string(),
+            updated_at: "2026-04-08T00:00:00".to_string(),
+        };
+        upsert_manual_holiday(&pool, &holiday)
+            .await
+            .expect("upsert manual holiday");
+
+        let loaded_leaves = get_manual_leave_entries(&pool)
+            .await
+            .expect("load manual leaves");
+        let loaded_holidays = get_manual_holidays(&pool)
+            .await
+            .expect("load manual holidays");
+
+        assert_eq!(loaded_leaves.len(), 1);
+        assert_eq!(loaded_leaves[0].employee_id, employee.id);
+        assert_eq!(loaded_leaves[0].note.as_deref(), Some("Family trip"));
+        assert_eq!(loaded_holidays.len(), 1);
+        assert_eq!(loaded_holidays[0].title, "Founders Day");
+        assert_eq!(
+            loaded_holidays[0].note.as_deref(),
+            Some("Company-wide shutdown")
+        );
+
+        delete_manual_leave_entry(&pool, "manual-leave-1")
+            .await
+            .expect("delete manual leave");
+        delete_manual_holiday(&pool, "manual-holiday-1")
+            .await
+            .expect("delete manual holiday");
+
+        assert!(get_manual_leave_entries(&pool)
+            .await
+            .expect("reload manual leaves")
+            .is_empty());
+        assert!(get_manual_holidays(&pool)
+            .await
+            .expect("reload manual holidays")
+            .is_empty());
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

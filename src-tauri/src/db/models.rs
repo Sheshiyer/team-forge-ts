@@ -100,6 +100,39 @@ pub struct Setting {
     pub value: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct HulyCachedEntityRow {
+    pub id: String,
+    pub payload: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualLeaveEntry {
+    pub id: String,
+    pub employee_id: String,
+    pub leave_type: String,
+    pub date_from: String,
+    pub date_to: String,
+    pub status: String,
+    pub note: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualHoliday {
+    pub id: String,
+    pub title: String,
+    pub date: String,
+    pub note: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 // ─── View / summary structs (returned to frontend) ───────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,6 +289,17 @@ pub struct OrgChartView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TeamSnapshotView {
+    pub departments: Vec<DepartmentView>,
+    pub org_chart: Option<OrgChartView>,
+    pub leaves: Vec<LeaveView>,
+    pub holidays: Vec<HolidayView>,
+    pub cache_updated_at: Option<String>,
+    pub huly_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OrgDepartmentUpdateInput {
     pub department_id: String,
     pub head_person_id: Option<String>,
@@ -266,19 +310,49 @@ pub struct OrgDepartmentUpdateInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LeaveView {
+    pub id: String,
+    pub employee_id: Option<String>,
+    pub source: String,
+    pub editable: bool,
     pub employee_name: String,
     pub leave_type: String,
     pub date_from: String,
     pub date_to: String,
     pub status: String,
     pub days: u32,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HolidayView {
+    pub id: String,
+    pub source: String,
+    pub editable: bool,
     pub title: String,
     pub date: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualLeaveInput {
+    pub id: Option<String>,
+    pub employee_id: String,
+    pub leave_type: String,
+    pub date_from: String,
+    pub date_to: String,
+    pub status: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualHolidayInput {
+    pub id: Option<String>,
+    pub title: String,
+    pub date: String,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

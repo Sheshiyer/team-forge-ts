@@ -2,6 +2,70 @@
 
 ## Goal
 
+Ship the current TeamForge changes as a new release build:
+- bump the app version from `0.1.3` to `0.1.4`
+- commit and push the current app/design work on `main`
+- push a release tag so GitHub Actions builds the new DMG
+
+## Plan
+
+- [x] Inspect git state, branch, version files, and release workflow triggers
+- [ ] Bump version metadata consistently to `0.1.4`
+- [ ] Re-run verification after the version bump
+- [ ] Commit and push `main`
+- [ ] Create and push tag `v0.1.4` to trigger the DMG workflow
+- [ ] Confirm the GitHub Actions release workflow was triggered
+
+## Review
+
+- Pending
+
+---
+
+## Goal
+
+Run an app-wide LCARS design consistency overhaul instead of only touching Team:
+- unify page-level LCARS primitives across the shell and major views
+- improve Team/calendar organization and responsive behavior
+- reduce generic box/card styling in favor of a stronger console language
+
+## Plan
+
+- [x] Audit the app shell, major pages, and shared controls for repeated one-off styling
+- [x] Add shared LCARS page primitives and shell responsive behavior
+- [x] Rebuild Team / calendar tracking on top of the shared visual language
+- [x] Apply the same consistency pass across the other visible dashboard pages
+- [x] Verify the frontend build, Rust tests, packaged app build, and app launch
+
+## Review
+
+- Added a reusable LCARS page-style layer in `src/lib/lcarsPageStyles.ts` plus a viewport hook in `src/hooks/useViewportWidth.ts` so page titles, dividers, cards, buttons, tables, and toolbars now share one visual system instead of each page inventing its own.
+- Strengthened the app shell in `src/App.tsx` and `src/styles/globals.css` with a deeper console background, shell gradients, tighter nav sizing logic, and more responsive spacing so the LCARS theme carries through the whole app frame.
+- Updated shared controls in `src/components/ui/DateRangePicker.tsx` and `src/components/ui/Skeleton.tsx` so segmented controls and loading states match the same console treatment.
+- Brought the main dashboard surfaces into alignment:
+  - `src/pages/Live.tsx`
+  - `src/pages/Overview.tsx`
+  - `src/pages/Activity.tsx`
+  - `src/pages/Projects.tsx`
+  - `src/pages/Timesheet.tsx`
+  - `src/pages/Insights.tsx`
+  - `src/pages/Boards.tsx`
+  - `src/pages/Comms.tsx`
+  - `src/pages/Sprints.tsx`
+  - `src/pages/Settings.tsx`
+  - `src/pages/Team.tsx`
+- Team got the heaviest pass: the org chart rail/canvas now stack more cleanly on narrower widths, wide department cards stop forcing awkward spans on compact layouts, leave/holiday forms collapse more cleanly, and the yearly holiday grid uses the same shared console surfaces as the rest of the app.
+- Verification:
+  - `pnpm build` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+  - `pnpm tauri build --bundles app` ✅
+  - launched `src-tauri/target/release/bundle/macos/TeamForge.app` ✅
+  - running process confirmed via `ps -ax | rg "TeamForge.app|team-forge-ts"` ✅
+
+---
+
+## Goal
+
 Update TeamForge so it better reflects the Thoughtseed operating model:
 - Add preview screenshots to the GitHub README
 - Explain how Clockify + Huly + Thoughtseed workflow context map into the dashboard
@@ -218,6 +282,95 @@ Stabilize the Copaw runtime path so the launcher and smoke test reflect the real
   - `chitta-weaver`
   - `kosha-regulator`
   - `nadi-mapper`
+
+---
+
+## Goal
+
+Stop the Team page from hanging on Huly by making it render from persistent local cache first:
+- persist Team-facing Huly entities in SQLite
+- serve the Team screen from cached snapshot data
+- refresh Huly in the background without blanking the page when live fetch fails
+
+## Plan
+
+- [x] Inspect the Team page load path and current SQLite coverage
+- [x] Add persistent SQLite cache tables and query helpers for Team-facing Huly entities
+- [x] Extend Huly sync so Team cache is hydrated during sync runs
+- [x] Split Team loading into cached snapshot + background refresh
+- [x] Verify with Rust tests, frontend build, app bundle build, and macOS app launch
+
+## Review
+
+- Added persistent SQLite cache tables for Huly departments, people, employees, leave requests, and holidays in `src-tauri/migrations/001_initial.sql`.
+- Added JSON-backed cache query helpers plus a new regression test that proves Team department cache data round-trips through SQLite.
+- Extended `HulySyncEngine` so full Huly syncs now refresh Team cache data and record a `team_snapshot` sync timestamp.
+- Reworked the Team command layer so `get_team_snapshot` is now SQLite-only and immediate, while `refresh_team_snapshot` does the live Huly refresh and then returns the refreshed cached snapshot.
+- Updated `Team.tsx` to render cached Team data first, show cache status, and keep stale data visible if live Huly refresh fails.
+- Verification:
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+  - `pnpm build` ✅
+  - `pnpm tauri build --bundles app` ✅
+  - `open src-tauri/target/release/bundle/macos/TeamForge.app` ✅
+  - running process confirmed for `TeamForge.app/Contents/MacOS/team-forge-ts` ✅
+
+---
+
+## Goal
+
+Stop the Team screen from constant self-refreshing and make the running build obvious:
+- eliminate the Team page refresh loop / skeleton churn
+- show the shipped app version in the bottom-left footer above the brown bar
+- cut a visibly newer build and clean old artifacts / caches before launch
+
+## Plan
+
+- [x] Record the correction and verify the Team load loop root cause
+- [x] Fix the Team page refresh loop and keep cached loading stable
+- [x] Show the app version in the sidebar footer and bump version metadata
+- [x] Clean old build artifacts and caches, then rebuild the app bundle
+- [x] Verify the launched app is the new version and document the result
+
+## Review
+
+- Stabilized `useInvoke` so it now returns a module-level API object instead of recreating a fresh invoke surface on every render. This removes the Team page self-refresh loop that was retriggering the cached/background load effect.
+- Bumped the app from `0.1.2` to `0.1.3` in the frontend package, sidecar package, Rust crate metadata, and Tauri bundle config.
+- Added a runtime version read in `App.tsx` and surfaced `BUILD v0.1.3` above the sidebar's brown footer bar so the running app version is visible inside the UI.
+- Cleaned old build artifacts and caches before rebuilding:
+  - removed repo build artifacts under `dist/`, `.pnpm-store/`, and `src-tauri/target/`
+  - cleared persisted Team snapshot cache rows from `~/Library/Application Support/com.thoughtseed.teamforge/teamforge.db`
+  - replaced the older `/Applications/TeamForge.app` with the rebuilt `0.1.3` bundle so the default macOS launch target now matches the new build
+- Verification:
+  - `pnpm build` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+  - `pnpm tauri build --bundles app` ✅
+  - generated bundle plist shows `CFBundleShortVersionString = 0.1.3` and `CFBundleVersion = 0.1.3` ✅
+  - relaunched `TeamForge.app` and confirmed the running process path points at `/Applications/TeamForge.app/Contents/MacOS/team-forge-ts` ✅
+
+---
+
+## Goal
+
+Keep Team snapshot refresh alive even when this Huly workspace is missing optional HR classes:
+- identify the missing-class failure mode behind the `find_all 404 INVALID CLASS NAME` error
+- degrade unsupported Team snapshot classes to empty results
+- rebuild and verify the Team path after the fallback is in place
+
+## Plan
+
+- [x] Record the invalid-class correction and inspect the failing Huly query surface
+- [x] Treat optional Team snapshot classes as soft-fail / empty in the Huly client
+- [x] Rebuild and verify the Team snapshot path after the Huly fallback change
+
+## Review
+
+- Hardened `HulyClient::find_all` error messages so they now include the exact failing class name.
+- Added `find_all_typed_optional_class` and routed Team-facing HR fetches through it, so missing workspace classes such as `hr:class:Request` or `hr:class:Holiday` now resolve to empty datasets instead of aborting the Team refresh.
+- Added a regression test for invalid-class error detection in `src-tauri/src/huly/client.rs`.
+- Verification:
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+  - `pnpm tauri build --bundles app` ✅
+  - relaunched the rebuilt `src-tauri/target/release/bundle/macos/TeamForge.app` and confirmed the running process path still points at that bundle ✅
 
 ---
 
@@ -546,3 +699,160 @@ Prepare and publish the next TeamForge release:
   - `pnpm tauri build --bundles app` ✅
   - `open src-tauri/target/release/bundle/macos/TeamForge.app` ✅
   - running app process confirmed via `ps`
+
+---
+
+## Goal
+
+Stabilize the Team page and make ignore-list management work for Huly-sourced people:
+- identify and fix the current Team page fetch failure / glitch state
+- add a roster-driven multiselect in Settings for ignored people
+- keep ignore behavior effective even when synced team members do not have emails
+
+## Plan
+
+- [x] Inspect the Team fetch path, current ignore-list settings model, and synced employee data shape
+- [x] Fix the root cause behind the Team page fetch failure or unstable state
+- [x] Add backend support for ignoring people by employee identity instead of email alone
+- [x] Replace the Settings ignore input with a team multiselect and keep manual email ignores as a fallback if needed
+- [x] Verify with tests/build/app launch and document the result
+
+## Review
+
+- Root cause:
+  - the Team page was issuing four independent Huly commands on load
+  - each command reconnected to Huly from scratch, which meant four separate `config.json` fetches and workspace-selection handshakes
+  - when one of those failed, the page degraded into a mixed `error + empty cards` state exactly like the screenshot
+- Added a single backend snapshot command for the Team page so it now performs one Huly connection per load and returns:
+  - department summary data
+  - org chart data
+  - leave requests
+  - holidays
+  - a single Huly error field when the connection fails
+- Added employee-ID-based ignore support in Settings via `clockify_ignored_employee_ids`, while keeping manual email ignores as a fallback for unmapped service accounts.
+- Updated ignore enforcement so selected crew are excluded even when email is blank:
+  - `apply_clockify_ignore_rules` now honors ignored employee ids as well as ignored emails
+  - Team/org-chart filtering now excludes ignored or inactive mapped people
+  - Huly-derived summary mappings for departments, leave, boards, meetings, and chat now only resolve against active employees
+- Replaced the old email-only ignore control in `Settings` with a searchable roster multiselect plus removable chips, and kept the manual email textarea as a secondary fallback path.
+- Updated the Crew Management table so ignored/inactive people remain visible instead of disappearing completely after save.
+- Verification:
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+  - `pnpm build` ✅
+  - `pnpm tauri build --bundles app` ✅
+  - `open src-tauri/target/release/bundle/macos/TeamForge.app` ✅
+  - running app process confirmed via `ps`
+
+---
+
+## Goal
+
+Make the Team page resilient with a persistent local cache:
+- stop depending on live Huly as the only source for Team rendering
+- persist Team-facing Huly data into SQLite
+- serve cached Team data immediately and refresh in the background when possible
+
+## Plan
+
+- [ ] Inspect the Team page read path against the current SQLite schema and Huly sync coverage
+- [ ] Extend the backend with persistent SQLite caching for Team-facing Huly entities
+- [ ] Build a layered Team snapshot command that serves cached data first and reports refresh state separately
+- [ ] Update the Team page to render cached data immediately instead of hanging on live fetches
+- [ ] Verify with tests/build/app launch and document the behavior
+
+---
+
+## Goal
+
+Add leave and holiday management directly to the Team page:
+- persist local manual leave entries in SQLite
+- persist local holiday entries and show a year-view holiday calendar
+- keep Huly-synced leave and holiday rows visible without making them editable
+
+## Plan
+
+- [x] Inspect the current Team snapshot, Team page, and SQLite schema for leave / holiday coverage
+- [x] Add persistent local SQLite tables and Rust query helpers for manual leave and holiday entries
+- [x] Merge manual leave / holiday rows into the Team snapshot alongside cached Huly data
+- [x] Add Team-page controls for manual leave updates and holiday editing plus a yearly holiday calendar
+- [x] Verify with tests/build/app launch and document the result
+
+## Review
+
+- Added persistent `manual_leave_entries` and `manual_holidays` SQLite tables in `src-tauri/migrations/001_initial.sql`.
+- Added Rust-side models, inputs, CRUD query helpers, and a regression test for local Team calendar rows in:
+  - `src-tauri/src/db/models.rs`
+  - `src-tauri/src/db/queries.rs`
+- Extended the Team snapshot pipeline so cached Huly leave / holiday data is merged with local manual entries, tagged by source, and returned with editability metadata.
+- Added new Tauri commands for local Team calendar management:
+  - `save_manual_leave`
+  - `delete_manual_leave`
+  - `save_manual_holiday`
+  - `delete_manual_holiday`
+- Updated the Team page so it now:
+  - loads the employee roster locally for leave assignment
+  - lets you add and edit local leave entries in-place
+  - lets you add and edit local holiday entries in-place
+  - shows which rows are local versus Huly-synced
+  - renders a 12-month holiday calendar for the selected year
+  - uses safer local date parsing for leave / holiday display instead of relying on browser UTC parsing of `YYYY-MM-DD`
+- Verification:
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+  - `pnpm build` ✅
+  - `pnpm tauri build --bundles app` ✅
+  - `open src-tauri/target/release/bundle/macos/TeamForge.app` ✅
+  - running app process confirmed via `ps`
+
+---
+
+## Goal
+
+Populate the Team holiday tracker with the requested 2026 holiday list:
+- add the provided 2026 holidays into the local Team holiday store
+- verify the local SQLite calendar contains the exact dates and titles requested
+
+## Plan
+
+- [x] Inspect the current app data location and local holiday storage path
+- [x] Insert the requested 2026 holidays into the local manual holiday table
+- [x] Verify the inserted rows and document the exact entries added
+
+## Review
+
+- Confirmed the live app database path is:
+  - `~/Library/Application Support/com.thoughtseed.teamforge/teamforge.db`
+- Inserted 9 local manual holiday rows into `manual_holidays` for the requested 2026 India holiday list.
+- Verified the exact stored rows directly via `sqlite3`:
+  - `2026-01-01` — `New Year's Day`
+  - `2026-01-26` — `Republic Day (National)`
+  - `2026-03-19` — `Ugadi (Karnataka New Year)`
+  - `2026-04-03` — `Good Friday`
+  - `2026-05-01` — `May Day / Labour Day`
+  - `2026-08-15` — `Independence Day (National)`
+  - `2026-10-02` — `Gandhi Jayanti (National)`
+  - `2026-10-21` — `Vijayadashami / Dussehra`
+  - `2026-11-10` — `Diwali`
+- Verification:
+  - `sqlite3 ... ".schema manual_holidays"` ✅
+  - `sqlite3 ... "SELECT date, title, note FROM manual_holidays ORDER BY date, title"` ✅
+  - `sqlite3 ... "SELECT COUNT(*) FROM manual_holidays"` → `9` ✅
+
+---
+
+## Goal
+
+Run an app-wide LCARS consistency overhaul, not just a Team-page polish pass:
+- reduce the generic card-and-box feel across the shell and major views
+- improve hierarchy, spacing, controls, and responsive behavior across the app
+- bring the Team / leave / holiday tracking experience into that broader design system
+- deliver a meaningful multi-point visual consistency pass instead of isolated styling tweaks
+
+## Plan
+
+- [ ] Audit the current shell, major page layouts, shared controls, and responsive breakpoints for consistency gaps
+- [ ] Upgrade the app shell and shared UI treatments so pages inherit a stronger LCARS system
+- [ ] Redesign the Team / calendar tracking surface inside that broader app-wide language
+- [ ] Apply consistency fixes to the most visible adjacent views and controls so the overhaul is not Team-only
+- [ ] Verify with build/test/app launch and document the redesign outcomes

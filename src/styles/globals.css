@@ -5,6 +5,8 @@
   --lcars-black: #000000;
   --lcars-space: #0a0a1a;
   --lcars-panel: #1a1a2e;
+  --lcars-panel-deep: #11111f;
+  --lcars-panel-raised: #1d1d33;
   --lcars-orange: #ff9900;
   --lcars-peach: #cc6699;
   --lcars-tan: #cc9966;
@@ -20,6 +22,8 @@
   --bg-sidebar: var(--lcars-space);
   --bg-elevated: var(--lcars-panel);
   --bg-hover: rgba(255, 153, 0, 0.08);
+  --bg-console: linear-gradient(180deg, rgba(29, 29, 51, 0.96) 0%, rgba(17, 17, 31, 0.98) 100%);
+  --bg-console-soft: linear-gradient(180deg, rgba(20, 20, 35, 0.96) 0%, rgba(10, 10, 20, 0.96) 100%);
 
   --text-primary: var(--lcars-orange);
   --text-secondary: var(--lcars-tan);
@@ -36,6 +40,9 @@
 
   --border-subtle: rgba(153, 153, 204, 0.15);
   --border-standard: rgba(255, 153, 0, 0.25);
+  --border-strong: rgba(255, 153, 0, 0.45);
+  --glow-orange: 0 0 20px rgba(255, 153, 0, 0.08);
+  --glow-cyan: 0 0 20px rgba(0, 204, 255, 0.08);
 
   /* LCARS Typography */
   --font-display: 'Orbitron', sans-serif;
@@ -84,9 +91,44 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: var(--bg-canvas);
+  background:
+    radial-gradient(circle at top left, rgba(0, 204, 255, 0.06), transparent 28%),
+    radial-gradient(circle at top right, rgba(255, 153, 0, 0.08), transparent 34%),
+    linear-gradient(180deg, #05050d 0%, #000000 100%);
   color: var(--text-secondary);
   line-height: 1.5;
+  letter-spacing: 0.02em;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0,
+      transparent calc(100% - 1px),
+      rgba(153, 153, 204, 0.05) calc(100% - 1px),
+      rgba(153, 153, 204, 0.05) 100%
+    ),
+    linear-gradient(
+      180deg,
+      transparent 0,
+      transparent calc(100% - 1px),
+      rgba(153, 153, 204, 0.03) calc(100% - 1px),
+      rgba(153, 153, 204, 0.03) 100%
+    );
+  background-size: 72px 72px;
+  opacity: 0.16;
+  mix-blend-mode: screen;
+  z-index: 0;
+}
+
+#root {
+  position: relative;
+  z-index: 1;
 }
 
 /* LCARS Animations */
