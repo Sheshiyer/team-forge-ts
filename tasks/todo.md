@@ -3,17 +3,17 @@
 ## Goal
 
 Ship the current TeamForge changes as a new release build:
-- bump the app version from `0.1.3` to `0.1.4`
+- bump the app version from `0.1.3` to `0.1.5`
 - commit and push the current app/design work on `main`
 - push a release tag so GitHub Actions builds the new DMG
 
 ## Plan
 
 - [x] Inspect git state, branch, version files, and release workflow triggers
-- [ ] Bump version metadata consistently to `0.1.4`
+- [ ] Bump version metadata consistently to `0.1.5`
 - [ ] Re-run verification after the version bump
 - [ ] Commit and push `main`
-- [ ] Create and push tag `v0.1.4` to trigger the DMG workflow
+- [ ] Create and push tag `v0.1.5` to trigger the DMG workflow
 - [ ] Confirm the GitHub Actions release workflow was triggered
 
 ## Review
