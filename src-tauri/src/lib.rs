@@ -134,6 +134,9 @@ pub fn run() {
             commands::get_board_cards,
             commands::get_meeting_load,
             commands::get_employee_summary,
+            commands::get_naming_compliance,
+            commands::get_issues_with_naming,
+            commands::get_standup_report,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

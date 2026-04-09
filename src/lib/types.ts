@@ -258,3 +258,64 @@ export interface EmployeeSummaryView {
   upcomingLeaves: LeaveView[];
   upcomingEvents: EmployeeScheduleEventView[];
 }
+
+// ── Naming convention (#13) ──────────────────────────────────────
+
+export interface ParsedTaskName {
+  compliant: boolean;
+  projectCode: string | null;
+  typeCode: string | null;
+  component: string | null;
+  taskId: string | null;
+  description: string | null;
+  complianceScore: number;
+}
+
+export interface ProjectCompliance {
+  projectCode: string;
+  count: number;
+}
+
+export interface TypeCompliance {
+  typeCode: string;
+  count: number;
+}
+
+export interface NamingComplianceStats {
+  total: number;
+  compliant: number;
+  compliancePercent: number;
+  byProject: ProjectCompliance[];
+  byType: TypeCompliance[];
+}
+
+export interface IssueWithNaming {
+  id: string;
+  identifier: string | null;
+  title: string;
+  naming: ParsedTaskName;
+  assigneeName: string | null;
+  space: string | null;
+  priority: unknown;
+  status: unknown;
+}
+
+// ── Standup system (#10) ─────────────────────────────────────────
+
+export interface StandupEntry {
+  employeeName: string;
+  postedAt: string | null;
+  channel: string;
+  source: string;
+  contentPreview: string | null;
+  status: "posted" | "missing";
+}
+
+export interface StandupReport {
+  date: string;
+  totalTeam: number;
+  postedCount: number;
+  missingCount: number;
+  compliancePercent: number;
+  entries: StandupEntry[];
+}

@@ -4124,6 +4124,258 @@ pub async fn get_employee_summary(
     })
 }
 
+// ─── Naming convention (#13) ──────────────────────────────────
+
+use crate::huly::naming::{compute_compliance_stats, parse_task_name, NamingComplianceStats, ParsedTaskName};
+
+#[tauri::command]
+pub async fn get_naming_compliance(db: State<'_, DbPool>) -> Result<NamingComplianceStats, String> {
+    let pool = &db.0;
+    let client = match get_huly_client(pool).await {
+        Ok(c) => c,
+        Err(_) => return Ok(compute_compliance_stats(&[])),
+    };
+
+    let issues = client.get_issues(None).await.unwrap_or_default();
+    let titles: Vec<String> = issues
+        .iter()
+        .filter_map(|i| i.title.clone())
+        .collect();
+
+    Ok(compute_compliance_stats(&titles))
+}
+
+#[tauri::command]
+pub async fn get_issues_with_naming(db: State<'_, DbPool>) -> Result<Vec<serde_json::Value>, String> {
+    let pool = &db.0;
+    let client = match get_huly_client(pool).await {
+        Ok(c) => c,
+        Err(_) => return Ok(vec![]),
+    };
+
+    let issues = client.get_issues(None).await.unwrap_or_default();
+    let employees = queries::get_employees(pool)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    let emp_map: HashMap<String, String> = employees
+        .iter()
+        .filter(|e| e.is_active)
+        .filter_map(|e| e.huly_person_id.as_ref().map(|pid| (pid.clone(), e.name.clone())))
+        .collect();
+
+    let results = issues
+        .iter()
+        .map(|issue| {
+            let title = issue.title.as_deref().unwrap_or("");
+            let parsed = parse_task_name(title);
+            let assignee_name = issue.assignee.as_ref().and_then(|a| emp_map.get(a)).cloned();
+            json!({
+                "id": issue.id,
+                "identifier": issue.identifier,
+                "title": title,
+                "naming": parsed,
+                "assignee_name": assignee_name,
+                "space": issue.space,
+                "priority": issue.priority,
+                "status": issue.status,
+            })
+        })
+        .collect();
+
+    Ok(results)
+}
+
+// ─── Standup system (#10) ──────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StandupEntry {
+    pub employee_name: String,
+    pub posted_at: Option<String>,
+    pub channel: String,
+    pub source: String,
+    pub content_preview: Option<String>,
+    pub status: String, // "posted" | "missing"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StandupReport {
+    pub date: String,
+    pub total_team: u32,
+    pub posted_count: u32,
+    pub missing_count: u32,
+    pub compliance_percent: f64,
+    pub entries: Vec<StandupEntry>,
+}
+
+#[tauri::command]
+pub async fn get_standup_report(db: State<'_, DbPool>) -> Result<StandupReport, String> {
+    let pool = &db.0;
+    let today = Local::now().date_naive();
+    let today_str = today.format("%Y-%m-%d").to_string();
+
+    let employees = queries::get_employees(pool)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+    let active_employees: Vec<&Employee> = employees.iter().filter(|e| e.is_active).collect();
+    let total_team = active_employees.len() as u32;
+
+    // Map huly person id → employee name
+    let huly_person_to_name: HashMap<String, String> = active_employees
+        .iter()
+        .filter_map(|e| e.huly_person_id.as_ref().map(|pid| (pid.clone(), e.name.clone())))
+        .collect();
+
+    // Map employee name → posted entry
+    let mut posted: HashMap<String, StandupEntry> = HashMap::new();
+
+    // Today's start in ms
+    let today_start_ms = today
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+
+    // Query Huly Chunter standup channels
+    if let Ok(client) = get_huly_client(pool).await {
+        let channels = client.get_channels().await.unwrap_or_default();
+        let standup_channels: Vec<_> = channels
+            .iter()
+            .filter(|c| {
+                huly_channel_display_name(c)
+                    .map(|label| is_standup_label(&label))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        let messages = client
+            .get_chat_messages(Some(today_start_ms))
+            .await
+            .unwrap_or_default();
+
+        for msg in &messages {
+            let Some(creator) = &msg.created_by else { continue };
+            let Some(name) = huly_person_to_name.get(creator) else { continue };
+
+            let in_standup = msg
+                .attached_to
+                .as_ref()
+                .map(|ch_id| standup_channels.iter().any(|c| &c.id == ch_id))
+                .unwrap_or(false);
+
+            if !in_standup { continue; }
+
+            let channel_name = msg.attached_to.as_ref()
+                .and_then(|ch_id| standup_channels.iter().find(|c| &c.id == ch_id))
+                .and_then(huly_channel_display_name)
+                .unwrap_or_else(|| "standup".to_string());
+
+            posted.entry(name.clone()).or_insert_with(|| StandupEntry {
+                employee_name: name.clone(),
+                posted_at: msg.created_on.or(msg.modified_on).and_then(ms_to_datetime_string),
+                channel: channel_name,
+                source: "huly".to_string(),
+                content_preview: msg.content.as_ref().map(|c| c.chars().take(120).collect()),
+                status: "posted".to_string(),
+            });
+        }
+    }
+
+    // Query Slack standup channels
+    if let Ok(Some(slack_client)) = get_optional_slack_client(pool).await {
+        let channel_filters = queries::get_setting(pool, "slack_channel_filters")
+            .await
+            .unwrap_or_default()
+            .unwrap_or_default();
+        let channels = filter_slack_channels(
+            slack_client.list_channels().await.unwrap_or_default(),
+            &channel_filters,
+        );
+        let standup_channels: Vec<_> = channels
+            .iter()
+            .filter(|c| c.name.as_deref().map(is_standup_label).unwrap_or(false))
+            .collect();
+
+        let oldest_ts = format!("{}.000000", today.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp());
+        let users = slack_client.list_users().await.unwrap_or_default();
+
+        // Build slack user id → employee name map
+        let slack_user_to_name: HashMap<String, String> = users
+            .iter()
+            .filter(|u| !u.deleted && !u.is_bot)
+            .filter_map(|user| {
+                let email = user.profile.as_ref()?.email.as_ref().map(|e| normalize_email(e))?;
+                active_employees
+                    .iter()
+                    .find(|e| normalize_email(&e.email) == email)
+                    .map(|e| (user.id.clone(), e.name.clone()))
+            })
+            .collect();
+
+        for channel in &standup_channels {
+            let channel_name = channel.name.clone().unwrap_or_else(|| "standup".to_string());
+            for msg in slack_client
+                .get_channel_messages_since(&channel.id, &oldest_ts)
+                .await
+                .unwrap_or_default()
+            {
+                if msg.bot_id.is_some() { continue; }
+                let Some(uid) = &msg.user else { continue };
+                let Some(name) = slack_user_to_name.get(uid) else { continue };
+
+                posted.entry(name.clone()).or_insert_with(|| StandupEntry {
+                    employee_name: name.clone(),
+                    posted_at: slack_ts_to_millis(&msg.ts).and_then(ms_to_datetime_string),
+                    channel: channel_name.clone(),
+                    source: "slack".to_string(),
+                    content_preview: msg.text.as_ref().map(|t| t.chars().take(120).collect()),
+                    status: "posted".to_string(),
+                });
+            }
+        }
+    }
+
+    // Build full entries including missing
+    let mut entries: Vec<StandupEntry> = active_employees
+        .iter()
+        .map(|e| {
+            posted.get(&e.name).cloned().unwrap_or_else(|| StandupEntry {
+                employee_name: e.name.clone(),
+                posted_at: None,
+                channel: String::new(),
+                source: String::new(),
+                content_preview: None,
+                status: "missing".to_string(),
+            })
+        })
+        .collect();
+
+    entries.sort_by(|a, b| {
+        let a_order = if a.status == "posted" { 0 } else { 1 };
+        let b_order = if b.status == "posted" { 0 } else { 1 };
+        a_order.cmp(&b_order).then(a.employee_name.cmp(&b.employee_name))
+    });
+
+    let posted_count = entries.iter().filter(|e| e.status == "posted").count() as u32;
+    let missing_count = total_team - posted_count;
+    let compliance_percent = if total_team > 0 {
+        (posted_count as f64 / total_team as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    Ok(StandupReport {
+        date: today_str,
+        total_team,
+        posted_count,
+        missing_count,
+        compliance_percent,
+        entries,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;

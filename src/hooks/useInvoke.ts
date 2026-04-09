@@ -26,6 +26,9 @@ import type {
   BoardCardView,
   MeetingLoadView,
   EmployeeSummaryView,
+  NamingComplianceStats,
+  IssueWithNaming,
+  StandupReport,
 } from "../lib/types";
 
 const invokeApi = {
@@ -92,6 +95,12 @@ const invokeApi = {
   getMeetingLoad: () => invoke<MeetingLoadView[]>("get_meeting_load"),
   getEmployeeSummary: (employeeId: string) =>
     invoke<EmployeeSummaryView>("get_employee_summary", { employeeId }),
+  getNamingCompliance: () =>
+    invoke<NamingComplianceStats>("get_naming_compliance"),
+  getIssuesWithNaming: () =>
+    invoke<IssueWithNaming[]>("get_issues_with_naming"),
+  getStandupReport: () =>
+    invoke<StandupReport>("get_standup_report"),
 };
 
 export function useInvoke() {

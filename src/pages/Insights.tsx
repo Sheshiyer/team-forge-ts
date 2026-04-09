@@ -7,6 +7,8 @@ import type {
   TimeDiscrepancy,
   EstimationAccuracy,
   PriorityDistribution,
+  NamingComplianceStats,
+  StandupReport,
 } from "../lib/types";
 
 function discrepancyColor(percent: number): string {
@@ -34,18 +36,24 @@ function Insights() {
   const [discrepancies, setDiscrepancies] = useState<TimeDiscrepancy[]>([]);
   const [accuracy, setAccuracy] = useState<EstimationAccuracy[]>([]);
   const [priorities, setPriorities] = useState<PriorityDistribution[]>([]);
+  const [naming, setNaming] = useState<NamingComplianceStats | null>(null);
+  const [standup, setStandup] = useState<StandupReport | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     try {
-      const [d, a, p] = await Promise.all([
+      const [d, a, p, n, s] = await Promise.all([
         api.getTimeDiscrepancies(),
         api.getEstimationAccuracy(),
         api.getPriorityDistribution(),
+        api.getNamingCompliance(),
+        api.getStandupReport(),
       ]);
       setDiscrepancies(d);
       setAccuracy(a);
       setPriorities(p);
+      setNaming(n);
+      setStandup(s);
     } catch {
       // data may not exist yet
     } finally {
@@ -289,6 +297,114 @@ function Insights() {
           </>
         )}
       </div>
+
+      {/* Naming Convention Compliance (#13) */}
+      {naming && (
+        <div style={styles.card}>
+          <h2 style={styles.sectionTitle}>TASK NAMING COMPLIANCE</h2>
+          <div style={styles.sectionDivider} />
+          <div style={{ display: "flex", gap: 24, marginBottom: 16, flexWrap: "wrap" as const }}>
+            <div style={styles.metricBox}>
+              <div style={styles.metricValue}>{naming.compliancePercent.toFixed(0)}%</div>
+              <div style={styles.metricLabel}>COMPLIANT</div>
+            </div>
+            <div style={styles.metricBox}>
+              <div style={{ ...styles.metricValue, color: "var(--lcars-green)" }}>{naming.compliant}</div>
+              <div style={styles.metricLabel}>FOLLOWING FORMAT</div>
+            </div>
+            <div style={styles.metricBox}>
+              <div style={{ ...styles.metricValue, color: "var(--lcars-red)" }}>{naming.total - naming.compliant}</div>
+              <div style={styles.metricLabel}>NON-COMPLIANT</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap" as const }}>
+            <div>
+              <div style={styles.subLabel}>BY PROJECT</div>
+              {naming.byProject.map((p) => (
+                <div key={p.projectCode} style={styles.tagRow}>
+                  <span style={styles.tag}>{p.projectCode}</span>
+                  <span style={styles.tagCount}>{p.count}</span>
+                </div>
+              ))}
+            </div>
+            <div>
+              <div style={styles.subLabel}>BY TYPE</div>
+              {naming.byType.map((t) => (
+                <div key={t.typeCode} style={styles.tagRow}>
+                  <span style={styles.tag}>{t.typeCode}</span>
+                  <span style={styles.tagCount}>{t.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginTop: 12, color: "var(--text-quaternary)", fontSize: 11 }}>
+            FORMAT: [PROJECT]-[TYPE]-[COMPONENT]-[ID]: Description
+          </div>
+        </div>
+      )}
+
+      {/* Standup Compliance (#10) */}
+      {standup && (
+        <div style={styles.card}>
+          <h2 style={styles.sectionTitle}>STANDUP COMPLIANCE — {standup.date}</h2>
+          <div style={styles.sectionDivider} />
+          <div style={{ display: "flex", gap: 24, marginBottom: 16, flexWrap: "wrap" as const }}>
+            <div style={styles.metricBox}>
+              <div style={styles.metricValue}>{standup.compliancePercent.toFixed(0)}%</div>
+              <div style={styles.metricLabel}>POSTED TODAY</div>
+            </div>
+            <div style={styles.metricBox}>
+              <div style={{ ...styles.metricValue, color: "var(--lcars-green)" }}>{standup.postedCount}</div>
+              <div style={styles.metricLabel}>POSTED</div>
+            </div>
+            <div style={styles.metricBox}>
+              <div style={{ ...styles.metricValue, color: standup.missingCount > 0 ? "var(--lcars-red)" : "var(--lcars-green)" }}>
+                {standup.missingCount}
+              </div>
+              <div style={styles.metricLabel}>MISSING</div>
+            </div>
+          </div>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>CREW MEMBER</th>
+                <th style={styles.th}>STATUS</th>
+                <th style={styles.th}>CHANNEL</th>
+                <th style={styles.th}>POSTED AT</th>
+                <th style={styles.th}>PREVIEW</th>
+              </tr>
+            </thead>
+            <tbody>
+              {standup.entries.map((e) => (
+                <tr key={e.employeeName}>
+                  <td style={styles.td}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <Avatar name={e.employeeName} size={24} />
+                      <span style={{ color: "var(--lcars-orange)" }}>{e.employeeName}</span>
+                    </div>
+                  </td>
+                  <td style={styles.td}>
+                    <span style={{
+                      display: "inline-block",
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      backgroundColor: e.status === "posted" ? "var(--lcars-green)" : "var(--lcars-red)",
+                      marginRight: 6,
+                    }} />
+                    {e.status.toUpperCase()}
+                  </td>
+                  <td style={styles.td}>{e.channel || "—"}</td>
+                  <td style={styles.tdMono}>{e.postedAt ? e.postedAt.slice(11, 16) : "—"}</td>
+                  <td style={{ ...styles.td, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, color: "var(--text-tertiary)", fontSize: 12 }}>
+                    {e.contentPreview ?? "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -307,6 +423,60 @@ const styles: Record<string, React.CSSProperties> = {
   td: lcarsPageStyles.td,
   tdMono: lcarsPageStyles.tdMono,
   emptyText: lcarsPageStyles.emptyText,
+  metricBox: {
+    display: "flex",
+    flexDirection: "column" as const,
+    alignItems: "center",
+    padding: "12px 20px",
+    background: "rgba(255,255,255,0.03)",
+    border: "1px solid rgba(255,255,255,0.06)",
+    borderRadius: 4,
+    minWidth: 100,
+  },
+  metricValue: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 28,
+    fontWeight: 700,
+    color: "var(--lcars-orange)",
+    lineHeight: 1,
+  },
+  metricLabel: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    color: "var(--text-quaternary)",
+    letterSpacing: "1px",
+    marginTop: 4,
+    textTransform: "uppercase" as const,
+  },
+  subLabel: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    color: "var(--text-tertiary)",
+    letterSpacing: "1px",
+    marginBottom: 8,
+    textTransform: "uppercase" as const,
+  },
+  tagRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 4,
+  },
+  tag: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-blue)",
+    background: "rgba(102,136,204,0.12)",
+    padding: "2px 6px",
+    borderRadius: 2,
+    minWidth: 70,
+    display: "inline-block",
+  },
+  tagCount: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+    color: "var(--text-secondary)",
+  },
 };
 
 export default Insights;
