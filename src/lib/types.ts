@@ -232,3 +232,29 @@ export interface MeetingLoadView {
   workHours: number;
   meetingRatio: number;
 }
+
+export interface EmployeeScheduleEventView {
+  id: string;
+  title: string;
+  startsAt: string;
+  endsAt: string | null;
+  source: string;
+  space: string | null;
+}
+
+export interface EmployeeSummaryView {
+  employee: Employee;
+  departmentNames: string[];
+  roleLabels: string[];
+  workHoursThisWeek: number;
+  workHoursThisMonth: number;
+  meetingsThisWeek: number;
+  meetingHoursThisWeek: number;
+  standupsLast7Days: number;
+  lastStandupAt: string | null;
+  messagesLast7Days: number;
+  lastMessageAt: string | null;
+  currentLeave: LeaveView | null;
+  upcomingLeaves: LeaveView[];
+  upcomingEvents: EmployeeScheduleEventView[];
+}

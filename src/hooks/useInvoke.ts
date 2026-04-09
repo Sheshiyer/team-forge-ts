@@ -25,6 +25,7 @@ import type {
   ChatActivityView,
   BoardCardView,
   MeetingLoadView,
+  EmployeeSummaryView,
 } from "../lib/types";
 
 const invokeApi = {
@@ -89,6 +90,8 @@ const invokeApi = {
   getChatActivity: () => invoke<ChatActivityView[]>("get_chat_activity"),
   getBoardCards: () => invoke<BoardCardView[]>("get_board_cards"),
   getMeetingLoad: () => invoke<MeetingLoadView[]>("get_meeting_load"),
+  getEmployeeSummary: (employeeId: string) =>
+    invoke<EmployeeSummaryView>("get_employee_summary", { employeeId }),
 };
 
 export function useInvoke() {

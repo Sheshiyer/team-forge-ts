@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "data": {
+    "mappings": [
+      {
+        "projectId": "proj_01JTEST0001",
+        "workspaceId": "ws_01JTEST0001",
+        "clockifyProjectId": "clockify-project-123",
+        "hulyProjectId": "huly-project-456",
+        "status": "linked",
+        "updatedAt": "2026-04-09T09:00:00Z"
+      }
+    ]
+  }
+}

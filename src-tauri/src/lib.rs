@@ -133,6 +133,7 @@ pub fn run() {
             commands::get_chat_activity,
             commands::get_board_cards,
             commands::get_meeting_load,
+            commands::get_employee_summary,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

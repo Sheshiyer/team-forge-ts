@@ -13,6 +13,7 @@
 <!-- readme-gen:start:badges -->
 
 ![Build](https://img.shields.io/badge/build-passing-33cc66?style=flat-square&logo=rust&logoColor=white)
+![Release](https://img.shields.io/github/v/tag/Sheshiyer/team-forge-ts?style=flat-square&color=ff9900)
 ![Platform](https://img.shields.io/badge/platform-macOS-ff9900?style=flat-square&logo=apple&logoColor=white)
 ![License](https://img.shields.io/github/license/Sheshiyer/team-forge-ts?style=flat-square&color=9999cc)
 ![Tauri](https://img.shields.io/badge/tauri-v2-cc6699?style=flat-square&logo=tauri&logoColor=white)
@@ -61,8 +62,8 @@ Milestones, issues, HR departments, leave requests, holidays, chat activity, boa
 </td>
 <td width="50%" valign="top">
 
-### LCARS Mission Control Theme
-Star Trek-inspired interface with Orbitron typography, LCARS rounded end-cap bars, pulsing status indicators, and stardate display.
+### App-Wide LCARS Console System
+The bridge look now runs across the full shell and major dashboard views with shared rails, section bands, segmented controls, and responsive console panels.
 
 </td>
 </tr>
@@ -75,8 +76,8 @@ Activity now rolls up into a compact 7-day timeline so you can read motion at th
 </td>
 <td width="50%" valign="top">
 
-### Admin Noise Filtering
-Clockify admin accounts such as `thoughtseedlabs@gmail.com` can be ignored so operational dashboards reflect the team, not the control plane.
+### Calendar Ops Route
+Leave tracking and yearly holidays now live on a dedicated Calendar route, keeping schedule operations separate from org editing while still using the same cache-first Huly snapshot.
 
 </td>
 </tr>
@@ -84,12 +85,13 @@ Clockify admin accounts such as `thoughtseedlabs@gmail.com` can be ignored so op
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
-## New In v0.1.2
+## New In v0.1.6
 
-- **Slack setup now lives in Settings** with explicit `xoxb-...` bot token guidance, optional channel filters, and exact missing-scope feedback when Slack rejects a permission set.
-- **Team mapping is now dynamic in-app** with a draggable crew rail, bento department cards, drop zones for `Head`, `Team Lead`, and `Members`, plus an unassigned tray for restructuring.
-- **Ignored emails now apply deeper** so admin or service accounts stay out of Clockify metrics and out of the Team org-chart mapping workflow.
-- **Huly rollout docs are now repo-native** with system design, rollout planning, normalization runbooks, and release notes tracked alongside the app.
+- **Team is now people-first again** with org mapping, department structure, and an employee-specific operations summary instead of mixing in calendar admin.
+- **Calendar is now its own route** for local leave tracking, yearly holiday management, and the shared cache-first Team schedule data.
+- **Employee drill-down now shows ops context** including standups, leave status, work hours, meetings, and upcoming schedule from the merged Team snapshot + live service data.
+- **Team snapshot loading is cache-first** so SQLite-backed data renders first, then refreshes live Huly state in the background.
+- **Tagged GitHub releases now drive macOS packaging** so `v*` tags cut Apple Silicon + Intel Tauri release builds for the repo release page.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
@@ -121,12 +123,20 @@ cargo tauri dev
 **Prerequisites:** Node.js 20+, Rust 1.75+, pnpm
 
 On first launch:
-1. Navigate to **Settings** (or `Cmd+0`)
+1. Navigate to **Settings** (or `Cmd+=`)
 2. Enter your **Clockify API key** and select workspace
 3. Confirm or edit the **Ignored Clockify Emails** list
 4. Enter your **Huly JWT token**
 5. Paste the **Slack Bot User OAuth Token** (`xoxb-...`) if you want Slack-backed chat activity in **Comms**
 6. Hit **Sync Now** — data populates across all views
+7. Open **Team** for org mapping and employee summaries, then **Calendar** for leave and holiday operations
+
+## Releases
+
+- **Latest tag:** `v0.1.6`
+- **Release trigger:** pushing a tag that matches `v*`
+- **Artifacts:** macOS `.app` and `.dmg` bundles built by GitHub Actions for Apple Silicon and Intel targets
+- **Download page:** [GitHub Releases](https://github.com/Sheshiyer/team-forge-ts/releases)
 
 ## Architecture
 
@@ -171,6 +181,7 @@ graph TD
 - **People layer:** map Clockify users and Huly persons into one employee record so presence, work logs, and Huly activity can sit on the same card.
 - **Time layer:** let Clockify remain the source of actual effort while Huly remains the source of task semantics and collaboration context.
 - **Meaning layer:** enrich raw operational data with Thoughtseed concepts such as Axtech vs Tuya vs OASIS, client onboarding flow, knowledge article lineage, and sprint rhythm.
+- **Fallback ops layer:** keep local SQLite-backed leave and holiday overrides available so the Team page still works when Huly HR coverage is incomplete or a manual correction is needed.
 - **Dashboard layer:** expose the fused dataset differently by page, rather than trying to force every concept into one giant table.
 
 ### How This Maps Onto The Current Dashboard
@@ -200,11 +211,12 @@ The rollout is now documented in-repo instead of living only in chat and GitHub 
 | **Projects** | `Cmd+3` | Clockify | Per-project breakdown, utilization bars, CSV export |
 | **Sprints** | `Cmd+4` | Huly | Milestone tracking, progress bars, on-track/delayed status |
 | **Insights** | `Cmd+5` | Both | Time discrepancies, estimation accuracy, priority queue health |
-| **Team** | `Cmd+6` | Huly | Drag-and-drop org chart mapping, leave calendar, holiday list |
-| **Comms** | `Cmd+7` | Huly + Slack | Chat activity volume, meeting load with ratio analysis |
-| **Boards** | `Cmd+8` | Huly | Kanban cards, days-in-status tracking, stuck card filtering |
-| **Activity** | `Cmd+9` | Both | Weekly timeline, combined feed, engagement heatmap |
-| **Live** | `Cmd+0` | Both | Real-time presence cards with auto-refresh |
+| **Team** | `Cmd+6` | Huly + SQLite | Drag-and-drop org chart mapping, department structure, and employee operations summaries |
+| **Calendar** | `Cmd+7` | Huly + SQLite | Local leave tracking, yearly holiday management, and cache-first schedule ops |
+| **Comms** | `Cmd+8` | Huly + Slack | Chat activity volume, meeting load with ratio analysis |
+| **Boards** | `Cmd+9` | Huly | Kanban cards, days-in-status tracking, stuck card filtering |
+| **Activity** | `Cmd+0` | Both | Weekly timeline, combined feed, engagement heatmap |
+| **Live** | `Cmd+-` | Both | Real-time presence cards with auto-refresh |
 
 ## Project Structure
 
@@ -214,17 +226,17 @@ team-forge-ts/
   DESIGN.md                    # Linear design system reference
   src/                         # React frontend
     components/ui/             # Avatar, Skeleton, DateRangePicker
-    pages/                     # 11 dashboard pages
-    hooks/useInvoke.ts         # Typed Tauri command wrapper
+    pages/                     # 12 app pages including Team + Calendar split
+    hooks/                     # Typed Tauri invoke layer + viewport helpers
     stores/appStore.ts         # Zustand state
-    lib/                       # Types, formatting, CSV export
+    lib/                       # Types, formatting, CSV export, shared LCARS page styles
   src-tauri/                   # Rust backend
     src/clockify/              # HTTP client, sync, rate limiter
     src/huly/                  # REST client, types, sync
-    src/commands/              # 24 Tauri commands
+    src/commands/              # Tauri command surface
     src/sync/                  # Background scheduler, alerts
     src/db/                    # SQLite models, queries, migrations
-    migrations/                # 001_initial.sql (8 tables)
+    migrations/                # SQLite schema, including local Team calendar storage
   sidecar/                     # Node.js Huly SDK (reserved)
 ```
 <!-- readme-gen:end:tree -->

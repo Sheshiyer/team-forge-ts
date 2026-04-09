@@ -9,6 +9,7 @@ import Projects from "./pages/Projects";
 import Sprints from "./pages/Sprints";
 import Insights from "./pages/Insights";
 import Team from "./pages/Team";
+import Calendar from "./pages/Calendar";
 import Comms from "./pages/Comms";
 import Boards from "./pages/Boards";
 import Activity from "./pages/Activity";
@@ -37,6 +38,7 @@ const navSections = [
       { path: "/sprints", label: "Sprints" },
       { path: "/insights", label: "Insights" },
       { path: "/team", label: "Team" },
+      { path: "/calendar", label: "Calendar" },
       { path: "/comms", label: "Comms" },
       { path: "/boards", label: "Boards" },
     ],
@@ -110,7 +112,7 @@ function App() {
       if (e.metaKey || e.ctrlKey) {
         const routes = [
           "/", "/timesheet", "/projects", "/sprints", "/insights",
-          "/team", "/comms", "/boards", "/activity", "/live",
+          "/team", "/calendar", "/comms", "/boards", "/activity",
         ];
         const num = parseInt(e.key);
         if (num >= 1 && num <= 9) {
@@ -122,6 +124,10 @@ function App() {
           navigate(routes[9]);
         }
         if (e.key === "-") {
+          e.preventDefault();
+          navigate("/live");
+        }
+        if (e.key === "=") {
           e.preventDefault();
           navigate("/settings");
         }
@@ -397,9 +403,10 @@ function App() {
             <Route path="/timesheet" element={<Timesheet />} />
             <Route path="/projects" element={<Projects />} />
             <Route path="/sprints" element={<Sprints />} />
-            <Route path="/insights" element={<Insights />} />
-            <Route path="/team" element={<Team />} />
-            <Route path="/comms" element={<Comms />} />
+        <Route path="/insights" element={<Insights />} />
+        <Route path="/team" element={<Team />} />
+        <Route path="/calendar" element={<Calendar />} />
+        <Route path="/comms" element={<Comms />} />
             <Route path="/boards" element={<Boards />} />
             <Route path="/activity" element={<Activity />} />
             <Route path="/live" element={<Live />} />

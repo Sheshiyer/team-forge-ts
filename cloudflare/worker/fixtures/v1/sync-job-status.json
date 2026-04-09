@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "data": {
+    "jobId": "sync_01JTEST0001",
+    "workspaceId": "ws_01JTEST0001",
+    "source": "huly",
+    "jobType": "team_snapshot_refresh",
+    "status": "running",
+    "stats": {
+      "employeesProcessed": 18,
+      "projectsProcessed": 9
+    },
+    "lastError": null,
+    "createdAt": "2026-04-09T09:00:00Z",
+    "updatedAt": "2026-04-09T09:02:00Z"
+  }
+}

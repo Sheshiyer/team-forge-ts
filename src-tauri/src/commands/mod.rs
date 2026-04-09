@@ -14,9 +14,9 @@ use crate::db::queries;
 use crate::huly::client::HulyClient;
 use crate::huly::sync::HulySyncEngine;
 use crate::huly::types::{
-    HulyAccountInfo, HulyBoard, HulyBoardCard, HulyChannel, HulyDepartment, HulyDocument,
-    HulyEmployee, HulyHoliday, HulyIssue, HulyLeaveRequest, HulyPerson, HulyProject,
-    HulyWorkspaceNormalizationAction, HulyWorkspaceNormalizationReport,
+    HulyAccountInfo, HulyBoard, HulyBoardCard, HulyCalendarEvent, HulyChannel, HulyDepartment,
+    HulyDocument, HulyEmployee, HulyHoliday, HulyIssue, HulyLeaveRequest, HulyPerson,
+    HulyProject, HulyWorkspaceNormalizationAction, HulyWorkspaceNormalizationReport,
     HulyWorkspaceNormalizationSnapshot,
 };
 use crate::slack::client::SlackClient;
@@ -295,6 +295,85 @@ fn filter_slack_channels(
                     .unwrap_or(false)
         })
         .collect()
+}
+
+fn huly_channel_display_name(channel: &HulyChannel) -> Option<String> {
+    [
+        channel.title.as_deref(),
+        channel.name.as_deref(),
+        channel.topic.as_deref(),
+        channel.description.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .find(|value| !value.is_empty())
+    .map(|value| value.to_string())
+}
+
+fn is_standup_label(value: &str) -> bool {
+    let compact = normalize_person_key(value);
+    compact.contains("standup")
+        || compact.contains("checkin")
+        || compact.contains("dailysync")
+        || compact.contains("dailystandup")
+}
+
+fn parse_cache_date(value: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()
+}
+
+fn leave_is_active_on(leave: &LeaveView, date: NaiveDate) -> bool {
+    match (
+        parse_cache_date(&leave.date_from),
+        parse_cache_date(&leave.date_to),
+    ) {
+        (Some(start), Some(end)) => date >= start && date <= end,
+        _ => false,
+    }
+}
+
+fn leave_starts_on_or_after(leave: &LeaveView, date: NaiveDate) -> bool {
+    parse_cache_date(&leave.date_from)
+        .map(|start| start >= date)
+        .unwrap_or(false)
+}
+
+fn next_month_start(today: NaiveDate) -> NaiveDate {
+    if today.month() == 12 {
+        NaiveDate::from_ymd_opt(today.year() + 1, 1, 1).unwrap()
+    } else {
+        NaiveDate::from_ymd_opt(today.year(), today.month() + 1, 1).unwrap()
+    }
+}
+
+async fn query_hours_for_range(
+    pool: &sqlx::SqlitePool,
+    employee_id: &str,
+    start: &str,
+    end: &str,
+) -> Result<f64, String> {
+    sqlx::query_as::<_, (f64,)>(
+        "SELECT COALESCE(SUM(duration_seconds), 0) / 3600.0
+         FROM time_entries
+         WHERE employee_id = ?1 AND start_time >= ?2 AND start_time < ?3",
+    )
+    .bind(employee_id)
+    .bind(start)
+    .bind(end)
+    .fetch_one(pool)
+    .await
+    .map(|row| row.0)
+    .map_err(|e| format!("time entry hours query failed: {e}"))
+}
+
+fn employee_matches_calendar_event(event: &HulyCalendarEvent, person_id: &str) -> bool {
+    event.created_by.as_deref() == Some(person_id)
+        || event
+            .participants
+            .as_ref()
+            .map(|participants| participants.iter().any(|participant| participant == person_id))
+            .unwrap_or(false)
 }
 
 // ─── Clockify connection commands ───────────────────────────────
@@ -3731,6 +3810,318 @@ pub async fn get_meeting_load(db: State<'_, DbPool>) -> Result<Vec<MeetingLoadVi
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     Ok(results)
+}
+
+#[tauri::command]
+pub async fn get_employee_summary(
+    db: State<'_, DbPool>,
+    employee_id: String,
+) -> Result<EmployeeSummaryView, String> {
+    let pool = &db.0;
+    let employee_id = employee_id.trim();
+    if employee_id.is_empty() {
+        return Err("Employee id is required".to_string());
+    }
+
+    let employee = queries::get_employee_by_id(pool, employee_id)
+        .await
+        .map_err(|e| format!("db error: {e}"))?
+        .ok_or_else(|| format!("Unknown employee id: {employee_id}"))?;
+
+    let ignored_emails = load_ignored_clockify_emails(pool).await?;
+    let ignored_employee_ids = load_ignored_clockify_employee_ids(pool).await?;
+    if !employee.is_active || employee_is_ignored(&employee, &ignored_emails, &ignored_employee_ids)
+    {
+        return Err(format!(
+            "{} is excluded from Team views and cannot be loaded.",
+            employee.name
+        ));
+    }
+
+    let snapshot = build_team_snapshot_from_cache(pool, None).await?;
+    let today = Local::now().date_naive();
+    let weekday_num = today.weekday().num_days_from_monday();
+    let week_start = today - chrono::Duration::days(weekday_num as i64);
+    let week_end = week_start + chrono::Duration::days(7);
+    let month_start = NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap();
+    let month_end = next_month_start(today);
+    let week_start_str = week_start.format("%Y-%m-%d").to_string();
+    let week_end_str = week_end.format("%Y-%m-%d").to_string();
+    let month_start_str = month_start.format("%Y-%m-%d").to_string();
+    let month_end_str = month_end.format("%Y-%m-%d").to_string();
+
+    let work_hours_this_week =
+        query_hours_for_range(pool, &employee.id, &week_start_str, &week_end_str).await?;
+    let work_hours_this_month =
+        query_hours_for_range(pool, &employee.id, &month_start_str, &month_end_str).await?;
+
+    let mut department_names = Vec::new();
+    let mut role_labels = Vec::new();
+    if let (Some(org_chart), Some(person_id)) =
+        (snapshot.org_chart.as_ref(), employee.huly_person_id.as_ref())
+    {
+        for department in &org_chart.departments {
+            if department
+                .member_person_ids
+                .iter()
+                .any(|member_person_id| member_person_id == person_id)
+            {
+                department_names.push(department.name.clone());
+            }
+            if department.head_person_id.as_deref() == Some(person_id.as_str()) {
+                role_labels.push(format!("Head · {}", department.name));
+            }
+            if department.team_lead_person_id.as_deref() == Some(person_id.as_str()) {
+                role_labels.push(format!("Team Lead · {}", department.name));
+            }
+        }
+    }
+    department_names.sort();
+    department_names.dedup();
+    role_labels.sort();
+    role_labels.dedup();
+
+    let current_leave = snapshot
+        .leaves
+        .iter()
+        .filter(|leave| leave.employee_id.as_deref() == Some(employee.id.as_str()))
+        .filter(|leave| leave.status.to_lowercase() != "rejected")
+        .find(|leave| leave_is_active_on(leave, today))
+        .cloned();
+
+    let mut upcoming_leaves: Vec<LeaveView> = snapshot
+        .leaves
+        .iter()
+        .filter(|leave| leave.employee_id.as_deref() == Some(employee.id.as_str()))
+        .filter(|leave| leave.status.to_lowercase() != "rejected")
+        .filter(|leave| leave_starts_on_or_after(leave, today))
+        .cloned()
+        .collect();
+    upcoming_leaves.sort_by(|left, right| left.date_from.cmp(&right.date_from));
+    upcoming_leaves.truncate(3);
+
+    let mut meetings_this_week = 0;
+    let mut meeting_hours_this_week = 0.0;
+    let mut upcoming_events = Vec::new();
+    let mut messages_last_7_days = 0;
+    let mut standups_last_7_days = 0;
+    let mut last_message_at_ms: Option<i64> = None;
+    let mut last_standup_at_ms: Option<i64> = None;
+
+    if let Ok(client) = get_huly_client(pool).await {
+        let seven_days_ago = Utc::now()
+            .checked_sub_signed(chrono::Duration::days(7))
+            .unwrap_or_else(Utc::now)
+            .timestamp_millis();
+        let week_start_ms = week_start
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        let week_end_ms = week_end
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis();
+        let now_ms = Utc::now().timestamp_millis();
+
+        let (channels, messages, events) = tokio::join!(
+            client.get_channels(),
+            client.get_chat_messages(Some(seven_days_ago)),
+            client.get_calendar_events(),
+        );
+
+        let standup_channel_ids: HashSet<String> = channels
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|channel| {
+                huly_channel_display_name(channel)
+                    .map(|label| is_standup_label(&label))
+                    .unwrap_or(false)
+            })
+            .map(|channel| channel.id)
+            .collect();
+
+        if let Some(person_id) = employee.huly_person_id.as_ref() {
+            for message in messages.unwrap_or_default() {
+                if message.created_by.as_deref() != Some(person_id.as_str()) {
+                    continue;
+                }
+
+                messages_last_7_days += 1;
+                if let Some(timestamp_ms) = message.created_on.or(message.modified_on) {
+                    last_message_at_ms = Some(
+                        last_message_at_ms.map_or(timestamp_ms, |current| current.max(timestamp_ms)),
+                    );
+                    if message
+                        .attached_to
+                        .as_ref()
+                        .map(|channel_id| standup_channel_ids.contains(channel_id))
+                        .unwrap_or(false)
+                    {
+                        standups_last_7_days += 1;
+                        last_standup_at_ms = Some(
+                            last_standup_at_ms
+                                .map_or(timestamp_ms, |current| current.max(timestamp_ms)),
+                        );
+                    }
+                }
+            }
+
+            for event in events
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|event| employee_matches_calendar_event(event, person_id))
+            {
+                let Some(start_ms) = event.date else {
+                    continue;
+                };
+
+                let end_ms = event.due_date.unwrap_or(start_ms);
+                let duration_hours = ((end_ms - start_ms) as f64 / 3_600_000.0).max(0.0);
+
+                if start_ms >= week_start_ms && start_ms < week_end_ms {
+                    meetings_this_week += 1;
+                    meeting_hours_this_week += duration_hours;
+                }
+
+                if end_ms >= now_ms {
+                    let Some(starts_at) = ms_to_datetime_string(start_ms) else {
+                        continue;
+                    };
+
+                    upcoming_events.push(EmployeeScheduleEventView {
+                        id: event.id,
+                        title: event.title.unwrap_or_else(|| "Untitled event".to_string()),
+                        starts_at,
+                        ends_at: event.due_date.and_then(ms_to_datetime_string),
+                        source: "Huly".to_string(),
+                        space: event.space,
+                    });
+                }
+            }
+        }
+    }
+
+    if let Some(client) = get_optional_slack_client(pool).await? {
+        let channel_filters = queries::get_setting(pool, "slack_channel_filters")
+            .await
+            .map_err(|e| format!("read slack_channel_filters: {e}"))?
+            .unwrap_or_default();
+        let channels = filter_slack_channels(
+            client.list_channels().await.unwrap_or_default(),
+            &channel_filters,
+        );
+        let standup_channel_ids: HashSet<String> = channels
+            .iter()
+            .filter(|channel| {
+                channel
+                    .name
+                    .as_deref()
+                    .map(is_standup_label)
+                    .unwrap_or(false)
+            })
+            .map(|channel| channel.id.clone())
+            .collect();
+        let users = client.list_users().await.unwrap_or_default();
+
+        let employee_email = normalize_email(&employee.email);
+        let employee_aliases: HashSet<String> = [
+            normalize_person_key(&employee.name),
+            person_token_signature(&employee.name),
+        ]
+        .into_iter()
+        .filter(|alias| !alias.is_empty())
+        .collect();
+
+        let slack_user_ids: HashSet<String> = users
+            .into_iter()
+            .filter(|user| !user.deleted && !user.is_bot)
+            .filter(|user| {
+                if user
+                    .profile
+                    .as_ref()
+                    .and_then(|profile| profile.email.as_ref())
+                    .map(|email| normalize_email(email) == employee_email)
+                    .unwrap_or(false)
+                {
+                    return true;
+                }
+
+                slack_user_display_names(user).iter().any(|name| {
+                    employee_aliases.contains(&normalize_person_key(name))
+                        || employee_aliases.contains(&person_token_signature(name))
+                })
+            })
+            .map(|user| user.id)
+            .collect();
+
+        if !slack_user_ids.is_empty() {
+            let oldest_ts = format!(
+                "{}.000000",
+                Utc::now()
+                    .checked_sub_signed(chrono::Duration::days(7))
+                    .unwrap_or_else(Utc::now)
+                    .timestamp()
+            );
+
+            for channel in channels {
+                let is_standup_channel = standup_channel_ids.contains(&channel.id);
+                for message in client
+                    .get_channel_messages_since(&channel.id, &oldest_ts)
+                    .await
+                    .unwrap_or_default()
+                {
+                    if message.bot_id.is_some()
+                        || message.subtype.as_deref() == Some("bot_message")
+                    {
+                        continue;
+                    }
+
+                    let Some(slack_user_id) = message.user.as_ref() else {
+                        continue;
+                    };
+                    if !slack_user_ids.contains(slack_user_id) {
+                        continue;
+                    }
+
+                    messages_last_7_days += 1;
+                    if let Some(timestamp_ms) = slack_ts_to_millis(&message.ts) {
+                        last_message_at_ms = Some(
+                            last_message_at_ms.map_or(timestamp_ms, |current| current.max(timestamp_ms)),
+                        );
+                        if is_standup_channel {
+                            standups_last_7_days += 1;
+                            last_standup_at_ms = Some(
+                                last_standup_at_ms
+                                    .map_or(timestamp_ms, |current| current.max(timestamp_ms)),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    upcoming_events.sort_by(|left, right| left.starts_at.cmp(&right.starts_at));
+    upcoming_events.truncate(5);
+
+    Ok(EmployeeSummaryView {
+        employee,
+        department_names,
+        role_labels,
+        work_hours_this_week,
+        work_hours_this_month,
+        meetings_this_week,
+        meeting_hours_this_week,
+        standups_last_7_days,
+        last_standup_at: last_standup_at_ms.and_then(ms_to_datetime_string),
+        messages_last_7_days,
+        last_message_at: last_message_at_ms.and_then(ms_to_datetime_string),
+        current_leave,
+        upcoming_leaves,
+        upcoming_events,
+    })
 }
 
 #[cfg(test)]

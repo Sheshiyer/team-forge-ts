@@ -1,0 +1,52 @@
+{
+  "name": "teamforge-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-09",
+  "workers_dev": true,
+  "keep_vars": true,
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "TF_ENV": "development",
+    "TF_API_BASE_URL": "http://127.0.0.1:8787",
+    "TF_DEFAULT_OTA_CHANNEL": "stable",
+    "TF_ACCESS_AUDIENCE": "teamforge-desktop"
+  },
+  "d1_databases": [
+    {
+      "binding": "TEAMFORGE_DB",
+      "database_name": "teamforge-primary",
+      "database_id": "d773aaa8-aa51-4ef8-ae08-1d3d238d2ae3",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "TEAMFORGE_ARTIFACTS",
+      "bucket_name": "teamforge-artifacts"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "SYNC_QUEUE",
+        "queue": "teamforge-sync"
+      }
+    ]
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "WORKSPACE_LOCKS",
+        "class_name": "WorkspaceLock"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["WorkspaceLock"]
+    }
+  ]
+}

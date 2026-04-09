@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "data": {
+    "service": "teamforge-api",
+    "phase": "phase-2-wave-1",
+    "environment": "development",
+    "defaultOtaChannel": "stable",
+    "bindings": {
+      "d1Available": true,
+      "schemaReady": true,
+      "artifactsBound": true,
+      "syncQueueBound": true,
+      "workspaceLocksBound": true
+    },
+    "routeStatus": {
+      "bootstrap": "scaffolded",
+      "remoteConfig": "scaffolded",
+      "projects": "pending",
+      "projectMappings": "pending",
+      "connections": "pending",
+      "sync": "pending",
+      "teamSnapshot": "pending",
+      "hulyNormalization": "pending",
+      "ota": "pending"
+    }
+  }
+}

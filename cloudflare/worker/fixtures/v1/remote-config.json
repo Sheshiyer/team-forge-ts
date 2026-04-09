@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "data": {
+    "workspaceMode": "shadow",
+    "ota": {
+      "defaultChannel": "stable",
+      "startupChecksEnabled": false
+    },
+    "features": {
+      "backendBridgeEnabled": false,
+      "remoteProjectMappingsEnabled": false,
+      "hulyNormalizationEnabled": false
+    }
+  }
+}

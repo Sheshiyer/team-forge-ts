@@ -1,0 +1,11 @@
+{
+  "version": "0.2.0",
+  "notes": "Cloudflare-backed project mappings and updater support.",
+  "pub_date": "2026-04-09T09:00:00Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "url": "https://artifacts.teamforge.app/ota/releases/0.2.0/darwin-aarch64/TeamForge.app.tar.gz",
+      "signature": "REPLACE_WITH_RELEASE_SIGNATURE"
+    }
+  }
+}

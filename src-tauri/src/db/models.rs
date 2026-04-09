@@ -385,3 +385,33 @@ pub struct MeetingLoadView {
     pub work_hours: f64,
     pub meeting_ratio: f64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmployeeScheduleEventView {
+    pub id: String,
+    pub title: String,
+    pub starts_at: String,
+    pub ends_at: Option<String>,
+    pub source: String,
+    pub space: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmployeeSummaryView {
+    pub employee: Employee,
+    pub department_names: Vec<String>,
+    pub role_labels: Vec<String>,
+    pub work_hours_this_week: f64,
+    pub work_hours_this_month: f64,
+    pub meetings_this_week: u32,
+    pub meeting_hours_this_week: f64,
+    pub standups_last_7_days: u32,
+    pub last_standup_at: Option<String>,
+    pub messages_last_7_days: u32,
+    pub last_message_at: Option<String>,
+    pub current_leave: Option<LeaveView>,
+    pub upcoming_leaves: Vec<LeaveView>,
+    pub upcoming_events: Vec<EmployeeScheduleEventView>,
+}

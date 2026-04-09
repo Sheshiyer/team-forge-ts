@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "data": {
+    "projects": [
+      {
+        "id": "proj_01JTEST0001",
+        "workspaceId": "ws_01JTEST0001",
+        "name": "TeamForge Cloudflare Rollout",
+        "code": "TF-CF",
+        "status": "active",
+        "mappings": {
+          "clockifyProjectId": "clockify-project-123",
+          "hulyProjectId": "huly-project-456"
+        }
+      }
+    ]
+  }
+}

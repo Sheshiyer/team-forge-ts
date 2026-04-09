@@ -2,6 +2,320 @@
 
 ## Goal
 
+Begin Phase 2 Wave 1 of the Cloudflare backend program:
+- provision the first TeamForge D1 database in Cloudflare so the backend scaffold binds to a real account resource
+- scaffold the Cloudflare Worker package and Wrangler config in-repo
+- add the first additive D1 migration that matches the frozen schema contract
+
+## Plan
+
+- [x] Record the Phase 2 Wave 1 execution slice and expected deliverables in this task log
+- [x] Use the Cloudflare MCP to locate the D1 API surface and attempt provisioning of the initial TeamForge database
+- [x] Scaffold the Worker package, Wrangler config, and initial D1 migration files under a dedicated cloud package
+- [x] Review the resulting package for coherence, document verification, and capture the next implementation slice
+
+## Review
+
+- Added a new Cloudflare backend scaffold under `cloudflare/worker/` with:
+  - `wrangler.jsonc`
+  - `package.json`
+  - `tsconfig.json`
+  - `.dev.vars.example`
+  - `src/index.ts`
+  - `src/lib/*`
+  - `src/routes/*`
+  - `migrations/0001_initial.sql`
+  - `fixtures/v1/*`
+- The Worker scaffold now:
+  - binds the contract-required D1, R2, Queue, and Durable Object resources
+  - exposes `/`, `/healthz`, `/v1/bootstrap`, and `/v1/remote-config`
+  - reserves the rest of the Phase 1 route contract behind explicit `feature_not_ready` responses instead of silent drift
+  - includes a placeholder `WorkspaceLock` Durable Object for future serialized sync and normalization flows
+- The first D1 migration creates the canonical shared tables from the contract pack:
+  - organizations, workspaces, devices
+  - employees and employee/project external ID mapping tables
+  - integration connection and credential metadata
+  - sync cursor/job/run state
+  - normalization, transitional leave/holiday, remote config, OTA, and audit tables
+  - seeded `canary` and `stable` OTA channels
+- Captured payload fixtures for:
+  - bootstrap
+  - remote config
+  - projects
+  - project mappings
+  - sync job status
+  - OTA manifest
+- Cloudflare MCP result:
+  - confirmed the live D1 endpoints from the Cloudflare API spec
+  - attempted live account execution through the MCP
+  - remote provisioning is still blocked by `10000 Authentication error`, so the Wrangler config keeps placeholder resource IDs until account auth is fixed
+- Verification:
+  - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit` ✅
+  - `sqlite3 ':memory:' < cloudflare/worker/migrations/0001_initial.sql` ✅
+- Next executable slice:
+  - authenticate Cloudflare MCP or Wrangler against the target account
+  - create the real `teamforge-primary` D1 database, `teamforge-artifacts` bucket, and `teamforge-sync` queue
+  - replace Wrangler placeholder IDs
+  - implement repository-backed `/v1/projects`, `/v1/project-mappings`, and `/v1/connections` routes
+
+---
+
+## Goal
+
+Begin Phase 1 of the Cloudflare backend + OTA program:
+- freeze the system boundary, trust boundary, secrets model, schema contract, route contract, updater contract, and migration/rollback rules in repo docs
+- give Phase 2 implementation work a stable contract pack instead of relying on chat context
+
+## Plan
+
+- [x] Record the exact Phase 1 deliverables in the task log and map them to repo artifacts
+- [x] Create the Phase 1 contract pack under `docs/architecture/`
+- [x] Link the contract pack from the main Cloudflare architecture plan and review for coherence
+- [x] Document the Phase 1 outcome and identify the next executable slice
+
+## Review
+
+- Created the Phase 1 contract pack under `docs/architecture/contracts/`:
+  - `README.md`
+  - `phase1-baseline.md`
+  - `secrets-auth-contract.md`
+  - `d1-schema-contract.md`
+  - `worker-route-contract.md`
+  - `ota-updater-contract.md`
+  - `migration-rollback-contract.md`
+- Updated `docs/architecture/cloudflare-backend-ota-design.md` so the main architecture plan now points directly at the Phase 1 contract pack.
+- The contract pack now freezes:
+  - service ownership and environment boundaries
+  - lock-zone files
+  - secret ownership and trust boundaries
+  - canonical D1 scope
+  - Worker route and response rules
+  - Tauri OTA artifact and manifest expectations
+  - migration stages, feature flags, reconciliation requirements, and rollback triggers
+- Verification:
+  - reviewed the new contract docs in-place after writing them
+  - reviewed the top of `tasks/todo.md` and `cloudflare-backend-ota-design.md` to confirm the new artifacts are linked coherently
+  - no build/test rerun, because this slice changed architecture documentation only
+- Next executable slice:
+  - Phase 2 Wave 1
+  - scaffold the Cloudflare Worker package, Wrangler config, and initial D1 migrations
+  - keep lock-zone edits serialized when updater plumbing begins
+
+---
+
+## Goal
+
+Draft the exact Cloudflare backend and OTA architecture using the requested `swarm-architect` skill:
+- define the Cloudflare secret layout for Clockify, Huly, Slack, and encrypted credential expansion
+- define the canonical D1 schema, Worker route contract, and OTA manifest flow
+- define a phased migration path from the current local-first TeamForge app
+
+## Plan
+
+- [x] Load the requested `swarm-architect` skill and its required planning context
+- [x] Review the existing TeamForge Huly/system docs plus current Tauri bootstrap files
+- [x] Produce an execution-ready architecture artifact covering backend, OTA, and migration
+
+## Review
+
+- Created [cloudflare-backend-ota-design.md](/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/team-forge-ts/docs/architecture/cloudflare-backend-ota-design.md).
+- The design freezes the target shape as:
+  - Edge API Worker
+  - D1 for canonical shared persistence
+  - R2 for OTA artifacts, signatures, and large snapshots/exports
+  - Queues for async vendor sync
+  - Workflows for backfills and reconciliation
+  - Durable Objects only for serialized coordination
+- The plan uses Cloudflare secret management for shared upstream vendor credentials and keeps Tauri signing credentials in CI/CD secret storage instead of Worker runtime.
+- The architecture artifact includes:
+  - discovery summary and constraints
+  - exact secret layout
+  - exact D1 schema
+  - exact Worker route contract
+  - exact OTA manifest and release flow
+  - phased migration path
+  - phase / wave / swarm decomposition with 90 dependency-aware tasks
+- Verification:
+  - reviewed the requested skill's playbooks, templates, schemas, and runbook
+  - reviewed existing TeamForge docs and current Tauri bootstrap/config files
+  - no build/test rerun, because this pass created a planning artifact rather than executable changes
+
+---
+
+## Goal
+
+Review whether TeamForge should insert a Cloudflare layer between the desktop app and current services:
+- evaluate a Cloudflare Worker / Durable Object / storage architecture for project management, bridge logic, and backend persistence
+- verify the current OTA update path available for this Tauri desktop app
+- recommend a concrete architecture and rollout path
+
+## Plan
+
+- [x] Verify current Cloudflare service capabilities and fit for TeamForge's bridge/persistence layer
+- [x] Verify the current Tauri updater / OTA model and what it can realistically deliver
+- [x] Recommend the simplest viable architecture, including what should stay local vs move to Cloudflare
+
+## Review
+
+- Cloudflare can sit cleanly in the middle, but the right shape is not “one Worker that does everything.”
+- Recommended split:
+  - Edge API Worker as the desktop app's single remote entrypoint
+  - D1 for shared relational persistence if TeamForge needs a central multi-device/team backend
+  - R2 for OTA bundles, signatures, exports, and larger snapshot payloads
+  - Queues for ingestion and retryable background sync from Clockify / Huly / Slack
+  - Workflows for long-running backfills, reconciliation, and human-reviewed sync flows
+  - Durable Objects only where strict serialization matters, such as “one sync per workspace/project at a time” or shared mutation locks
+- Durable Objects are a coordination primitive, not the default primary database here. They fit workspace/project command serialization better than broad analytics persistence.
+- Tauri OTA is not wired in this repo today:
+  - no updater plugin dependency in `package.json` or `src-tauri/Cargo.toml`
+  - no updater configuration in `src-tauri/tauri.conf.json`
+  - no signing keys, updater endpoints, or artifact generation configured
+- Best OTA design for this app:
+  - generate signed updater artifacts during CI
+  - upload artifacts + `.sig` files to R2
+  - serve either a static manifest or a rollout-aware dynamic manifest from a Cloudflare Worker
+  - call the Tauri updater plugin from the desktop app to check, download, install, and relaunch
+- Important constraint:
+  - Tauri OTA updates ship new signed binaries; they are not “hot code push” for native Rust changes
+  - if you want lightweight post-install changes, treat those separately as remote config / remote data from the Worker
+- Verification:
+  - reviewed current repo config in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`
+  - verified current platform capabilities against official Cloudflare and Tauri docs
+  - no code or build changes in this pass
+
+---
+
+## Goal
+
+Review the full Settings surface for integrations, connections, and Huly coverage:
+- inventory every live Settings option and what it actually persists or tests
+- trace each Settings integration through the frontend and Rust command layer
+- identify what remains pending, missing, or partial in the Huly integration
+
+## Plan
+
+- [x] Inspect the Settings UI and saved setting keys to inventory the available options
+- [x] Trace Clockify, Huly, and Slack connection flows through `useInvoke` and Rust commands
+- [x] Review Huly-backed features and list what is still pending or only partially implemented
+- [x] Document findings, risks, and open questions in this review section
+
+## Review
+
+- Current Settings surface is limited to three integrations: Clockify, Huly, and Slack, plus sync controls and crew quota management. The UI persists only `clockify_*`, `huly_token`, and `slack_*` settings and exposes no other integrations.
+- Clockify is the most complete integration operationally:
+  - test connection + workspace selection
+  - ignored-crew filtering
+  - manual and background sync
+  - downstream use across presence, timesheets, quotas, and people state
+- Huly is partially integrated:
+  - token test/save
+  - manual full sync
+  - cached Team/Calendar snapshot refresh
+  - downstream reads for milestones, board cards, chat, meetings, org data, leave, and holidays
+- Slack is additive, not foundational:
+  - bot-token validation + optional channel filters
+  - downstream reads only for chat activity and standup/message enrichment
+- Main findings:
+  - Huly “Test Connection” only validates account access, not the workspace capabilities the app actually depends on. Missing HR/calendar/chunter classes can still produce a green Settings state.
+  - Huly base URL is hardcoded to `https://huly.app`, so self-hosted or alternate Huly deployments are not configurable from Settings.
+  - Calendar leave and holiday editing is local-only today. The app reads Huly leave/holiday cache, but manual edits are written to local SQLite tables and do not sync back to Huly.
+  - Huly workspace normalization tooling exists in the backend and covers projects/issues/channels/boards/doc hygiene, but it is not exposed through `useInvoke` or the Settings UI.
+  - Clockify-to-Huly project linkage is still pending in local persistence: project rows have `huly_project_id`, but Clockify sync always writes `None`.
+  - Background sync is Clockify-only. Huly sync must be triggered manually through Settings or a Team/Calendar refresh path.
+- Verification:
+  - reviewed `src/pages/Settings.tsx`, `src/hooks/useInvoke.ts`, `src/App.tsx`
+  - reviewed `src-tauri/src/commands/mod.rs`, `src-tauri/src/huly/client.rs`, `src-tauri/src/huly/sync.rs`, `src-tauri/src/clockify/sync.rs`, `src-tauri/src/sync/scheduler.rs`
+  - reviewed Huly/Slack consumer pages and calendar/team cache flows
+  - no build/test rerun, because this pass was a code review and integration audit only
+
+---
+
+## Goal
+
+Replace the broken Team drag-and-drop org assignment flow with explicit assignment controls:
+- stop depending on roster drag/drop for department and role mapping
+- add dropdown-based assign controls for member, head, and team lead placement
+- verify the new Team interaction still saves cleanly through the existing org mapping path
+
+## Plan
+
+- [x] Inspect the current Team assignment render path and identify the smallest replacement surface
+- [x] Replace drag-and-drop interactions with explicit dropdown-based role and department assignment controls
+- [x] Verify with build/test commands and record the interaction change
+
+## Review
+
+- Removed the broken Team page drag-and-drop state entirely from `src/pages/Team.tsx` instead of trying to preserve a partially working pointer flow.
+- Added direct assignment dropdowns to the roster and unassigned tray so every visible person can be mapped to `Unassigned`, `Department • Member`, `Department • Head`, or `Department • Team Lead`.
+- Reworked each department card to use explicit Head and Team Lead selectors plus the existing member removal control, while keeping the existing draft/save org-chart persistence path unchanged.
+- Verification:
+  - `pnpm build` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+- Residual note:
+  - I did not run a manual desktop click-through of the Team page after this interaction change, so this pass is build/test verified rather than interactively QA’d.
+
+---
+
+## Goal
+
+Cut the next TeamForge release so Team becomes a people-first surface again:
+- move leave and holiday calendar operations off the Team page into a dedicated Calendar route
+- add an employee-specific detail view with summary signals for standups, leave, work hours, meetings, and related ops context
+- bump the app from `0.1.5` to `0.1.6` once the split is implemented and verified
+
+## Plan
+
+- [x] Add the route/version scope for the next release (`/calendar`, nav updates, `0.1.6` target)
+- [x] Slim `Team` down to org mapping, department structure, and employee detail drill-down
+- [x] Build the new `Calendar` page for leave tracking, holiday management, and yearly calendar views
+- [x] Add a backend-backed employee summary command and frontend types/invoke plumbing
+- [x] Verify with frontend build and Rust tests, then record the release review
+
+## Review
+
+- Added a dedicated `Calendar` route and shell navigation entry so leave tracking and yearly holiday management no longer live on the Team page.
+- Slimmed `src/pages/Team.tsx` down to the org chart editor, department structure, and a new employee operations drill-down backed by a single summary payload instead of multiple frontend joins.
+- Added `src/components/team/EmployeeSummaryPanel.tsx` plus the Rust/TypeScript summary plumbing so Team can show per-employee work hours, meeting load, standup activity, leave state, and upcoming schedule.
+- Added `src/pages/Calendar.tsx` to own the leave editor, holiday editor, and yearly holiday calendar using the existing cache-first Team snapshot flow.
+- Bumped release metadata and README guidance from `0.1.5` to `0.1.6`, including the new Calendar route and updated keyboard shortcut note for Settings.
+- Verification:
+  - `pnpm build` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+- Residual note:
+  - I did not do a manual click-through of the new Team and Calendar routes this turn, so this pass is compiler/test verified rather than interactively QA’d in the desktop shell.
+
+---
+
+## Goal
+
+Update the README so it matches the latest shipped TeamForge state:
+- document the app-wide LCARS overhaul, local leave/holiday management, and current release path
+- keep the existing visual README style, screenshots, and Thoughtseed framing
+
+## Plan
+
+- [x] Read the requested README skill and inspect the current README plus shipped changes
+- [x] Refresh README sections that are now outdated after the UI/release work
+- [x] Review the updated README for coherence and record the doc update
+
+## Review
+
+- Updated `README.md` in the existing visual/landing-page style instead of replacing it with a generic template.
+- Refreshed the stale release and feature messaging to match the current shipped state:
+  - `v0.1.5` release callout
+  - app-wide LCARS consistency overhaul
+  - local leave + yearly holiday management on the Team page
+  - cache-first Team snapshot behavior
+  - tag-driven macOS `.app` / `.dmg` release path
+- Updated the Team/dashboard and project-structure sections so the docs now mention the SQLite-backed Team workflows plus the shared UI infrastructure (`hooks/` and `lcarsPageStyles`).
+- Review result:
+  - checked the edited README sections in-place for stale version references and broken flow ✅
+  - no code build/test rerun, because this pass only changed markdown and task notes
+
+---
+
+## Goal
+
 Ship the current TeamForge changes as a new release build:
 - bump the app version from `0.1.3` to `0.1.5`
 - commit and push the current app/design work on `main`
@@ -874,3 +1188,44 @@ Run an app-wide LCARS consistency overhaul, not just a Team-page polish pass:
 - [ ] Redesign the Team / calendar tracking surface inside that broader app-wide language
 - [ ] Apply consistency fixes to the most visible adjacent views and controls so the overhaul is not Team-only
 - [ ] Verify with build/test/app launch and document the redesign outcomes
+
+---
+
+## Goal
+
+Set up Supabase MCP support in Codex for project `qjnqdhvlxdmezxdnlrbj`:
+- add Supabase MCP server
+- enable remote MCP client support in Codex config
+- authenticate Supabase MCP
+- verify MCP server/auth status
+- optionally install Supabase agent skills
+
+## Plan
+
+- [x] Add Supabase MCP server via `codex mcp add`
+- [x] Ensure `[mcp] remote_mcp_client_enabled = true` exists in `~/.codex/config.toml`
+- [x] Authenticate with `codex mcp login supabase`
+- [x] Verify MCP setup and authentication state from Codex CLI
+- [x] Install optional Supabase agent skills via `npx skills add supabase/agent-skills`
+- [x] Document verification output and completion notes
+
+## Review
+
+- Added Supabase MCP server:
+  - `codex mcp add supabase --url 'https://mcp.supabase.com/mcp?project_ref=qjnqdhvlxdmezxdnlrbj'`
+  - output: `Added global MCP server 'supabase'.`
+- Enabled remote MCP client support in global Codex config:
+  - `~/.codex/config.toml` now contains:
+    - `[mcp]`
+    - `remote_mcp_client_enabled = true`
+- Authentication completed:
+  - `codex mcp login supabase`
+  - output ended with: `Successfully logged in to MCP server 'supabase'.`
+- Verification from Codex CLI:
+  - `codex mcp list` shows Supabase server URL and `enabled` status.
+  - `codex mcp get supabase` confirms configured transport and URL.
+- Optional skills installed non-interactively:
+  - `npx skills add supabase/agent-skills -y -g`
+  - installed:
+    - `~/.agents/skills/supabase`
+    - `~/.agents/skills/supabase-postgres-best-practices`

@@ -1,0 +1,12 @@
+{
+  "name": "teamforge-cloudflare-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "pnpm exec tsc -p tsconfig.json --noEmit",
+    "dev": "pnpm dlx wrangler dev",
+    "deploy": "pnpm dlx wrangler deploy",
+    "d1:migrate:local": "pnpm dlx wrangler d1 migrations apply TEAMFORGE_DB --local",
+    "d1:migrate:remote": "pnpm dlx wrangler d1 migrations apply TEAMFORGE_DB --remote"
+  }
+}
