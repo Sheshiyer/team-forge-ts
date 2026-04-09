@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{Datelike, Local, NaiveDate, Utc, Weekday};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::State;
 
@@ -4269,7 +4270,7 @@ pub async fn get_standup_report(db: State<'_, DbPool>) -> Result<StandupReport, 
 
             let channel_name = msg.attached_to.as_ref()
                 .and_then(|ch_id| standup_channels.iter().find(|c| &c.id == ch_id))
-                .and_then(huly_channel_display_name)
+                .and_then(|c| huly_channel_display_name(c))
                 .unwrap_or_else(|| "standup".to_string());
 
             posted.entry(name.clone()).or_insert_with(|| StandupEntry {
@@ -4374,6 +4375,293 @@ pub async fn get_standup_report(db: State<'_, DbPool>) -> Result<StandupReport, 
         compliance_percent,
         entries,
     })
+}
+
+// ── P2 Dashboard Command Stubs ───────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientView {
+    pub id: String,
+    pub name: String,
+    pub tier: String,
+    pub industry: Option<String>,
+    pub monthly_value: f64,
+    pub active_projects: u32,
+    pub primary_contact: Option<String>,
+    pub contract_status: String,
+    pub contract_end_date: Option<String>,
+    pub days_remaining: Option<i32>,
+    pub tech_stack: Vec<String>,
+    pub drive_link: Option<String>,
+    pub chrome_profile: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientDetailView {
+    pub client: ClientView,
+    pub linked_projects: Vec<serde_json::Value>,
+    pub linked_devices: Vec<serde_json::Value>,
+    pub resources: Vec<serde_json::Value>,
+    pub recent_activity: Vec<serde_json::Value>,
+}
+
+#[tauri::command]
+pub async fn get_clients(_db: State<'_, DbPool>) -> Result<Vec<ClientView>, String> {
+    Ok(vec![])
+}
+
+#[tauri::command]
+pub async fn get_client_detail(
+    _db: State<'_, DbPool>,
+    _client_id: String,
+) -> Result<ClientDetailView, String> {
+    Err("Client not found".to_string())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceView {
+    pub id: String,
+    pub name: String,
+    pub model: Option<String>,
+    pub platform: String,
+    pub client_name: Option<String>,
+    pub status: String,
+    pub responsible_dev: Option<String>,
+    pub issue_count: u32,
+    pub technical_notes: Option<String>,
+    pub api_docs_link: Option<String>,
+    pub firmware_version: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_devices(_db: State<'_, DbPool>) -> Result<Vec<DeviceView>, String> {
+    Ok(vec![])
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeArticleView {
+    pub id: String,
+    pub title: String,
+    pub category: String,
+    pub author: Option<String>,
+    pub updated_at: String,
+    pub tags: Vec<String>,
+    pub content_preview: String,
+    pub content: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_knowledge_articles(
+    _db: State<'_, DbPool>,
+) -> Result<Vec<KnowledgeArticleView>, String> {
+    Ok(vec![])
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SprintBurndownPoint {
+    pub day: u32,
+    pub remaining: u32,
+    pub ideal: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SprintCapacityView {
+    pub employee_name: String,
+    pub scheduled_hours: f64,
+    pub available_hours: f64,
+    pub utilization: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SprintComparisonView {
+    pub current_velocity: u32,
+    pub previous_velocity: u32,
+    pub current_completion: f64,
+    pub previous_completion: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SprintDetailView {
+    pub id: String,
+    pub label: String,
+    pub goal: Option<String>,
+    pub retro_notes: Option<String>,
+    pub burndown: Vec<SprintBurndownPoint>,
+    pub capacity: Vec<SprintCapacityView>,
+    pub comparison: Option<SprintComparisonView>,
+}
+
+#[tauri::command]
+pub async fn get_sprint_detail(
+    _db: State<'_, DbPool>,
+    _sprint_id: String,
+) -> Result<SprintDetailView, String> {
+    Err("Sprint detail not available yet".to_string())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonthlyHoursView {
+    pub employee_name: String,
+    pub actual_hours: f64,
+    pub expected_hours: f64,
+    pub status: String,
+    pub is_remote: bool,
+    pub timezone: Option<String>,
+    pub on_leave: bool,
+}
+
+#[tauri::command]
+pub async fn get_monthly_hours(db: State<'_, DbPool>) -> Result<Vec<MonthlyHoursView>, String> {
+    let pool = &db.0;
+    let employees = queries::get_employees(pool)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    let now = Local::now();
+    let month_start = now
+        .with_day(1)
+        .unwrap_or(now)
+        .format("%Y-%m-%dT00:00:00Z")
+        .to_string();
+    let month_end = now.format("%Y-%m-%dT23:59:59Z").to_string();
+
+    let mut result = Vec::new();
+    for emp in employees.iter().filter(|e| e.is_active) {
+        let entries = queries::get_time_entries(pool, &emp.id, &month_start, &month_end)
+            .await
+            .unwrap_or_default();
+        let actual: f64 = entries
+            .iter()
+            .filter_map(|e| e.duration_seconds)
+            .sum::<i64>() as f64
+            / 3600.0;
+        let expected = emp.monthly_quota_hours as f64;
+        let status = if actual < 120.0 {
+            "under"
+        } else if actual > 180.0 {
+            "over"
+        } else {
+            "normal"
+        };
+        result.push(MonthlyHoursView {
+            employee_name: emp.name.clone(),
+            actual_hours: actual,
+            expected_hours: expected,
+            status: status.to_string(),
+            is_remote: false,
+            timezone: None,
+            on_leave: false,
+        });
+    }
+    Ok(result)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrainingTrackView {
+    pub id: String,
+    pub name: String,
+    pub total_modules: u32,
+    pub completion_rate: f64,
+    pub overdue_count: u32,
+}
+
+#[tauri::command]
+pub async fn get_training_tracks(
+    _db: State<'_, DbPool>,
+) -> Result<Vec<TrainingTrackView>, String> {
+    Ok(vec![])
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrainingStatusRow {
+    pub employee_name: String,
+    pub track: String,
+    pub progress: f64,
+    pub modules_done: u32,
+    pub total_modules: u32,
+    pub next_module: Option<String>,
+    pub deadline: Option<String>,
+    pub status: String,
+}
+
+#[tauri::command]
+pub async fn get_training_status(
+    _db: State<'_, DbPool>,
+) -> Result<Vec<TrainingStatusRow>, String> {
+    Ok(vec![])
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsMatrixCell {
+    pub employee_name: String,
+    pub skill: String,
+    pub level: u32,
+}
+
+#[tauri::command]
+pub async fn get_skills_matrix(_db: State<'_, DbPool>) -> Result<Vec<SkillsMatrixCell>, String> {
+    Ok(vec![])
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnboardingTaskView {
+    pub id: String,
+    pub title: String,
+    pub completed: bool,
+    pub completed_at: Option<String>,
+    pub resource_created: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OnboardingFlowView {
+    pub client_id: String,
+    pub client_name: String,
+    pub start_date: String,
+    pub completed_tasks: u32,
+    pub total_tasks: u32,
+    pub progress_percent: f64,
+    pub status: String,
+    pub tasks: Vec<OnboardingTaskView>,
+    pub days_elapsed: u32,
+}
+
+#[tauri::command]
+pub async fn get_onboarding_flows(
+    _db: State<'_, DbPool>,
+) -> Result<Vec<OnboardingFlowView>, String> {
+    Ok(vec![])
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlannerSlotView {
+    pub employee_name: String,
+    pub scheduled_hours: f64,
+    pub actual_hours: f64,
+    pub focus_blocks: u32,
+    pub meeting_blocks: u32,
+    pub capacity_utilization: f64,
+}
+
+#[tauri::command]
+pub async fn get_planner_capacity(
+    _db: State<'_, DbPool>,
+) -> Result<Vec<PlannerSlotView>, String> {
+    Ok(vec![])
 }
 
 #[cfg(test)]

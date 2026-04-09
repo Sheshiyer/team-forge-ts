@@ -9,6 +9,7 @@ import type {
   DepartmentView,
   Employee,
   EmployeeSummaryView,
+  MonthlyHoursView,
   OrgChartView,
   OrgDepartmentMappingView,
   OrgPersonView,
@@ -357,6 +358,7 @@ function Team() {
     useState<EmployeeSummaryView | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [monthlyHours, setMonthlyHours] = useState<MonthlyHoursView[]>([]);
   const isCompactLayout = viewportWidth < 1180;
 
   const applySnapshot = useCallback((snapshot: TeamSnapshotView) => {
@@ -402,6 +404,13 @@ function Team() {
       setEmployees([]);
       setSelectedEmployeeId("");
       setSnapshotMessage(`Team roster read failed: ${String(err)}`);
+    }
+
+    try {
+      const hours = await api.getMonthlyHours();
+      setMonthlyHours(hours);
+    } catch {
+      setMonthlyHours([]);
     }
 
     try {
@@ -1204,6 +1213,104 @@ function Team() {
               </div>
             ))}
           </div>
+        )}
+      </div>
+
+      {/* Monthly Hours & Remote Visibility (#9) */}
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-tan)" }}>
+        <h2 style={styles.sectionTitle}>MONTHLY HOURS & REMOTE VISIBILITY</h2>
+        <div style={styles.sectionDivider} />
+        {monthlyHours.length === 0 ? (
+          <p style={styles.emptyText}>NO MONTHLY HOURS DATA. SYNC CLOCKIFY + HULY FIRST.</p>
+        ) : (
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>CREW MEMBER</th>
+                <th style={styles.th}>ACTUAL HOURS</th>
+                <th style={styles.th}>EXPECTED HOURS</th>
+                <th style={styles.th}>STATUS</th>
+                <th style={styles.th}>REMOTE</th>
+                <th style={styles.th}>TIMEZONE</th>
+                <th style={styles.th}>LEAVE</th>
+              </tr>
+            </thead>
+            <tbody>
+              {monthlyHours.map((row) => {
+                const statusColor =
+                  row.status === "under"
+                    ? "var(--lcars-red)"
+                    : row.status === "over"
+                      ? "var(--lcars-yellow)"
+                      : "var(--lcars-green)";
+                const statusLabel =
+                  row.status === "under"
+                    ? "UNDER (<120H)"
+                    : row.status === "over"
+                      ? "OVER (>180H)"
+                      : "NORMAL";
+                return (
+                  <tr key={row.employeeName}>
+                    <td style={styles.td}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <Avatar name={row.employeeName} size={22} />
+                        <span style={{ color: "var(--lcars-tan)" }}>{row.employeeName}</span>
+                        {row.onLeave && (
+                          <span
+                            style={{
+                              fontFamily: "'Orbitron', sans-serif",
+                              fontSize: 8,
+                              fontWeight: 600,
+                              color: "var(--lcars-yellow)",
+                              border: "1px solid var(--lcars-yellow)",
+                              padding: "1px 6px",
+                              borderRadius: 2,
+                              letterSpacing: "1px",
+                            }}
+                          >
+                            ON LEAVE
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td style={styles.tdMono}>{row.actualHours.toFixed(1)}h</td>
+                    <td style={styles.tdMono}>{row.expectedHours.toFixed(1)}h</td>
+                    <td style={{ ...styles.td, color: statusColor, fontWeight: 600, fontSize: 11 }}>
+                      {statusLabel}
+                    </td>
+                    <td style={styles.td}>
+                      {row.isRemote ? (
+                        <span
+                          style={{
+                            fontFamily: "'Orbitron', sans-serif",
+                            fontSize: 8,
+                            fontWeight: 600,
+                            color: "var(--lcars-cyan)",
+                            border: "1px solid var(--lcars-cyan)",
+                            padding: "1px 6px",
+                            borderRadius: 2,
+                            letterSpacing: "1px",
+                          }}
+                        >
+                          REMOTE
+                        </span>
+                      ) : (
+                        <span style={{ color: "var(--text-quaternary)", fontSize: 11 }}>ONSITE</span>
+                      )}
+                    </td>
+                    <td style={styles.tdMono}>{row.timezone ?? "--"}</td>
+                    <td style={styles.td}>
+                      {row.onLeave ? (
+                        <span style={{ color: "var(--lcars-yellow)", fontWeight: 600, fontSize: 11 }}>YES</span>
+                      ) : (
+                        <span style={{ color: "var(--text-quaternary)", fontSize: 11 }}>NO</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         )}
       </div>
 

@@ -137,6 +137,17 @@ pub fn run() {
             commands::get_naming_compliance,
             commands::get_issues_with_naming,
             commands::get_standup_report,
+            commands::get_clients,
+            commands::get_client_detail,
+            commands::get_devices,
+            commands::get_knowledge_articles,
+            commands::get_sprint_detail,
+            commands::get_monthly_hours,
+            commands::get_training_tracks,
+            commands::get_training_status,
+            commands::get_skills_matrix,
+            commands::get_onboarding_flows,
+            commands::get_planner_capacity,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

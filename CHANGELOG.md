@@ -2,6 +2,35 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.7 - 2026-04-09
+
+This release ships the full P2 dashboard wave — 6 new pages, 3 enhanced pages, role-based dashboard views, and the backend command surface to support them.
+
+### Added
+
+- **Clients page** (#5): Client management dashboard with metric cards (active clients, monthly revenue, projects in flight, at-risk contracts), 2-column client card grid with tier-coded badges, and a slide-in detail panel with linked projects, devices, and resources.
+- **Devices page** (#6): Smart home device registry with client/platform/status filter bar, expandable device table with color-coded status pills, technical notes, firmware version, and API docs links.
+- **Knowledge page** (#7): Knowledge base with fulltext search, category filter pills (SOP, Technical Guide, Resource Link, Tool Discovery, Training, FAQ, Client Doc), tag filtering, and expandable article cards.
+- **Training page** (#11): Training compliance dashboard with 4 training track overview cards, per-employee training status table with status-coded pills, and a skills matrix grid with competency-level heatmap.
+- **Onboarding page** (#14): Client onboarding flow tracker with active onboarding metrics, expandable checklist cards per client, progress bars, status badges, and a scenario tracking section.
+- **Planner page** (#15): Planner and capacity dashboard with research status banner, per-employee capacity table with inline utilization bars and red/yellow allocation flags, and a weekly capacity summary sidebar.
+- **Role-based dashboards** (#12): Executive, PM, and Developer dashboard layouts added to the Overview page via a role selector. Each role shows 5 context-specific cards.
+- New "OPS MODULES" navigation section in the LCARS sidebar for all P2 pages.
+- 12 new Rust backend command stubs with typed response models and `serde(rename_all = "camelCase")` for all P2 data surfaces.
+- `get_monthly_hours` command now returns real data derived from Clockify time entries against employee quotas.
+
+### Changed
+
+- **Sprints page** (#8): Added sprint detail panel with SVG burndown chart, capacity planning table, sprint goal display, retrospective notes section, and sprint comparison metrics.
+- **Team page** (#9): Added Monthly Hours and Remote Visibility section with per-employee actual vs expected hours, on-leave badges, remote work indicators, and timezone display.
+- **Overview page** (#12): Added role-based dashboard section below existing quota compliance view.
+- Fixed pre-existing Rust compilation issues: added missing `text` field to `SlackMessage` struct, fixed `huly_channel_display_name` closure signature for standup channel detection.
+
+### Verification
+
+- `pnpm build` (TypeScript + Vite production build)
+- `cargo test --manifest-path src-tauri/Cargo.toml` (14 passed, 0 failed)
+
 ## v0.1.2 - 2026-04-08
 
 This release packages the full set of unreleased TeamForge work since the published GitHub release `v0.1.0`, including the earlier local-only `0.1.1` preview cut.

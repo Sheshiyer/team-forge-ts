@@ -15,6 +15,12 @@ import Boards from "./pages/Boards";
 import Activity from "./pages/Activity";
 import Live from "./pages/Live";
 import Settings from "./pages/Settings";
+import Clients from "./pages/Clients";
+import Devices from "./pages/Devices";
+import Knowledge from "./pages/Knowledge";
+import Training from "./pages/Training";
+import Onboarding from "./pages/Onboarding";
+import Planner from "./pages/Planner";
 import Avatar from "./components/ui/Avatar";
 import DateRangePicker from "./components/ui/DateRangePicker";
 import { useViewportWidth } from "./hooks/useViewportWidth";
@@ -41,6 +47,18 @@ const navSections = [
       { path: "/calendar", label: "Calendar" },
       { path: "/comms", label: "Comms" },
       { path: "/boards", label: "Boards" },
+    ],
+  },
+  {
+    label: "OPS MODULES",
+    color: "var(--lcars-cyan)",
+    items: [
+      { path: "/clients", label: "Clients" },
+      { path: "/devices", label: "Devices" },
+      { path: "/knowledge", label: "Knowledge" },
+      { path: "/training", label: "Training" },
+      { path: "/onboarding", label: "Onboarding" },
+      { path: "/planner", label: "Planner" },
     ],
   },
   {
@@ -408,6 +426,12 @@ function App() {
         <Route path="/calendar" element={<Calendar />} />
         <Route path="/comms" element={<Comms />} />
             <Route path="/boards" element={<Boards />} />
+            <Route path="/clients" element={<Clients />} />
+            <Route path="/devices" element={<Devices />} />
+            <Route path="/knowledge" element={<Knowledge />} />
+            <Route path="/training" element={<Training />} />
+            <Route path="/onboarding" element={<Onboarding />} />
+            <Route path="/planner" element={<Planner />} />
             <Route path="/activity" element={<Activity />} />
             <Route path="/live" element={<Live />} />
             <Route path="/settings" element={<Settings />} />

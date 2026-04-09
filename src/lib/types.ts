@@ -300,6 +300,169 @@ export interface IssueWithNaming {
   status: unknown;
 }
 
+// ── Client management (#5) ───────────────────────────────────────
+
+export interface ClientView {
+  id: string;
+  name: string;
+  tier: string;
+  industry: string | null;
+  monthlyValue: number;
+  activeProjects: number;
+  primaryContact: string | null;
+  contractStatus: string;
+  contractEndDate: string | null;
+  daysRemaining: number | null;
+  techStack: string[];
+  driveLink: string | null;
+  chromeProfile: string | null;
+}
+
+export interface ClientDetailView {
+  client: ClientView;
+  linkedProjects: { id: string; name: string; status: string }[];
+  linkedDevices: { id: string; name: string; platform: string }[];
+  resources: { name: string; type: string; url: string | null }[];
+  recentActivity: ActivityItem[];
+}
+
+// ── Device registry (#6) ─────────────────────────────────────────
+
+export interface DeviceView {
+  id: string;
+  name: string;
+  model: string | null;
+  platform: string;
+  clientName: string | null;
+  status: string;
+  responsibleDev: string | null;
+  issueCount: number;
+  technicalNotes: string | null;
+  apiDocsLink: string | null;
+  firmwareVersion: string | null;
+}
+
+// ── Knowledge base (#7) ──────────────────────────────────────────
+
+export interface KnowledgeArticleView {
+  id: string;
+  title: string;
+  category: string;
+  author: string | null;
+  updatedAt: string;
+  tags: string[];
+  contentPreview: string;
+  content: string | null;
+}
+
+// ── Sprint ceremonies (#8) ───────────────────────────────────────
+
+export interface SprintBurndownPoint {
+  day: number;
+  remaining: number;
+  ideal: number;
+}
+
+export interface SprintCapacity {
+  employeeName: string;
+  scheduledHours: number;
+  availableHours: number;
+  utilization: number;
+}
+
+export interface SprintComparison {
+  currentVelocity: number;
+  previousVelocity: number;
+  currentCompletion: number;
+  previousCompletion: number;
+}
+
+export interface SprintDetailView {
+  id: string;
+  label: string;
+  goal: string | null;
+  retroNotes: string | null;
+  burndown: SprintBurndownPoint[];
+  capacity: SprintCapacity[];
+  comparison: SprintComparison | null;
+}
+
+// ── Team enhancements (#9) ───────────────────────────────────────
+
+export interface MonthlyHoursView {
+  employeeName: string;
+  actualHours: number;
+  expectedHours: number;
+  status: "under" | "normal" | "over";
+  isRemote: boolean;
+  timezone: string | null;
+  onLeave: boolean;
+}
+
+// ── Training compliance (#11) ────────────────────────────────────
+
+export interface TrainingTrackView {
+  id: string;
+  name: string;
+  totalModules: number;
+  completionRate: number;
+  overdueCount: number;
+}
+
+export interface TrainingStatusRow {
+  employeeName: string;
+  track: string;
+  progress: number;
+  modulesDone: number;
+  totalModules: number;
+  nextModule: string | null;
+  deadline: string | null;
+  status: string;
+}
+
+export interface SkillsMatrixCell {
+  employeeName: string;
+  skill: string;
+  level: number;
+}
+
+// ── Role-based dashboards (#12) ──────────────────────────────────
+
+export type DashboardRole = "executive" | "pm" | "developer";
+
+// ── Client onboarding (#14) ──────────────────────────────────────
+
+export interface OnboardingFlowView {
+  clientId: string;
+  clientName: string;
+  startDate: string;
+  completedTasks: number;
+  totalTasks: number;
+  progressPercent: number;
+  status: string;
+  tasks: OnboardingTaskView[];
+  daysElapsed: number;
+}
+
+export interface OnboardingTaskView {
+  id: string;
+  title: string;
+  completed: boolean;
+  completedAt: string | null;
+  resourceCreated: string | null;
+}
+
+// ── Planner integration (#15) ────────────────────────────────────
+
+export interface PlannerSlotView {
+  employeeName: string;
+  scheduledHours: number;
+  actualHours: number;
+  focusBlocks: number;
+  meetingBlocks: number;
+  capacityUtilization: number;
+}
+
 // ── Standup system (#10) ─────────────────────────────────────────
 
 export interface StandupEntry {

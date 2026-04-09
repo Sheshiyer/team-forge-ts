@@ -29,6 +29,17 @@ import type {
   NamingComplianceStats,
   IssueWithNaming,
   StandupReport,
+  ClientView,
+  ClientDetailView,
+  DeviceView,
+  KnowledgeArticleView,
+  SprintDetailView,
+  MonthlyHoursView,
+  TrainingTrackView,
+  TrainingStatusRow,
+  SkillsMatrixCell,
+  OnboardingFlowView,
+  PlannerSlotView,
 } from "../lib/types";
 
 const invokeApi = {
@@ -101,6 +112,25 @@ const invokeApi = {
     invoke<IssueWithNaming[]>("get_issues_with_naming"),
   getStandupReport: () =>
     invoke<StandupReport>("get_standup_report"),
+  getClients: () => invoke<ClientView[]>("get_clients"),
+  getClientDetail: (clientId: string) =>
+    invoke<ClientDetailView>("get_client_detail", { clientId }),
+  getDevices: () => invoke<DeviceView[]>("get_devices"),
+  getKnowledgeArticles: () =>
+    invoke<KnowledgeArticleView[]>("get_knowledge_articles"),
+  getSprintDetail: (sprintId: string) =>
+    invoke<SprintDetailView>("get_sprint_detail", { sprintId }),
+  getMonthlyHours: () => invoke<MonthlyHoursView[]>("get_monthly_hours"),
+  getTrainingTracks: () =>
+    invoke<TrainingTrackView[]>("get_training_tracks"),
+  getTrainingStatus: () =>
+    invoke<TrainingStatusRow[]>("get_training_status"),
+  getSkillsMatrix: () =>
+    invoke<SkillsMatrixCell[]>("get_skills_matrix"),
+  getOnboardingFlows: () =>
+    invoke<OnboardingFlowView[]>("get_onboarding_flows"),
+  getPlannerCapacity: () =>
+    invoke<PlannerSlotView[]>("get_planner_capacity"),
 };
 
 export function useInvoke() {

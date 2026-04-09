@@ -76,4 +76,5 @@ pub struct SlackMessage {
     pub ts: String,
     pub subtype: Option<String>,
     pub bot_id: Option<String>,
+    pub text: Option<String>,
 }

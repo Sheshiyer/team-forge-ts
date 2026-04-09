@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useInvoke } from "../hooks/useInvoke";
 import { SkeletonCard, SkeletonTable } from "../components/ui/Skeleton";
 import Avatar from "../components/ui/Avatar";
-import type { OverviewData, QuotaRow } from "../lib/types";
+import type { OverviewData, QuotaRow, DashboardRole } from "../lib/types";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 
 // ── ProgressRing ──────────────────────────────────────────────
@@ -149,11 +149,78 @@ function MetricCard({
 
 // ── Overview Page ─────────────────────────────────────────────
 
+const ROLE_LABELS: Record<DashboardRole, string> = {
+  executive: "EXECUTIVE",
+  pm: "PM",
+  developer: "DEVELOPER",
+};
+
+function RoleDashboard({ role }: { role: DashboardRole }) {
+  const cards: { title: string; color: string; content: string }[] =
+    role === "executive"
+      ? [
+          { title: "CRITICAL ISSUES ACROSS ALL PROJECTS", color: "var(--lcars-red)", content: "P0/P1 ISSUES GROUPED BY CLIENT" },
+          { title: "TEAM CAPACITY THIS WEEK", color: "var(--lcars-orange)", content: "HOURS SCHEDULED VS AVAILABLE PER PERSON" },
+          { title: "REVENUE PROJECTS STATUS", color: "var(--lcars-green)", content: "TIER 1+2 PROJECT PROGRESS" },
+          { title: "BLOCKED TASKS", color: "var(--lcars-yellow)", content: "HOW LONG BLOCKED, ASSIGNED TO WHOM" },
+          { title: "COMPLETED THIS WEEK", color: "var(--lcars-cyan)", content: "TEAM MORALE SHOWCASE" },
+        ]
+      : role === "pm"
+        ? [
+            { title: "MY PROJECTS OVERVIEW", color: "var(--lcars-orange)", content: "TOTAL / IN-PROGRESS / BLOCKED PER PROJECT" },
+            { title: "TEAM WORKLOAD NEXT 3 DAYS", color: "var(--lcars-cyan)", content: "OVER/UNDER ALLOCATION HEATMAP" },
+            { title: "CLIENT DELIVERABLES DUE THIS SPRINT", color: "var(--lcars-red)", content: "ON TRACK / AT RISK / DELAYED" },
+            { title: "KNOWLEDGE GAPS", color: "var(--lcars-lavender)", content: "TASKS WITH NO LINKED DOCUMENTATION" },
+            { title: "STANDUP SUMMARY YESTERDAY", color: "var(--lcars-green)", content: "WHO POSTED, WHO'S MISSING" },
+          ]
+        : [
+            { title: "MY ACTIVE WORK", color: "var(--lcars-orange)", content: "GROUPED BY PRIORITY" },
+            { title: "MY PLANNER THIS WEEK", color: "var(--lcars-cyan)", content: "VISUAL CALENDAR" },
+            { title: "RELATED KNOWLEDGE", color: "var(--lcars-lavender)", content: "ARTICLES LINKED TO CURRENT TASKS" },
+            { title: "CODE REVIEWS NEEDED", color: "var(--lcars-peach)", content: "PRS AWAITING REVIEW" },
+            { title: "LEARNING PATH PROGRESS", color: "var(--lcars-green)", content: "TRAINING COMPLETION" },
+          ];
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
+      {cards.map((card) => (
+        <div
+          key={card.title}
+          style={{
+            ...lcarsPageStyles.card,
+            borderLeftColor: card.color,
+            padding: 20,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: "'Orbitron', sans-serif",
+              fontSize: 10,
+              fontWeight: 600,
+              color: card.color,
+              letterSpacing: "1.5px",
+              textTransform: "uppercase" as const,
+              marginBottom: 12,
+            }}
+          >
+            {card.title}
+          </div>
+          <div style={lcarsPageStyles.sectionDivider} />
+          <p style={{ ...lcarsPageStyles.emptyText, marginTop: 8 }}>
+            {card.content} — AWAITING DATA STREAM
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Overview() {
   const api = useInvoke();
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [quotaRows, setQuotaRows] = useState<QuotaRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dashboardRole, setDashboardRole] = useState<DashboardRole>("executive");
 
   const load = useCallback(async () => {
     try {
@@ -333,6 +400,32 @@ function Overview() {
         <h2 style={styles.sectionTitle}>WEEKLY TREND</h2>
         <div style={styles.sectionDivider} />
         <p style={styles.emptyText}>AWAITING DATA STREAM</p>
+      </div>
+
+      {/* Role-Based Dashboard (#12) */}
+      <div style={{ marginTop: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+          <h2 style={{ ...styles.sectionTitle, marginBottom: 0 }}>ROLE DASHBOARD</h2>
+          <div style={{ display: "flex", gap: 6 }}>
+            {(["executive", "pm", "developer"] as DashboardRole[]).map((role) => (
+              <button
+                key={role}
+                onClick={() => setDashboardRole(role)}
+                style={{
+                  ...lcarsPageStyles.ghostButton,
+                  padding: "4px 12px",
+                  fontSize: 10,
+                  background: dashboardRole === role ? "rgba(255,153,0,0.1)" : "rgba(10,10,20,0.68)",
+                  border: `1px solid ${dashboardRole === role ? "var(--lcars-orange)" : "rgba(153,153,204,0.25)"}`,
+                  color: dashboardRole === role ? "var(--lcars-orange)" : "var(--lcars-lavender)",
+                }}
+              >
+                {ROLE_LABELS[role]}
+              </button>
+            ))}
+          </div>
+        </div>
+        <RoleDashboard role={dashboardRole} />
       </div>
     </div>
   );

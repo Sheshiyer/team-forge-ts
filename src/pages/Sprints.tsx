@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { useInvoke } from "../hooks/useInvoke";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 import { SkeletonCard, SkeletonTable } from "../components/ui/Skeleton";
-import type { MilestoneView } from "../lib/types";
+import Avatar from "../components/ui/Avatar";
+import type { MilestoneView, SprintDetailView, SprintBurndownPoint } from "../lib/types";
 
 function MetricCard({
   label,
@@ -110,10 +111,47 @@ function formatDate(dateStr: string | null): string {
   });
 }
 
+function BurndownChart({ points }: { points: SprintBurndownPoint[] }) {
+  if (points.length === 0) return <p style={styles.emptyText}>NO BURNDOWN DATA AVAILABLE</p>;
+  const maxVal = Math.max(...points.map((p) => Math.max(p.remaining, p.ideal)), 1);
+  const w = 480;
+  const h = 160;
+  const pad = { top: 12, right: 12, bottom: 24, left: 36 };
+  const cw = w - pad.left - pad.right;
+  const ch = h - pad.top - pad.bottom;
+  const xStep = points.length > 1 ? cw / (points.length - 1) : cw;
+  const toPath = (key: "remaining" | "ideal") =>
+    points
+      .map((p, i) => {
+        const x = pad.left + i * xStep;
+        const y = pad.top + ch - (p[key] / maxVal) * ch;
+        return `${i === 0 ? "M" : "L"}${x},${y}`;
+      })
+      .join(" ");
+
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", maxWidth: w, height: "auto" }}>
+      <line x1={pad.left} y1={pad.top + ch} x2={pad.left + cw} y2={pad.top + ch} stroke="rgba(153,153,204,0.2)" />
+      <line x1={pad.left} y1={pad.top} x2={pad.left} y2={pad.top + ch} stroke="rgba(153,153,204,0.2)" />
+      <path d={toPath("ideal")} fill="none" stroke="rgba(153,153,204,0.35)" strokeWidth={1.5} strokeDasharray="6 4" />
+      <path d={toPath("remaining")} fill="none" stroke="#ff9900" strokeWidth={2} />
+      {points.map((p, i) => (
+        <circle key={i} cx={pad.left + i * xStep} cy={pad.top + ch - (p.remaining / maxVal) * ch} r={3} fill="#ff9900" />
+      ))}
+      <text x={pad.left + cw / 2} y={h - 2} textAnchor="middle" fill="#9999cc" fontSize={9} fontFamily="Orbitron">
+        SPRINT DAY
+      </text>
+    </svg>
+  );
+}
+
 function Sprints() {
   const api = useInvoke();
   const [milestones, setMilestones] = useState<MilestoneView[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedSprint, setSelectedSprint] = useState<string | null>(null);
+  const [sprintDetail, setSprintDetail] = useState<SprintDetailView | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -129,6 +167,18 @@ function Sprints() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const loadDetail = useCallback(async (sprintId: string) => {
+    setDetailLoading(true);
+    try {
+      const detail = await api.getSprintDetail(sprintId);
+      setSprintDetail(detail);
+    } catch {
+      setSprintDetail(null);
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
 
   if (loading) {
     return (
@@ -181,6 +231,7 @@ function Sprints() {
                 <th style={{ ...styles.th, minWidth: 120 }}>PROGRESS</th>
                 <th style={styles.th}>TARGET DATE</th>
                 <th style={styles.th}>STATUS</th>
+                <th style={styles.th}></th>
               </tr>
             </thead>
             <tbody>
@@ -216,12 +267,139 @@ function Sprints() {
                   <td style={styles.td}>
                     <StatusPill status={m.status} />
                   </td>
+                  <td style={styles.td}>
+                    <button
+                      onClick={() => {
+                        const next = selectedSprint === m.id ? null : m.id;
+                        setSelectedSprint(next);
+                        if (next) loadDetail(next);
+                        else setSprintDetail(null);
+                      }}
+                      style={{
+                        ...lcarsPageStyles.ghostButton,
+                        padding: "3px 10px",
+                        fontSize: 10,
+                        background: selectedSprint === m.id ? "rgba(255,153,0,0.1)" : "rgba(10,10,20,0.68)",
+                        border: `1px solid ${selectedSprint === m.id ? "var(--lcars-orange)" : "rgba(153,153,204,0.25)"}`,
+                      }}
+                    >
+                      {selectedSprint === m.id ? "CLOSE" : "DETAIL"}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
+
+      {/* Sprint Detail Panel */}
+      {selectedSprint && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          {/* Burndown Chart */}
+          <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
+            <h2 style={styles.sectionTitle}>SPRINT BURNDOWN</h2>
+            <div style={styles.sectionDivider} />
+            {detailLoading ? (
+              <SkeletonCard />
+            ) : sprintDetail ? (
+              <BurndownChart points={sprintDetail.burndown} />
+            ) : (
+              <p style={styles.emptyText}>NO BURNDOWN DATA AVAILABLE</p>
+            )}
+          </div>
+
+          {/* Sprint Goal & Retro */}
+          <div style={{ ...styles.card, borderLeftColor: "var(--lcars-green)" }}>
+            <h2 style={styles.sectionTitle}>SPRINT GOAL</h2>
+            <div style={styles.sectionDivider} />
+            {sprintDetail?.goal ? (
+              <p style={{ color: "var(--lcars-tan)", fontSize: 14, lineHeight: 1.6, marginBottom: 16 }}>
+                {sprintDetail.goal}
+              </p>
+            ) : (
+              <p style={styles.emptyText}>NO SPRINT GOAL SET</p>
+            )}
+
+            <h2 style={{ ...styles.sectionTitle, marginTop: 16 }}>RETRO NOTES</h2>
+            <div style={styles.sectionDivider} />
+            {sprintDetail?.retroNotes ? (
+              <p style={{ color: "var(--lcars-lavender)", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                {sprintDetail.retroNotes}
+              </p>
+            ) : (
+              <p style={styles.emptyText}>NO RETROSPECTIVE NOTES</p>
+            )}
+          </div>
+
+          {/* Capacity Planning */}
+          <div style={{ ...styles.card, borderLeftColor: "var(--lcars-orange)" }}>
+            <h2 style={styles.sectionTitle}>CAPACITY PLANNING</h2>
+            <div style={styles.sectionDivider} />
+            {sprintDetail && sprintDetail.capacity.length > 0 ? (
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>MEMBER</th>
+                    <th style={styles.th}>SCHEDULED</th>
+                    <th style={styles.th}>AVAILABLE</th>
+                    <th style={styles.th}>UTILIZATION</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sprintDetail.capacity.map((c) => {
+                    const pct = c.utilization * 100;
+                    const color = pct > 100 ? "var(--lcars-red)" : pct >= 80 ? "var(--lcars-orange)" : "var(--lcars-green)";
+                    return (
+                      <tr key={c.employeeName}>
+                        <td style={styles.td}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <Avatar name={c.employeeName} size={22} />
+                            <span>{c.employeeName}</span>
+                          </div>
+                        </td>
+                        <td style={styles.tdMono}>{c.scheduledHours.toFixed(1)}h</td>
+                        <td style={styles.tdMono}>{c.availableHours.toFixed(1)}h</td>
+                        <td style={{ ...styles.tdMono, color, fontWeight: 600 }}>{pct.toFixed(0)}%</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <p style={styles.emptyText}>NO CAPACITY DATA AVAILABLE</p>
+            )}
+          </div>
+
+          {/* Sprint Comparison */}
+          <div style={{ ...styles.card, borderLeftColor: "var(--lcars-lavender)" }}>
+            <h2 style={styles.sectionTitle}>SPRINT COMPARISON</h2>
+            <div style={styles.sectionDivider} />
+            {sprintDetail?.comparison ? (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                <div>
+                  <div style={styles.metricLabel}>VELOCITY (CURRENT)</div>
+                  <div style={styles.metricValue}>{sprintDetail.comparison.currentVelocity}</div>
+                </div>
+                <div>
+                  <div style={styles.metricLabel}>VELOCITY (PREVIOUS)</div>
+                  <div style={{ ...styles.metricValue, color: "var(--lcars-lavender)" }}>{sprintDetail.comparison.previousVelocity}</div>
+                </div>
+                <div>
+                  <div style={styles.metricLabel}>COMPLETION (CURRENT)</div>
+                  <div style={styles.metricValue}>{sprintDetail.comparison.currentCompletion}%</div>
+                </div>
+                <div>
+                  <div style={styles.metricLabel}>COMPLETION (PREVIOUS)</div>
+                  <div style={{ ...styles.metricValue, color: "var(--lcars-lavender)" }}>{sprintDetail.comparison.previousCompletion}%</div>
+                </div>
+              </div>
+            ) : (
+              <p style={styles.emptyText}>NO COMPARISON DATA. REQUIRES PREVIOUS SPRINT.</p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
