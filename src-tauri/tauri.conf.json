@@ -1,6 +1,6 @@
 {
   "productName": "TeamForge",
-  "version": "0.1.7",
+  "version": "0.1.9",
   "identifier": "com.thoughtseed.teamforge",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -59,7 +59,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU5Njg0NkU1NkQzNEE2RjMKUldUenBqUnQ1VVpvV1VDTnJhYUw5Y2ZuTVNqNXJ3czRibHZkT2dBUGhRSWVyN004WndtQXdFYU0K",
       "endpoints": [
-        "https://teamforge-api.sheshnarayan-iyer.workers.dev/v1/ota/check?platform={{target}}&arch={{arch}}&currentVersion={{current_version}}&channel=stable"
+        "https://teamforge-api.sheshnarayan-iyer.workers.dev/v1/ota/check?target={{target}}&currentVersion={{current_version}}&channel=stable"
       ]
     }
   }

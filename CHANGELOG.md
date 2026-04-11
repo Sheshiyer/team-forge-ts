@@ -2,6 +2,42 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.9 - 2026-04-12
+
+This release finalizes post-rollout version alignment so release tags and generated asset filenames match.
+
+### Changed
+
+- Version metadata bumped to `0.1.9` across:
+  - frontend `package.json`
+  - sidecar `sidecar/package.json`
+  - Rust crate `src-tauri/Cargo.toml`
+  - Tauri app config `src-tauri/tauri.conf.json`
+- Continued using release CI config that disables updater artifact signing in GitHub Actions builds, ensuring `.dmg` and `.app` release assets publish without requiring `TAURI_SIGNING_PRIVATE_KEY`.
+
+### Verification
+
+- `cargo test --manifest-path src-tauri/Cargo.toml`
+- `pnpm build`
+
+## v0.1.8 - 2026-04-11
+
+This release aligns version metadata with the latest rollout and hardens GitHub release packaging.
+
+### Changed
+
+- Version metadata bumped from `0.1.7` to `0.1.8` across:
+  - frontend `package.json`
+  - sidecar `sidecar/package.json`
+  - Rust crate `src-tauri/Cargo.toml`
+  - Tauri app config `src-tauri/tauri.conf.json`
+- GitHub release workflow now disables updater artifact generation during CI bundle builds so tagged releases can publish `.dmg` and `.app` artifacts without requiring a signing private key in CI.
+
+### Verification
+
+- `cargo test --manifest-path src-tauri/Cargo.toml`
+- `pnpm build`
+
 ## v0.1.7 - 2026-04-09
 
 This release ships the full P2 dashboard wave — 6 new pages, 3 enhanced pages, role-based dashboard views, and the backend command surface to support them.

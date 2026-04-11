@@ -133,7 +133,7 @@ On first launch:
 
 ## Releases
 
-- **Latest tag:** `v0.1.7`
+- **Latest tag:** `v0.1.9`
 - **Release trigger:** pushing a tag that matches `v*`
 - **Artifacts:** macOS `.app` and `.dmg` bundles built by GitHub Actions for Apple Silicon and Intel targets
 - **Download page:** [GitHub Releases](https://github.com/Sheshiyer/team-forge-ts/releases)

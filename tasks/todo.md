@@ -2,6 +2,251 @@
 
 ## Goal
 
+Execute post-fix validation flow requested by user:
+- rebuild/run latest Tauri app
+- run one sync pass to backfill corrected project mapping
+- verify Projects and Knowledge data surfaces are now populated
+
+## Plan
+
+- [x] Rebuild latest Tauri app bundle from current code
+- [x] Run one headless sync-equivalent pass using local settings and Clockify API
+- [x] Verify project mapping coverage and project breakdown data in local DB
+- [x] Verify Huly document source reachability for Knowledge page
+
+## Review
+
+- Rebuilt app successfully:
+  - `pnpm tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'` ✅
+  - artifact: `src-tauri/target/release/bundle/macos/TeamForge.app`
+- Ran one headless Clockify backfill pass (equivalent to pressing `SYNC NOW` for project mapping correctness):
+  - fetched entries: `209`
+  - project mapping updates applied: `209`
+- Local DB project mapping state improved:
+  - before: `mapped_project_id=0` / `227`
+  - after: `mapped_project_id=203` / `227` (`24` remained `No Project`)
+- Current month project breakdown now resolves named projects:
+  - `HeyZack` and `Axtech-ERP` buckets present (plus a small `No Project` bucket)
+- Verified live Huly data path for Knowledge backend:
+  - `preview_live_huly_workspace_normalization` test succeeded
+  - Huly `document:class:Document` fetch returned documents in live run
+
+## Goal
+
+Deep audit page-by-page data coverage and fix missing synced data in UI:
+- verify what each page reads from local DB or live Huly APIs
+- identify Huly/Clockify data that is synced but not rendered
+- fix the immediate project visibility gap (`projects synced` in Settings but empty/partial Projects page)
+- implement at least one additional high-signal Huly-backed page data path that is currently stubbed
+
+## Plan
+
+- [x] Audit page-to-command-to-source mapping and identify concrete missing coverage per page
+- [x] Fix Clockify time-entry project mapping so `project_id` is persisted correctly
+- [x] Add a project catalog API and update Projects page to render synced projects even with 0 tracked hours
+- [x] Replace one stubbed page data path with real Huly-backed data (Knowledge)
+- [x] Verify with `pnpm build` and `cargo test --manifest-path src-tauri/Cargo.toml`
+
+## Review
+
+- Root-cause found for “projects synced but nothing useful in Projects UI”:
+  - Clockify time-entry parser expected nested `project` object only, so `time_entries.project_id` was stored as `NULL`.
+  - Projects page only consumed project breakdown rows from time entries, so synced project catalog was not directly rendered.
+- Fixes shipped:
+  - Added `project_id` parsing from Clockify time entries and kept nested project fallback.
+  - Added a 30-day overlap window on incremental Clockify sync so recent entries can self-heal after parser fixes.
+  - Added `get_projects_catalog` Tauri command and UI merge logic so Projects page always shows synced projects (0h rows included).
+  - Replaced Knowledge page backend stub with real Huly document ingestion (`get_documents` + `get_persons` mapping).
+- Remaining deep-review findings (not fixed in this pass):
+  - `Clients`, `Devices`, `Sprint detail`, `Training tracks/status`, `Skills matrix`, `Onboarding flows`, and `Planner capacity` still return stub responses in `commands/mod.rs`.
+- Verification:
+  - `pnpm build` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+
+## Goal
+
+Provide current founder bearer token and run a full clean Tauri rebuild:
+- print the active `cloud_credentials_access_token`
+- clear old build artifacts/caches
+- run a fresh Tauri build with latest code
+
+## Plan
+
+- [x] Read active `cloud_credentials_access_token` from local TeamForge DB
+- [x] Clear project build artifacts/caches for a clean Tauri rebuild
+- [x] Run `pnpm tauri build` and capture outcome
+- [x] Document verification/review and return token + build result
+
+## Review
+
+- Read active local token from:
+  - `~/Library/Application Support/com.thoughtseed.teamforge/teamforge.db`
+  - key: `cloud_credentials_access_token`
+  - length: `64`
+- Cleared old artifacts/caches:
+  - removed `dist`
+  - removed `src-tauri/target`
+  - removed `node_modules/.vite`
+- Rebuild attempts:
+  - `pnpm tauri build` -> compiled app, failed on DMG bundling
+  - `pnpm tauri build --bundles app` -> bundled app, then failed because updater signing key env missing (`TAURI_SIGNING_PRIVATE_KEY`)
+  - `pnpm tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'` -> success
+- Fresh output artifact:
+  - `src-tauri/target/release/bundle/macos/TeamForge.app`
+  - mtime: `2026-04-11 17:31:11`
+
+## Goal
+
+Roll out shared bearer token for founder cloud credential sync:
+- generate one secure token
+- set Worker secret `TF_CREDENTIAL_ENVELOPE_KEY`
+- persist the same token to TeamForge local setting `cloud_credentials_access_token`
+
+## Plan
+
+- [x] Generate a new 32-byte hex token and keep it in-process for setup
+- [x] Apply token to Cloudflare Worker secret `TF_CREDENTIAL_ENVELOPE_KEY`
+- [x] Upsert `cloud_credentials_access_token` in local TeamForge settings DB
+- [x] Verify both values are configured without printing full secret value
+
+## Review
+
+- Generated a fresh 64-char hex bearer token via `openssl rand -hex 32`.
+- Uploaded Worker secret using Wrangler:
+  - `pnpm dlx wrangler secret put TF_CREDENTIAL_ENVELOPE_KEY`
+  - result: `Success! Uploaded secret TF_CREDENTIAL_ENVELOPE_KEY`
+- Updated local TeamForge settings DB key:
+  - key: `cloud_credentials_access_token`
+  - db path: `~/Library/Application Support/com.thoughtseed.teamforge/teamforge.db`
+- Verification (redacted):
+  - local DB token length: `64`
+  - generated-token hash == DB-token hash: `true`
+  - Wrangler secret list includes `TF_CREDENTIAL_ENVELOPE_KEY`: `true`
+- Cleanup:
+  - removed temporary `/tmp/teamforge_token` after verification
+
+## Goal
+
+Set cloud-driven credentials as the default workflow:
+- cloud credential sync should be enabled by default (unless explicitly disabled)
+- preserve secure token requirement and simple setup for founder/cofounder sync
+- align Settings copy with default-on behavior
+
+## Plan
+
+- [x] Flip startup and Settings defaults so cloud credential sync is on unless user turns it off
+- [x] Update Settings labels/help text to reflect default-on founder workflow
+- [x] Verify with frontend build and document the result
+
+## Review
+
+- Startup sync default changed to enabled unless explicitly disabled:
+  - app now skips cloud credential sync only when `cloud_credential_sync_enabled === "false"`
+- Settings cloud sync state now defaults to enabled and treats missing value as enabled.
+- Cloud sync UI copy updated to reflect default-on behavior for founder/cofounder shared-token flow.
+- Verification:
+  - `pnpm build` ✅
+
+## Goal
+
+Immediate hardening + coherence pass for cloud credentials and OTA:
+- lock down `/v1/credentials` and `/internal/*` routes
+- fix OTA updater endpoint output and query mapping for Tauri updater compatibility
+- make desktop cloud credential sync opt-in (user-enabled) instead of automatic at startup
+
+## Plan
+
+- [x] Add Worker auth guards for credential and internal routes using secret-backed bearer validation
+- [x] Update OTA check route to return raw updater manifest and support `target` query mapping
+- [x] Update Tauri updater endpoint template to use `target` and align with Worker parsing
+- [x] Make startup credential sync opt-in and add Settings controls for cloud sync config + manual sync
+- [x] Verify with frontend build, worker typecheck, and Rust tests; then capture review notes
+
+## Review
+
+- Locked down credential and internal Worker routes:
+  - added bearer auth helper in `cloudflare/worker/src/lib/auth.ts`
+  - `/v1/credentials` now requires `Authorization: Bearer <token>` matching `TF_CREDENTIAL_ENVELOPE_KEY`
+  - `/internal/*` now requires bearer auth matching `TF_WEBHOOK_HMAC_SECRET`
+- Fixed OTA updater compatibility:
+  - `handleOtaCheck` now supports `target=<platform-arch>` parsing
+  - returns top-level updater manifest JSON (no `ok/data` envelope)
+  - returns `204` for no-update cases instead of wrapped payloads
+  - Tauri updater endpoint updated to pass `target={{target}}`
+- Made cloud credential sync opt-in:
+  - app startup now checks `cloud_credential_sync_enabled` before calling sync
+  - Settings now includes a `CLOUD CREDENTIAL SYNC` card with:
+    - startup opt-in toggle
+    - bearer token field
+    - save config action
+    - manual "sync now" action
+  - Rust sync command now reads local cloud settings (`base_url`, `audience`, `access_token`) and sends authenticated bearer requests
+- Verification:
+  - `pnpm build` ✅
+  - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+
+## Goal
+
+Review the latest staged + unstaged changes with focus on:
+- UI differences between logged-in/browser expectations and Tauri runtime behavior
+- new cloud credential secret sync path
+- new OTA/updater rollout path
+
+## Plan
+
+- [x] Inspect full staged and unstaged git diff surfaces
+- [x] Trace secret-manager credential flow end-to-end (worker route -> Tauri command -> app bootstrap)
+- [x] Trace OTA route/manifest flow end-to-end (worker route -> tauri updater config/runtime)
+- [x] Produce severity-ranked review findings with concrete file/line references
+
+## Review
+
+- Completed a full diff-based review over the latest staged backend/Tauri updates and unstaged Team UI pass.
+- Identified multiple release-blocking findings in secrets and OTA flow (details provided in response with file/line refs).
+- Validation included:
+  - `git diff --cached --name-only`
+  - `git diff --cached --stat`
+  - targeted source reads in Worker routes, Tauri commands/config, and app bootstrap calls
+
+## Goal
+
+Run a final UI coherence pass with responsive breakpoint hardening, focused on the Team route:
+- tighten Team breakpoint behavior (desktop/tablet/mobile) so assignment controls and org cards do not collapse awkwardly
+- align Team visual language with the shared LCARS design system primitives instead of route-local ad hoc spacing/width choices
+- fix overflow-prone sections (notably tables and selector rails) so dense data remains usable on narrower widths
+
+## Plan
+
+- [x] Capture current Team/App responsive and design-coherence gaps from code and runtime behavior
+- [x] Implement Team page breakpoint and layout fixes (directory rail, org bento cards, role/member controls, table overflow)
+- [x] Align Team styles to shared LCARS page primitives and consistent spacing/shape rules
+- [x] Run build verification and log final review evidence + residual risks
+
+## Review
+
+- Responsive hardening completed for Team route with three practical breakpoints:
+  - compact stack mode below `1180px`
+  - narrow control behavior below `980px`
+  - mobile single-column behavior below `760px`
+- Team page layout fixes:
+  - org action row now adapts spacing/alignment on narrow widths
+  - directory/select controls avoid fixed-width overflow and collapse cleanly
+  - role/member grids collapse to single-column on mobile
+  - org canvas can safely scroll horizontally in narrow contexts
+  - monthly hours table now renders inside an explicit horizontal scroll container with minimum table width
+- Employee summary panel now adapts at the same narrow/mobile breakpoints:
+  - header and selector stack cleanly on mobile
+  - identity card/aside collapse to a single flow on narrow widths
+  - detail rows convert to vertical layout on mobile to avoid clipped metadata
+- Verification:
+  - `pnpm build` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+- Residual risk:
+  - Playwright browser tooling failed to initialize in this environment (`ENOENT` for `/.playwright-mcp`), so this pass is code-and-build verified rather than screenshot-verified.
+
+## Goal
+
 Begin Phase 2 Wave 1 of the Cloudflare backend program:
 - provision the first TeamForge D1 database in Cloudflare so the backend scaffold binds to a real account resource
 - scaffold the Cloudflare Worker package and Wrangler config in-repo
@@ -1229,3 +1474,216 @@ Set up Supabase MCP support in Codex for project `qjnqdhvlxdmezxdnlrbj`:
   - installed:
     - `~/.agents/skills/supabase`
     - `~/.agents/skills/supabase-postgres-best-practices`
+
+## Goal
+
+Enable real Clients page data from synced sources:
+- replace `get_clients` stub with DB-backed client aggregates
+- replace `get_client_detail` stub with linked projects and recent activity
+- verify with Rust tests and frontend build
+
+## Plan
+
+- [x] Implement DB-backed `get_clients` aggregation from `projects` + `time_entries`
+- [x] Implement DB-backed `get_client_detail` with linked projects and recent activity
+- [x] Verify with `cargo test --manifest-path src-tauri/Cargo.toml` and `pnpm build`
+
+## Review
+
+- Replaced `Clients` command stubs with live-backed logic in `src-tauri/src/commands/mod.rs`:
+  - `get_clients` now aggregates from `projects` + `time_entries` and computes:
+    - `activeProjects`, `primaryContact`, `monthlyValue` (billable-hour estimate),
+    - `tier`, `contractStatus`, `daysRemaining`, and inferred `techStack`.
+  - `get_client_detail` now returns:
+    - linked projects with status (`active` / `idle` / `planned` / `archived`),
+    - resources (client drive/profile overrides + matching Huly docs),
+    - recent activity from Clockify + Huly issue/document activity.
+- Added helper mappers to keep client IDs stable (`client-<slug>`) and to support optional per-client settings:
+  - `client_<slug>_drive_link` / `client_<slug>_chrome_profile`
+  - legacy fallback `client.<slug>.drive_link` / `client.<slug>.chrome_profile`
+- Verification:
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+  - `pnpm build` ✅
+
+## Goal
+
+Enable real Devices page data from synced Huly workspace data:
+- replace `get_devices` stub with live Huly-backed extraction
+- map issue/card signals into Device registry rows expected by UI
+- verify with Rust tests and frontend build
+
+## Plan
+
+- [x] Implement live-backed `get_devices` using Huly issues/cards + local project/employee mapping
+- [x] Normalize platform/status/client/dev-owner fields into `DeviceView`
+- [x] Verify with `cargo test --manifest-path src-tauri/Cargo.toml` and `pnpm build`
+
+## Review
+
+- Replaced `get_devices` stub with live extraction in `src-tauri/src/commands/mod.rs`:
+  - queries Huly `issues`, `board cards`, `projects`, and `persons`
+  - maps active local employees to Huly person IDs for responsible-dev labels
+  - maps local synced project metadata (`huly_project_id` / project name) to `clientName`
+- Added device normalization helpers:
+  - device candidate detection (`device`/`iot`/`firmware`/`tuya` keywords)
+  - platform inference (`iOS`, `Android`, `Firmware`, `Backend`, `Web`)
+  - status normalization to UI states (`not started`, `in progress`, `testing`, `deployed`, `issue`)
+  - URL and firmware version extraction from issue content for detail rows
+- `DeviceView` rows are now deterministic and deduplicated by normalized device key, with merged issue counts and severity-priority status.
+- Verification:
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+  - `pnpm build` ✅
+
+## Goal
+
+Replace remaining analytics stubs and run a fresh Tauri rebuild:
+- implement `get_sprint_detail`, `get_training_tracks`, `get_training_status`, `get_skills_matrix`, `get_onboarding_flows`, `get_planner_capacity`
+- keep payloads aligned with current page contracts
+- run full build verification plus Tauri rebuild artifact generation
+
+## Plan
+
+- [x] Implement sprint detail command from Huly milestones/issues/time data
+- [x] Implement training/skills/onboarding/planner commands from current synced Huly + Clockify datasets
+- [x] Verify with `cargo test --manifest-path src-tauri/Cargo.toml` and `pnpm build`
+- [x] Run fresh `pnpm tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'`
+
+## Review
+
+- Replaced remaining stubs in `src-tauri/src/commands/mod.rs` with data-backed implementations:
+  - `get_sprint_detail` now derives timeline/capacity/comparison/retro from Huly milestones, issues, and synced hours.
+  - `get_training_tracks`, `get_training_status`, and `get_skills_matrix` now compute skill/training signals from active employee + issue/time-entry datasets.
+  - `get_onboarding_flows` and `get_planner_capacity` now map onboarding/planning rows from synced local data and live Huly context where available.
+- Fixed a Rust ownership error in planner capacity issue aggregation (`issue.assignee` move after borrow) and reran verification.
+- Verification run:
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+  - `pnpm build` ✅
+  - `pnpm tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'` ✅
+- Rebuild output:
+  - `/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/team-forge-ts/src-tauri/target/release/team-forge-ts`
+  - `/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/team-forge-ts/src-tauri/target/release/bundle/macos/TeamForge.app`
+
+## Goal
+
+Update GitHub-facing release docs for the `0.1.7` rollout and push to trigger CI:
+- align README release/version messaging to `v0.1.7`
+- publish/update GitHub release metadata for `v0.1.7`
+- push branch/tag so GitHub Actions CI/release workflows run
+
+## Plan
+
+- [x] Update `README.md` release sections from `v0.1.6` to `v0.1.7` with current rollout summary
+- [x] Validate release metadata source (`CHANGELOG.md`) and sync GitHub release notes
+- [x] Push commits/tags to GitHub and verify CI workflow kickoff
+
+## Review
+
+- Updated `README.md`:
+  - `## New In v0.1.6` → `## New In v0.1.7`
+  - refreshed rollout bullets for the P2 dashboard wave and command-surface additions
+  - `Releases` section latest tag now `v0.1.7`
+- Updated GitHub repo description to reflect the `v0.1.7` rollout positioning.
+- Published GitHub release:
+  - `https://github.com/Sheshiyer/team-forge-ts/releases/tag/v0.1.7`
+  - notes sourced from `CHANGELOG.md` `v0.1.7` section
+- Pushed rollout to GitHub:
+  - `main` advanced to `e5e6244`
+  - tag `v0.1.7` pushed
+- CI/release verification:
+  - Build & Release workflow triggered on tag push:
+    - `https://github.com/Sheshiyer/team-forge-ts/actions/runs/24283881187`
+    - status at check time: `in_progress`
+
+## Goal
+
+Diagnose missing `v0.1.7` release assets and restore downloadable app artifacts.
+
+## Plan
+
+- [x] Inspect failed GitHub Actions release run and identify root cause
+- [x] Patch release workflow so future tag builds do not fail on updater signing keys
+- [x] Build local `.app`/`.dmg` artifacts and upload to `v0.1.7` release
+
+## Review
+
+- Root cause identified from run `24283881187`: Apple Silicon Tauri build failed after bundling with:
+  - `A public key has been found, but no private key. Make sure to set TAURI_SIGNING_PRIVATE_KEY environment variable.`
+- This is not a package-version issue; updater artifact signing was required but CI lacked `TAURI_SIGNING_PRIVATE_KEY`.
+- Updated `.github/workflows/release.yml` to pass:
+  - `--config '{"bundle":{"createUpdaterArtifacts":false}}'`
+  - on both Apple Silicon and Intel release build steps.
+- Built release assets locally with updater artifacts disabled and uploaded to `v0.1.7`:
+  - `TeamForge_0.1.7_aarch64.dmg`
+  - `TeamForge_0.1.7_aarch64_app.zip`
+- Pushed CI fix commit to `main`:
+  - `5bd34a5`
+
+## Goal
+
+Cut a fresh release tag after CI workflow fix so GitHub Actions can publish release assets automatically.
+
+## Plan
+
+- [x] Create and push `v0.1.8` tag from latest `main`
+- [x] Monitor Build & Release workflow to completion
+- [x] Verify `v0.1.8` release assets are present on GitHub
+
+## Review
+
+- Tagged and pushed:
+  - `v0.1.8` at commit `5bd34a5`
+- Release workflow run:
+  - `https://github.com/Sheshiyer/team-forge-ts/actions/runs/24285428588`
+  - final status: `completed`, `success`
+- Release page:
+  - `https://github.com/Sheshiyer/team-forge-ts/releases/tag/v0.1.8`
+- Assets now present:
+  - `TeamForge_0.1.7_aarch64.dmg`
+  - `TeamForge_0.1.7_x64.dmg`
+  - `TeamForge_aarch64.app.tar.gz`
+  - `TeamForge_x64.app.tar.gz`
+
+## Goal
+
+Cut `v0.1.9` with fully aligned version metadata so release artifact filenames no longer lag old app versions.
+
+## Plan
+
+- [x] Bump app/package metadata to `0.1.9`
+- [x] Verify builds and tests after version update
+- [ ] Push release commit, tag `v0.1.9`, and verify GitHub release artifacts
+
+## Review
+
+- Version fields set to `0.1.9` in:
+  - `package.json`
+  - `sidecar/package.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/tauri.conf.json`
+- Release docs aligned:
+  - `README.md` latest tag now `v0.1.9`
+  - `CHANGELOG.md` includes a `v0.1.9` entry (2026-04-12)
+- Verification:
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+  - `pnpm build` ✅
+
+## Goal
+
+Align app/package version metadata with the new `v0.1.8` rollout.
+
+## Plan
+
+- [x] Bump canonical version fields from `0.1.7` to `0.1.8` across frontend, sidecar, Rust crate, and Tauri config
+- [x] Verify builds still pass after version bump
+- [x] Document the version-alignment outcome
+
+## Review
+
+- Updated version fields to `0.1.8` in:
+  - `package.json`
+  - `sidecar/package.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/tauri.conf.json`
+- Verification:
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+  - `pnpm build` ✅
