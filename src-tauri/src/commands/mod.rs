@@ -4664,6 +4664,98 @@ pub async fn get_planner_capacity(
     Ok(vec![])
 }
 
+// ── Cloud credential sync ────────────────────────────────────────
+
+const WORKER_BASE_URL: &str = "https://teamforge-api.sheshnarayan-iyer.workers.dev";
+
+#[derive(Debug, Clone, Deserialize)]
+struct CloudCredential {
+    available: bool,
+    token: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CloudCredentials {
+    clockify: Option<CloudCredential>,
+    huly: Option<CloudCredential>,
+    slack: Option<CloudCredential>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CloudCredentialResponse {
+    ok: bool,
+    data: Option<CloudCredentialData>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CloudCredentialData {
+    credentials: CloudCredentials,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialSyncResult {
+    pub synced: Vec<String>,
+    pub skipped: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn sync_cloud_credentials(db: State<'_, DbPool>) -> Result<CredentialSyncResult, String> {
+    let pool = &db.0;
+    let url = format!("{}/v1/credentials?audience=teamforge-desktop", WORKER_BASE_URL);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("cloud request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("cloud returned status {}", resp.status()));
+    }
+
+    let body: CloudCredentialResponse = resp.json().await.map_err(|e| format!("parse error: {e}"))?;
+    if !body.ok {
+        return Err("cloud returned ok=false".to_string());
+    }
+
+    let creds = body
+        .data
+        .ok_or("no credential data in response")?
+        .credentials;
+
+    let mut synced = Vec::new();
+    let mut skipped = Vec::new();
+    let mut errors = Vec::new();
+
+    let pairs: Vec<(&str, Option<&CloudCredential>)> = vec![
+        ("clockify_api_key", creds.clockify.as_ref()),
+        ("huly_token", creds.huly.as_ref()),
+        ("slack_bot_token", creds.slack.as_ref()),
+    ];
+
+    for (key, cred) in pairs {
+        match cred {
+            Some(c) if c.available && c.token.is_some() => {
+                let token = c.token.as_ref().unwrap();
+                if let Err(e) = queries::set_setting(pool, key, token).await {
+                    errors.push(format!("{key}: {e}"));
+                } else {
+                    synced.push(key.to_string());
+                }
+            }
+            _ => {
+                skipped.push(key.to_string());
+            }
+        }
+    }
+
+    Ok(CredentialSyncResult { synced, skipped, errors })
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;

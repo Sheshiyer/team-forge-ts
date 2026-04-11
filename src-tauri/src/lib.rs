@@ -34,6 +34,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -148,6 +149,7 @@ pub fn run() {
             commands::get_skills_matrix,
             commands::get_onboarding_flows,
             commands::get_planner_capacity,
+            commands::sync_cloud_credentials,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -6,3 +6,4 @@ sidecar/dist/
 sidecar/node_modules/
 *.log
 .DS_Store
+.wrangler/

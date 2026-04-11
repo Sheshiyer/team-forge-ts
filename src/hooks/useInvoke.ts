@@ -40,6 +40,7 @@ import type {
   SkillsMatrixCell,
   OnboardingFlowView,
   PlannerSlotView,
+  CredentialSyncResult,
 } from "../lib/types";
 
 const invokeApi = {
@@ -131,6 +132,8 @@ const invokeApi = {
     invoke<OnboardingFlowView[]>("get_onboarding_flows"),
   getPlannerCapacity: () =>
     invoke<PlannerSlotView[]>("get_planner_capacity"),
+  syncCloudCredentials: () =>
+    invoke<CredentialSyncResult>("sync_cloud_credentials"),
 };
 
 export function useInvoke() {

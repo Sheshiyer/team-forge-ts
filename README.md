@@ -85,13 +85,13 @@ Leave tracking and yearly holidays now live on a dedicated Calendar route, keepi
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
-## New In v0.1.6
+## New In v0.1.7
 
-- **Team is now people-first again** with org mapping, department structure, and an employee-specific operations summary instead of mixing in calendar admin.
-- **Calendar is now its own route** for local leave tracking, yearly holiday management, and the shared cache-first Team schedule data.
-- **Employee drill-down now shows ops context** including standups, leave status, work hours, meetings, and upcoming schedule from the merged Team snapshot + live service data.
-- **Team snapshot loading is cache-first** so SQLite-backed data renders first, then refreshes live Huly state in the background.
-- **Tagged GitHub releases now drive macOS packaging** so `v*` tags cut Apple Silicon + Intel Tauri release builds for the repo release page.
+- **P2 dashboard wave shipped** with new Clients, Devices, Knowledge, Training, Onboarding, and Planner pages.
+- **Sprints, Team, and Overview are upgraded** with sprint burndown/capacity detail, monthly-hours visibility, and role-based dashboard modes.
+- **Backend command surface now supports all new pages** with typed Tauri IPC responses and Clockify/Huly-backed data models.
+- **Ops modules now have a dedicated sidebar section** so all new operational views are grouped consistently in the LCARS shell.
+- **Release `v0.1.7` is the rollout baseline** for the new page architecture and version-bumped packaging.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
@@ -133,7 +133,7 @@ On first launch:
 
 ## Releases
 
-- **Latest tag:** `v0.1.6`
+- **Latest tag:** `v0.1.7`
 - **Release trigger:** pushing a tag that matches `v*`
 - **Artifacts:** macOS `.app` and `.dmg` bundles built by GitHub Actions for Apple Silicon and Intel targets
 - **Download page:** [GitHub Releases](https://github.com/Sheshiyer/team-forge-ts/releases)

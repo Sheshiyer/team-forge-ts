@@ -98,6 +98,17 @@ function App() {
   const sidebarWidth = isCompactShell ? 208 : isTightShell ? 224 : 240;
   const visiblePresence = teamPresence.slice(0, isCompactShell ? 6 : 8);
 
+  // Cloud credential sync on launch (before background data sync)
+  useEffect(() => {
+    invoke<unknown>("sync_cloud_credentials")
+      .then((result) => {
+        console.log("[teamforge] cloud credential sync:", result);
+      })
+      .catch((err) => {
+        console.warn("[teamforge] cloud credential sync skipped:", err);
+      });
+  }, []);
+
   // Background sync on launch
   useEffect(() => {
     const timer = setTimeout(() => {

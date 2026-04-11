@@ -463,6 +463,14 @@ export interface PlannerSlotView {
   capacityUtilization: number;
 }
 
+// ── Cloud credential sync ────────────────────────────────────────
+
+export interface CredentialSyncResult {
+  synced: string[];
+  skipped: string[];
+  errors: string[];
+}
+
 // ── Standup system (#10) ─────────────────────────────────────────
 
 export interface StandupEntry {

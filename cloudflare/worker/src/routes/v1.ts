@@ -1,6 +1,7 @@
 import type { Env } from "../lib/env";
 import { jsonNotImplemented, jsonOk } from "../lib/response";
 import { handleGetConnections, handleTestConnection } from "./connections";
+import { handleGetCredentials } from "./credentials";
 import { handleGetNormalizationHistory, handleNormalizationApply, handleNormalizationPreview } from "./normalization";
 import { handleOtaCheck, handleOtaInstallEvent } from "./ota";
 import { handleGetProjects, handlePutProject } from "./projects";
@@ -50,6 +51,11 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   const mappingMatch = pathname.match(/^\/v1\/project-mappings\/([^/]+)$/);
   if (method === "PUT" && mappingMatch) {
     return handlePutProject(env, mappingMatch[1], request);
+  }
+
+  // Credentials (shared integration tokens)
+  if (method === "GET" && pathname === "/v1/credentials") {
+    return handleGetCredentials(env, url);
   }
 
   // Connections
