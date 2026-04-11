@@ -62,7 +62,7 @@ jobs:
             *Built with Tauri v2 + React + Rust*
           releaseDraft: false
           prerelease: false
-          args: --target aarch64-apple-darwin
+          args: --target aarch64-apple-darwin --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Build Tauri app (Intel)
         uses: tauri-apps/tauri-action@v0
@@ -73,4 +73,4 @@ jobs:
           releaseName: 'TeamForge ${{ github.ref_name }}'
           releaseDraft: false
           prerelease: false
-          args: --target x86_64-apple-darwin
+          args: --target x86_64-apple-darwin --config '{"bundle":{"createUpdaterArtifacts":false}}'
