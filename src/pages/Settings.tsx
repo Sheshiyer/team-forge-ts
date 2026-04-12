@@ -66,6 +66,15 @@ function Settings() {
   const [slackStatus, setSlackStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [slackMessage, setSlackMessage] = useState<string | null>(null);
 
+  const [cloudCredentialSyncEnabled, setCloudCredentialSyncEnabled] =
+    useState(true);
+  const [cloudCredentialsAccessToken, setCloudCredentialsAccessToken] =
+    useState("");
+  const [showCloudCredentialsAccessToken, setShowCloudCredentialsAccessToken] =
+    useState(false);
+  const [cloudSyncMessage, setCloudSyncMessage] = useState<string | null>(null);
+  const [cloudSyncing, setCloudSyncing] = useState(false);
+
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [syncStates, setSyncStates] = useState<SyncState[]>([]);
@@ -80,6 +89,7 @@ function Settings() {
   const slackFilterCount = normalizedSlackFilters
     ? normalizedSlackFilters.split(", ").filter(Boolean).length
     : 0;
+  const cloudAccessTokenPresent = cloudCredentialsAccessToken.trim().length > 0;
   const slackSetupStatus = !trimmedSlackToken
     ? "NOT CONFIGURED"
     : trimmedSlackToken.startsWith("xoxb-")
@@ -104,6 +114,12 @@ function Settings() {
       if (settings.huly_token) setHulyToken(settings.huly_token);
       if (settings.slack_bot_token) setSlackBotToken(settings.slack_bot_token);
       setSlackChannelFilters(settings.slack_channel_filters || "");
+      setCloudCredentialSyncEnabled(
+        settings.cloud_credential_sync_enabled !== "false"
+      );
+      setCloudCredentialsAccessToken(
+        settings.cloud_credentials_access_token || ""
+      );
     } catch { /* Settings may not exist yet */ }
   }, []);
 
@@ -299,6 +315,50 @@ function Settings() {
     } catch (err) {
       setSlackStatus("error");
       setSlackMessage(`Error: ${err}`);
+    }
+  };
+
+  const handleSaveCloudSyncSettings = async () => {
+    const trimmedToken = cloudCredentialsAccessToken.trim();
+    setCloudSyncMessage(null);
+
+    try {
+      await api.saveSetting(
+        "cloud_credential_sync_enabled",
+        cloudCredentialSyncEnabled ? "true" : "false"
+      );
+      await api.saveSetting("cloud_credentials_access_token", trimmedToken);
+
+      setCloudCredentialsAccessToken(trimmedToken);
+      setCloudSyncMessage("Cloud credential sync settings saved");
+      setTimeout(() => setCloudSyncMessage(null), 3000);
+    } catch (err) {
+      setCloudSyncMessage(`Error: ${String(err)}`);
+    }
+  };
+
+  const handleSyncCloudCredentialsNow = async () => {
+    setCloudSyncing(true);
+    setCloudSyncMessage(null);
+    try {
+      const result = await api.syncCloudCredentials();
+      const detailParts: string[] = [];
+      if (result.synced.length > 0) detailParts.push(`synced ${result.synced.length}`);
+      if (result.skipped.length > 0) detailParts.push(`skipped ${result.skipped.length}`);
+      if (result.errors.length > 0) detailParts.push(`errors ${result.errors.length}`);
+
+      const prefix =
+        result.errors.length > 0
+          ? "Cloud sync completed with issues"
+          : "Cloud credentials synced";
+      setCloudSyncMessage(
+        `${prefix}${detailParts.length ? ` (${detailParts.join(", ")})` : ""}`
+      );
+      await loadSettings();
+    } catch (err) {
+      setCloudSyncMessage(`Error: ${String(err)}`);
+    } finally {
+      setCloudSyncing(false);
     }
   };
 
@@ -606,6 +666,93 @@ function Settings() {
         </div>
       </div>
 
+      {/* Cloud Credential Sync */}
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
+        <h2 style={styles.sectionTitle}>CLOUD CREDENTIAL SYNC</h2>
+        <div style={styles.sectionDivider} />
+
+        <div style={styles.field}>
+          <label style={styles.label}>STARTUP MODE</label>
+          <label style={styles.checkboxRow}>
+            <input
+              type="checkbox"
+              checked={cloudCredentialSyncEnabled}
+              onChange={(event) =>
+                setCloudCredentialSyncEnabled(event.target.checked)
+              }
+            />
+            <span>
+              ENABLE CLOUD CREDENTIAL SYNC ON APP STARTUP (DEFAULT)
+            </span>
+          </label>
+          <div style={styles.helperText}>
+            THIS IS DEFAULT-ON FOR FOUNDER/COFOUNDER SHARED TOKEN WORKFLOWS.
+            TURN IT OFF ONLY IF YOU INTENTIONALLY WANT A LOCAL-ONLY SETTINGS FLOW.
+          </div>
+        </div>
+
+        <div style={styles.field}>
+          <label style={styles.label}>CLOUD ACCESS TOKEN</label>
+          <div style={styles.inputRow}>
+            <input
+              type={showCloudCredentialsAccessToken ? "text" : "password"}
+              value={cloudCredentialsAccessToken}
+              onChange={(event) =>
+                setCloudCredentialsAccessToken(event.target.value)
+              }
+              placeholder="PASTE THE BEARER TOKEN USED FOR /v1/credentials"
+              style={{ ...styles.input, flex: 1 }}
+            />
+            <button
+              onClick={() =>
+                setShowCloudCredentialsAccessToken(
+                  !showCloudCredentialsAccessToken
+                )
+              }
+              style={styles.ghostButton}
+            >
+              {showCloudCredentialsAccessToken ? "HIDE" : "SHOW"}
+            </button>
+          </div>
+          <div style={styles.helperText}>
+            THIS TOKEN IS REQUIRED FOR MANUAL SYNC AND STARTUP SYNC. IT IS
+            STORED LOCALLY IN TEAMFORGE SETTINGS.
+          </div>
+          <div style={styles.helperText}>
+            TOKEN STATUS:{" "}
+            {cloudAccessTokenPresent ? "CONFIGURED" : "MISSING"}
+          </div>
+        </div>
+
+        <div style={styles.buttonRow}>
+          <button onClick={handleSaveCloudSyncSettings} style={styles.primaryButton}>
+            SAVE CLOUD SYNC SETTINGS
+          </button>
+          <button
+            onClick={handleSyncCloudCredentialsNow}
+            disabled={cloudSyncing || !cloudAccessTokenPresent}
+            style={{
+              ...styles.ghostButton,
+              opacity: cloudSyncing || !cloudAccessTokenPresent ? 0.5 : 1,
+            }}
+          >
+            {cloudSyncing ? "SYNCING..." : "SYNC CLOUD CREDENTIALS NOW"}
+          </button>
+          {cloudSyncMessage && (
+            <span
+              style={{
+                ...styles.label,
+                color: cloudSyncMessage.startsWith("Error")
+                  ? "var(--lcars-red)"
+                  : "var(--lcars-green)",
+              }}
+            >
+              {cloudSyncMessage.toUpperCase()}
+            </span>
+          )}
+        </div>
+      </div>
+
       {/* Sync Controls */}
       <div style={{ ...styles.card, borderLeftColor: "var(--lcars-green)" }}>
         <h2 style={styles.sectionTitle}>SYNC CONTROLS</h2>
@@ -734,6 +881,16 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 8,
     alignItems: "center",
     flexWrap: "wrap" as const,
+  },
+  checkboxRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    color: "var(--lcars-tan)",
+    fontSize: 12,
+    marginBottom: 8,
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.6px",
   },
   primaryButton: lcarsPageStyles.primaryButton,
   ghostButton: {

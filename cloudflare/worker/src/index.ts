@@ -1,4 +1,5 @@
 import type { DurableObjectStateLike, Env } from "./lib/env";
+import { requireBearerAuth } from "./lib/auth";
 import { jsonError, jsonOk } from "./lib/response";
 import { handleInternalRequest } from "./routes/internal";
 import { handleV1Request } from "./routes/v1";
@@ -28,6 +29,13 @@ export default {
     }
 
     if (url.pathname.startsWith("/internal/")) {
+      const authFailure = requireBearerAuth(
+        request,
+        env.TF_WEBHOOK_HMAC_SECRET,
+        "internal",
+      );
+      if (authFailure) return authFailure;
+
       return handleInternalRequest(request, url, env);
     }
 

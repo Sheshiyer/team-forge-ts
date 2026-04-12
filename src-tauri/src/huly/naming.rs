@@ -9,7 +9,6 @@
 ///   AXT-FEAT-AUTH-001: Implement OAuth login
 ///   TUY-BUG-API-042: Fix rate limit handling
 ///   INT-SETUP-CI-003: Configure GitHub Actions
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -179,7 +178,10 @@ pub fn compute_compliance_stats(titles: &[String]) -> NamingComplianceStats {
 
     let mut by_project: Vec<ProjectCompliance> = by_project
         .into_iter()
-        .map(|(project_code, count)| ProjectCompliance { project_code, count })
+        .map(|(project_code, count)| ProjectCompliance {
+            project_code,
+            count,
+        })
         .collect();
     by_project.sort_by(|a, b| b.count.cmp(&a.count));
 

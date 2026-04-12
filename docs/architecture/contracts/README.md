@@ -36,6 +36,18 @@ These documents freeze the design assumptions that must remain stable before Pha
   - cutover flags
   - reconciliation evidence
   - rollback triggers
+- [ops-event-schema-contract.md](/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/team-forge-ts/docs/architecture/contracts/ops-event-schema-contract.md)
+  - canonical `ops_event/v1` envelope
+  - deterministic `sync_key` idempotency contract
+  - source event-type mapping for TeamForge ↔ Paperclip
+- [agent-feed-schema-contract.md](/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/team-forge-ts/docs/architecture/contracts/agent-feed-schema-contract.md)
+  - curated `agent_feed/v1` projection schema
+  - owner-hint derivation and polling indexes
+  - incremental-lookback refresh strategy
+- [agent-feed-export-contract.md](/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/team-forge-ts/docs/architecture/contracts/agent-feed-export-contract.md)
+  - TeamForge export command contract for Paperclip consumers
+  - cursor/timestamp filter semantics and continuation rules
+  - machine-parseable error envelope + lag metadata
 
 ## Phase 1 Done Standard
 

@@ -5,8 +5,9 @@ use sqlx::SqlitePool;
 
 use super::client::HulyClient;
 use super::types::HulySyncReport;
-use crate::db::models::{HulyIssueActivity, SyncState};
+use crate::db::models::{HulyIssueActivity, IdentityMapEntry, OpsEvent, SyncState};
 use crate::db::queries;
+use crate::ops::{build_sync_key, OpsSyncKeyInput, OPS_EVENT_SCHEMA_VERSION};
 
 /// Sync engine that pulls data from Huly and persists it locally.
 pub struct HulySyncEngine {
@@ -21,6 +22,10 @@ impl HulySyncEngine {
 
     /// Sync issues from Huly. Returns the count of activities created.
     pub async fn sync_issues(&self) -> Result<u32, String> {
+        queries::seed_identity_map_from_employees(&self.pool)
+            .await
+            .map_err(|e| format!("seed identity map from employees: {e}"))?;
+
         // Get last sync timestamp
         let last_sync = queries::get_sync_state(&self.pool, "huly", "issues")
             .await
@@ -48,29 +53,88 @@ impl HulySyncEngine {
         let mut count = 0u32;
 
         for issue in &issues {
-            // Each issue that was modified counts as an activity record.
-            // Map modified_by to an employee if possible.
-            let employee_id = match &issue.modified_by {
-                Some(person_ref) => self
-                    .resolve_employee_id(person_ref)
-                    .await
-                    .unwrap_or_default(),
-                None => String::new(),
-            };
-
-            if employee_id.is_empty() {
-                // Cannot link to an employee; skip
-                continue;
-            }
-
             let occurred_at = issue
                 .modified_on
                 .map(|ts| {
                     chrono::DateTime::from_timestamp_millis(ts)
-                        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S").to_string())
-                        .unwrap_or_default()
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_else(|| Utc::now().to_rfc3339())
                 })
-                .unwrap_or_else(|| Local::now().format("%Y-%m-%dT%H:%M:%S").to_string());
+                .unwrap_or_else(|| Utc::now().to_rfc3339());
+            let actor_huly_person_id = issue.modified_by.clone();
+            let actor_employee_id = match actor_huly_person_id.as_deref() {
+                Some(person_ref) => self.resolve_employee_id(person_ref).await,
+                None => None,
+            };
+            if let Some(person_ref) = actor_huly_person_id.as_deref() {
+                let (resolution_status, confidence, match_method) = if actor_employee_id.is_some() {
+                    ("linked", 1.0, "huly.issue.activity")
+                } else {
+                    ("orphaned", 0.0, "huly.issue.unmatched")
+                };
+                if let Err(error) = self
+                    .upsert_huly_identity(
+                        person_ref,
+                        actor_employee_id.as_deref(),
+                        confidence,
+                        resolution_status,
+                        match_method,
+                    )
+                    .await
+                {
+                    eprintln!(
+                        "[huly-sync] warning: failed to track huly identity {person_ref}: {error}"
+                    );
+                }
+            }
+            let payload_json = serde_json::to_string(&serde_json::json!({
+                "id": issue.id.clone(),
+                "identifier": issue.identifier.clone(),
+                "title": issue.title.clone(),
+                "status": issue.status.clone(),
+                "priority": issue.priority.clone(),
+                "assignee": issue.assignee.clone(),
+                "space": issue.space.clone(),
+                "modified_on": issue.modified_on,
+            }))
+            .map_err(|e| format!("serialize huly ops payload failed: {e}"))?;
+            let sync_key = build_sync_key(&OpsSyncKeyInput {
+                source: "huly",
+                event_type: "huly.issue.modified",
+                entity_type: "huly_issue",
+                entity_id: &issue.id,
+                actor_employee_id: actor_employee_id.as_deref(),
+                actor_clockify_user_id: None,
+                actor_huly_person_id: actor_huly_person_id.as_deref(),
+                actor_slack_user_id: None,
+                occurred_at: &occurred_at,
+            });
+            let ops_event = OpsEvent {
+                id: None,
+                sync_key,
+                schema_version: OPS_EVENT_SCHEMA_VERSION.to_string(),
+                source: "huly".to_string(),
+                event_type: "huly.issue.modified".to_string(),
+                entity_type: "huly_issue".to_string(),
+                entity_id: issue.id.clone(),
+                actor_employee_id: actor_employee_id.clone(),
+                actor_clockify_user_id: None,
+                actor_huly_person_id: actor_huly_person_id.clone(),
+                actor_slack_user_id: None,
+                occurred_at: occurred_at.clone(),
+                severity: "info".to_string(),
+                payload_json,
+                detected_at: Utc::now().to_rfc3339(),
+            };
+            if let Err(e) = queries::upsert_ops_event(&self.pool, &ops_event).await {
+                eprintln!("[huly-sync] warning: failed to upsert ops event: {e}");
+            }
+
+            // Each issue that was modified counts as an activity record only when we can map it
+            // to a known employee.
+            let Some(employee_id) = actor_employee_id else {
+                continue;
+            };
 
             let activity = HulyIssueActivity {
                 id: None,
@@ -81,8 +145,8 @@ impl HulySyncEngine {
                 action: "modified".to_string(),
                 old_status: None,
                 new_status: issue.status.as_ref().map(|v| v.to_string()),
-                occurred_at,
-                synced_at: Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
+                occurred_at: occurred_at.clone(),
+                synced_at: Utc::now().to_rfc3339(),
             };
 
             if let Err(e) = queries::insert_huly_issue_activity(&self.pool, &activity).await {
@@ -110,6 +174,10 @@ impl HulySyncEngine {
 
     /// Update presence based on recently modified issues.
     pub async fn sync_presence(&self) -> Result<u32, String> {
+        queries::seed_identity_map_from_employees(&self.pool)
+            .await
+            .map_err(|e| format!("seed identity map from employees: {e}"))?;
+
         // Fetch issues modified in the last 15 minutes
         let fifteen_min_ago = Utc::now()
             .checked_sub_signed(chrono::Duration::minutes(15))
@@ -131,8 +199,39 @@ impl HulySyncEngine {
 
                 let employee_id = match self.resolve_employee_id(person_ref).await {
                     Some(id) => id,
-                    None => continue,
+                    None => {
+                        if let Err(error) = self
+                            .upsert_huly_identity(
+                                person_ref,
+                                None,
+                                0.0,
+                                "orphaned",
+                                "huly.presence.unmatched",
+                            )
+                            .await
+                        {
+                            eprintln!(
+                                "[huly-sync] warning: failed to track unresolved huly identity {person_ref}: {error}"
+                            );
+                        }
+                        continue;
+                    }
                 };
+
+                if let Err(error) = self
+                    .upsert_huly_identity(
+                        person_ref,
+                        Some(&employee_id),
+                        1.0,
+                        "linked",
+                        "huly.presence.activity",
+                    )
+                    .await
+                {
+                    eprintln!(
+                        "[huly-sync] warning: failed to upsert linked huly identity {person_ref}: {error}"
+                    );
+                }
 
                 let now = Local::now().format("%Y-%m-%dT%H:%M:%S").to_string();
                 // Update just the huly_last_seen via raw query
@@ -217,6 +316,12 @@ impl HulySyncEngine {
 
     /// Look up the local employee ID for a given Huly person reference.
     async fn resolve_employee_id(&self, huly_person_ref: &str) -> Option<String> {
+        if let Ok(Some(employee_id)) =
+            queries::resolve_employee_id_by_identity(&self.pool, "huly", huly_person_ref).await
+        {
+            return Some(employee_id);
+        }
+
         // huly_person_id in the employees table stores the Huly person/member ID
         let row: Option<(String,)> =
             sqlx::query_as("SELECT id FROM employees WHERE huly_person_id = ?1 LIMIT 1")
@@ -224,7 +329,47 @@ impl HulySyncEngine {
                 .fetch_optional(&self.pool)
                 .await
                 .ok()?;
+        let employee_id = row.map(|r| r.0)?;
+        let _ = self
+            .upsert_huly_identity(
+                huly_person_ref,
+                Some(&employee_id),
+                1.0,
+                "linked",
+                "legacy.employee_huly_person_id",
+            )
+            .await;
+        Some(employee_id)
+    }
 
-        row.map(|r| r.0)
+    async fn upsert_huly_identity(
+        &self,
+        huly_person_ref: &str,
+        employee_id: Option<&str>,
+        confidence: f64,
+        resolution_status: &str,
+        match_method: &str,
+    ) -> Result<(), String> {
+        let now = Utc::now().to_rfc3339();
+        let entry = IdentityMapEntry {
+            id: None,
+            source: "huly".to_string(),
+            external_id: huly_person_ref.to_string(),
+            employee_id: employee_id.map(|value| value.to_string()),
+            confidence,
+            resolution_status: resolution_status.to_string(),
+            match_method: Some(match_method.to_string()),
+            is_override: false,
+            override_by: None,
+            override_reason: None,
+            override_at: None,
+            first_seen_at: now.clone(),
+            last_seen_at: now.clone(),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        queries::upsert_identity_map_entry(&self.pool, &entry)
+            .await
+            .map_err(|e| format!("upsert huly identity map: {e}"))
     }
 }

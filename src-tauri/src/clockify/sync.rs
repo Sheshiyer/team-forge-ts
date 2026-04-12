@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -11,8 +11,9 @@ fn clockify_date(dt: chrono::DateTime<Utc>) -> String {
 
 use super::client::ClockifyClient;
 use super::types::SyncReport;
-use crate::db::models::{Employee, Presence, Project, SyncState, TimeEntry};
+use crate::db::models::{Employee, OpsEvent, Presence, Project, SyncState, TimeEntry};
 use crate::db::queries;
+use crate::ops::{build_sync_key, OpsSyncKeyInput, OPS_EVENT_SCHEMA_VERSION};
 
 /// Coordinates fetching from Clockify and persisting into SQLite.
 pub struct ClockifySyncEngine {
@@ -68,6 +69,10 @@ impl ClockifySyncEngine {
             }
         }
 
+        queries::seed_identity_map_from_employees(&self.pool)
+            .await
+            .map_err(|e| format!("seed identity map from employees failed: {e}"))?;
+
         eprintln!("[clockify-sync] synced {count} users");
         Ok(count)
     }
@@ -110,7 +115,19 @@ impl ClockifySyncEngine {
             .map_err(|e| format!("read sync state failed: {e}"))?;
 
         let since = match &state {
-            Some(s) => s.last_sync_at.clone(),
+            Some(s) => {
+                // Keep an overlap window so late updates and parser/schema fixes
+                // can backfill recent entries without manual state resets.
+                match chrono::DateTime::parse_from_rfc3339(&s.last_sync_at) {
+                    Ok(last) => {
+                        clockify_date(last.with_timezone(&Utc) - chrono::Duration::days(90))
+                    }
+                    Err(_) => {
+                        let dt = Utc::now() - chrono::Duration::days(90);
+                        clockify_date(dt)
+                    }
+                }
+            }
             None => {
                 // Default: 90 days ago.
                 let dt = Utc::now() - chrono::Duration::days(90);
@@ -145,7 +162,10 @@ impl ClockifySyncEngine {
                     .as_deref()
                     .and_then(parse_iso_duration);
 
-                let project_id = entry.project.as_ref().and_then(|p| p.id.clone());
+                let project_id = entry
+                    .project_id
+                    .clone()
+                    .or_else(|| entry.project.as_ref().and_then(|p| p.id.clone()));
 
                 let te = TimeEntry {
                     id: entry.id.clone(),
@@ -161,6 +181,50 @@ impl ClockifySyncEngine {
                 queries::upsert_time_entry(&self.pool, &te)
                     .await
                     .map_err(|e| format!("upsert time entry failed: {e}"))?;
+
+                let occurred_at = te.start_time.clone();
+                let payload_json = serde_json::to_string(&serde_json::json!({
+                    "id": entry.id.clone(),
+                    "description": entry.description.clone(),
+                    "project_id": te.project_id.clone(),
+                    "start_time": entry.time_interval.start.clone(),
+                    "end_time": entry.time_interval.end.clone(),
+                    "duration_seconds": duration_secs,
+                    "billable": entry.billable,
+                    "workspace_id": self.workspace_id.as_str(),
+                }))
+                .map_err(|e| format!("serialize clockify ops payload failed: {e}"))?;
+                let sync_key = build_sync_key(&OpsSyncKeyInput {
+                    source: "clockify",
+                    event_type: "clockify.time_entry.logged",
+                    entity_type: "clockify_time_entry",
+                    entity_id: &entry.id,
+                    actor_employee_id: Some(&emp.id),
+                    actor_clockify_user_id: Some(&emp.clockify_user_id),
+                    actor_huly_person_id: emp.huly_person_id.as_deref(),
+                    actor_slack_user_id: None,
+                    occurred_at: &occurred_at,
+                });
+                let ops_event = OpsEvent {
+                    id: None,
+                    sync_key,
+                    schema_version: OPS_EVENT_SCHEMA_VERSION.to_string(),
+                    source: "clockify".to_string(),
+                    event_type: "clockify.time_entry.logged".to_string(),
+                    entity_type: "clockify_time_entry".to_string(),
+                    entity_id: entry.id.clone(),
+                    actor_employee_id: Some(emp.id.clone()),
+                    actor_clockify_user_id: Some(emp.clockify_user_id.clone()),
+                    actor_huly_person_id: emp.huly_person_id.clone(),
+                    actor_slack_user_id: None,
+                    occurred_at,
+                    severity: "info".to_string(),
+                    payload_json,
+                    detected_at: Utc::now().to_rfc3339(),
+                };
+                queries::upsert_ops_event(&self.pool, &ops_event)
+                    .await
+                    .map_err(|e| format!("upsert clockify ops event failed: {e}"))?;
                 count += 1;
             }
         }
@@ -186,6 +250,12 @@ impl ClockifySyncEngine {
         let employees = queries::get_employees(&self.pool)
             .await
             .map_err(|e| format!("get employees failed: {e}"))?;
+        let project_name_by_id: HashMap<String, String> = queries::get_projects(&self.pool)
+            .await
+            .map_err(|e| format!("get projects failed: {e}"))?
+            .into_iter()
+            .map(|project| (project.id, project.name))
+            .collect();
 
         let user_ids: Vec<String> = employees
             .iter()
@@ -217,7 +287,17 @@ impl ClockifySyncEngine {
 
         // Then set active timers.
         for (uid, entry) in &active_timers {
-            let project_name = entry.project.as_ref().and_then(|p| p.name.clone());
+            let project_name = entry
+                .project
+                .as_ref()
+                .and_then(|p| p.name.clone())
+                .or_else(|| {
+                    entry
+                        .project_id
+                        .as_ref()
+                        .and_then(|project_id| project_name_by_id.get(project_id))
+                        .cloned()
+                });
 
             let p = Presence {
                 employee_id: uid.clone(),

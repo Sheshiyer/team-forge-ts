@@ -19,6 +19,26 @@ pub struct Employee {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
+pub struct IdentityMapEntry {
+    pub id: Option<i64>,
+    pub source: String,
+    pub external_id: String,
+    pub employee_id: Option<String>,
+    pub confidence: f64,
+    pub resolution_status: String,
+    pub match_method: Option<String>,
+    pub is_override: bool,
+    pub override_by: Option<String>,
+    pub override_reason: Option<String>,
+    pub override_at: Option<String>,
+    pub first_seen_at: String,
+    pub last_seen_at: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
 pub struct Project {
     pub id: String,
     pub clockify_project_id: String,
@@ -71,6 +91,63 @@ pub struct HulyDocumentActivity {
     pub action: String,
     pub occurred_at: String,
     pub synced_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackMessageActivity {
+    pub id: Option<i64>,
+    pub message_key: String,
+    pub slack_channel_id: String,
+    pub slack_user_id: Option<String>,
+    pub employee_id: Option<String>,
+    pub message_ts: String,
+    pub message_ts_ms: Option<i64>,
+    pub content_preview: Option<String>,
+    pub detected_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct OpsEvent {
+    pub id: Option<i64>,
+    pub sync_key: String,
+    pub schema_version: String,
+    pub source: String,
+    pub event_type: String,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub actor_employee_id: Option<String>,
+    pub actor_clockify_user_id: Option<String>,
+    pub actor_huly_person_id: Option<String>,
+    pub actor_slack_user_id: Option<String>,
+    pub occurred_at: String,
+    pub severity: String,
+    pub payload_json: String,
+    pub detected_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFeedItem {
+    pub id: Option<i64>,
+    pub sync_key: String,
+    pub schema_version: String,
+    pub source: String,
+    pub event_type: String,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub occurred_at: String,
+    pub detected_at: String,
+    pub severity: String,
+    pub owner_hint: Option<String>,
+    pub actor_employee_id: Option<String>,
+    pub actor_clockify_user_id: Option<String>,
+    pub actor_huly_person_id: Option<String>,
+    pub actor_slack_user_id: Option<String>,
+    pub payload_json: String,
+    pub metadata_json: Option<String>,
+    pub refreshed_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -166,11 +243,22 @@ pub struct OverviewData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectStats {
+    pub project_id: Option<String>,
     pub project_name: String,
     pub total_hours: f64,
     pub billable_hours: f64,
     pub team_members: u32,
     pub utilization: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectCatalogItem {
+    pub id: String,
+    pub name: String,
+    pub client_name: Option<String>,
+    pub is_billable: bool,
+    pub is_archived: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

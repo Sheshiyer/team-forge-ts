@@ -1,6 +1,7 @@
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use std::collections::HashMap;
 use std::path::Path;
 
 use super::models::*;
@@ -19,8 +20,25 @@ pub async fn init_db(app_data_dir: &Path) -> Result<SqlitePool, sqlx::Error> {
     sqlx::query(include_str!("../../migrations/001_initial.sql"))
         .execute(&pool)
         .await?;
+    ensure_identity_map_columns(&pool).await?;
 
     Ok(pool)
+}
+
+async fn ensure_identity_map_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    for statement in [
+        "ALTER TABLE identity_map ADD COLUMN override_by TEXT",
+        "ALTER TABLE identity_map ADD COLUMN override_reason TEXT",
+        "ALTER TABLE identity_map ADD COLUMN override_at TEXT",
+    ] {
+        if let Err(error) = sqlx::query(statement).execute(pool).await {
+            let message = error.to_string().to_lowercase();
+            if !message.contains("duplicate column name") {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
 }
 
 // ─── Employees ───────────────────────────────────────────────────
@@ -84,6 +102,221 @@ pub async fn upsert_employee(pool: &SqlitePool, e: &Employee) -> Result<(), sqlx
     .bind(&e.updated_at)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+// ─── Cross-platform Identity Map ───────────────────────────────
+
+pub async fn upsert_identity_map_entry(
+    pool: &SqlitePool,
+    entry: &IdentityMapEntry,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO identity_map (
+            source,
+            external_id,
+            employee_id,
+            confidence,
+            resolution_status,
+            match_method,
+            is_override,
+            override_by,
+            override_reason,
+            override_at,
+            first_seen_at,
+            last_seen_at,
+            created_at,
+            updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+        ON CONFLICT(source, external_id) DO UPDATE SET
+          employee_id = CASE
+            WHEN identity_map.is_override = 1 AND excluded.is_override = 0 THEN identity_map.employee_id
+            ELSE excluded.employee_id
+          END,
+          confidence = CASE
+            WHEN identity_map.is_override = 1 AND excluded.is_override = 0 THEN identity_map.confidence
+            ELSE excluded.confidence
+          END,
+          resolution_status = CASE
+            WHEN identity_map.is_override = 1 AND excluded.is_override = 0 THEN identity_map.resolution_status
+            ELSE excluded.resolution_status
+          END,
+          match_method = CASE
+            WHEN identity_map.is_override = 1 AND excluded.is_override = 0 THEN identity_map.match_method
+            ELSE excluded.match_method
+          END,
+          is_override = CASE
+            WHEN identity_map.is_override = 1 AND excluded.is_override = 0 THEN identity_map.is_override
+            ELSE excluded.is_override
+          END,
+          override_by = CASE
+            WHEN excluded.is_override = 1 THEN excluded.override_by
+            WHEN identity_map.is_override = 1 THEN identity_map.override_by
+            ELSE excluded.override_by
+          END,
+          override_reason = CASE
+            WHEN excluded.is_override = 1 THEN excluded.override_reason
+            WHEN identity_map.is_override = 1 THEN identity_map.override_reason
+            ELSE excluded.override_reason
+          END,
+          override_at = CASE
+            WHEN excluded.is_override = 1 THEN excluded.override_at
+            WHEN identity_map.is_override = 1 THEN identity_map.override_at
+            ELSE excluded.override_at
+          END,
+          last_seen_at = excluded.last_seen_at,
+          updated_at = datetime('now')",
+    )
+    .bind(&entry.source)
+    .bind(&entry.external_id)
+    .bind(&entry.employee_id)
+    .bind(entry.confidence)
+    .bind(&entry.resolution_status)
+    .bind(&entry.match_method)
+    .bind(entry.is_override)
+    .bind(&entry.override_by)
+    .bind(&entry.override_reason)
+    .bind(&entry.override_at)
+    .bind(&entry.first_seen_at)
+    .bind(&entry.last_seen_at)
+    .bind(&entry.created_at)
+    .bind(&entry.updated_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn resolve_employee_id_by_identity(
+    pool: &SqlitePool,
+    source: &str,
+    external_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    let employee_id: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT employee_id
+         FROM identity_map
+         WHERE source = ?1 AND external_id = ?2 AND resolution_status = 'linked'
+         ORDER BY is_override DESC, confidence DESC, updated_at DESC
+         LIMIT 1",
+    )
+    .bind(source)
+    .bind(external_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(employee_id.flatten())
+}
+
+pub async fn get_identity_review_queue(
+    pool: &SqlitePool,
+    max_confidence: f64,
+) -> Result<Vec<IdentityMapEntry>, sqlx::Error> {
+    sqlx::query_as::<_, IdentityMapEntry>(
+        "SELECT *
+         FROM identity_map
+         WHERE resolution_status != 'linked'
+            OR confidence < ?1
+            OR (employee_id IS NOT NULL AND is_override = 0 AND confidence < 1.0)
+         ORDER BY is_override DESC, confidence ASC, updated_at DESC",
+    )
+    .bind(max_confidence)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn clear_competing_identity_links(
+    pool: &SqlitePool,
+    source: &str,
+    employee_id: &str,
+    except_external_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE identity_map
+         SET employee_id = NULL,
+             confidence = 0.0,
+             resolution_status = 'orphaned',
+             is_override = 0,
+             updated_at = datetime('now')
+         WHERE source = ?1
+           AND employee_id = ?2
+           AND external_id != ?3",
+    )
+    .bind(source)
+    .bind(employee_id)
+    .bind(except_external_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_identity_external_ids_for_employee(
+    pool: &SqlitePool,
+    source: &str,
+    employee_id: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT external_id
+         FROM identity_map
+         WHERE source = ?1 AND employee_id = ?2 AND resolution_status = 'linked'
+         ORDER BY external_id ASC",
+    )
+    .bind(source)
+    .bind(employee_id)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn seed_identity_map_from_employees(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let employees = get_employees(pool).await?;
+    let now = chrono::Utc::now().to_rfc3339();
+
+    for employee in &employees {
+        if !employee.clockify_user_id.trim().is_empty() {
+            let entry = IdentityMapEntry {
+                id: None,
+                source: "clockify".to_string(),
+                external_id: employee.clockify_user_id.clone(),
+                employee_id: Some(employee.id.clone()),
+                confidence: 1.0,
+                resolution_status: "linked".to_string(),
+                match_method: Some("seed.employee.clockify".to_string()),
+                is_override: false,
+                override_by: None,
+                override_reason: None,
+                override_at: None,
+                first_seen_at: now.clone(),
+                last_seen_at: now.clone(),
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            };
+            upsert_identity_map_entry(pool, &entry).await?;
+        }
+
+        if let Some(person_id) = employee
+            .huly_person_id
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            let entry = IdentityMapEntry {
+                id: None,
+                source: "huly".to_string(),
+                external_id: person_id.clone(),
+                employee_id: Some(employee.id.clone()),
+                confidence: 1.0,
+                resolution_status: "linked".to_string(),
+                match_method: Some("seed.employee.huly".to_string()),
+                is_override: false,
+                override_by: None,
+                override_reason: None,
+                override_at: None,
+                first_seen_at: now.clone(),
+                last_seen_at: now.clone(),
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            };
+            upsert_identity_map_entry(pool, &entry).await?;
+        }
+    }
+
     Ok(())
 }
 
@@ -512,6 +745,61 @@ pub async fn set_sync_state(pool: &SqlitePool, state: &SyncState) -> Result<(), 
     Ok(())
 }
 
+// ─── Slack Message Activity ─────────────────────────────────────
+
+pub async fn upsert_slack_message_activity(
+    pool: &SqlitePool,
+    activity: &SlackMessageActivity,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO slack_message_activity (
+            message_key,
+            slack_channel_id,
+            slack_user_id,
+            employee_id,
+            message_ts,
+            message_ts_ms,
+            content_preview,
+            detected_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        ON CONFLICT(message_key) DO UPDATE SET
+          slack_channel_id = excluded.slack_channel_id,
+          slack_user_id = excluded.slack_user_id,
+          employee_id = excluded.employee_id,
+          message_ts = excluded.message_ts,
+          message_ts_ms = excluded.message_ts_ms,
+          content_preview = excluded.content_preview,
+          detected_at = excluded.detected_at",
+    )
+    .bind(&activity.message_key)
+    .bind(&activity.slack_channel_id)
+    .bind(&activity.slack_user_id)
+    .bind(&activity.employee_id)
+    .bind(&activity.message_ts)
+    .bind(activity.message_ts_ms)
+    .bind(&activity.content_preview)
+    .bind(&activity.detected_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_slack_message_activity_since(
+    pool: &SqlitePool,
+    since_ts_ms: i64,
+) -> Result<Vec<SlackMessageActivity>, sqlx::Error> {
+    sqlx::query_as::<_, SlackMessageActivity>(
+        "SELECT *
+         FROM slack_message_activity
+         WHERE message_ts_ms IS NOT NULL AND message_ts_ms >= ?1
+         ORDER BY message_ts_ms DESC",
+    )
+    .bind(since_ts_ms)
+    .fetch_all(pool)
+    .await
+}
+
 // ─── Huly Issue Activity ─────────────────────────────────────────
 
 pub async fn insert_huly_issue_activity(
@@ -547,6 +835,320 @@ pub async fn get_huly_issue_activities(
     .bind(since)
     .fetch_all(pool)
     .await
+}
+
+// ─── Canonical Ops Events ───────────────────────────────────────
+
+pub async fn upsert_ops_event(pool: &SqlitePool, event: &OpsEvent) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO ops_events (
+            sync_key,
+            schema_version,
+            source,
+            event_type,
+            entity_type,
+            entity_id,
+            actor_employee_id,
+            actor_clockify_user_id,
+            actor_huly_person_id,
+            actor_slack_user_id,
+            occurred_at,
+            severity,
+            payload_json,
+            detected_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+        ON CONFLICT(sync_key) DO UPDATE SET
+          schema_version = excluded.schema_version,
+          source = excluded.source,
+          event_type = excluded.event_type,
+          entity_type = excluded.entity_type,
+          entity_id = excluded.entity_id,
+          actor_employee_id = excluded.actor_employee_id,
+          actor_clockify_user_id = excluded.actor_clockify_user_id,
+          actor_huly_person_id = excluded.actor_huly_person_id,
+          actor_slack_user_id = excluded.actor_slack_user_id,
+          occurred_at = excluded.occurred_at,
+          severity = excluded.severity,
+          payload_json = excluded.payload_json,
+          detected_at = excluded.detected_at",
+    )
+    .bind(&event.sync_key)
+    .bind(&event.schema_version)
+    .bind(&event.source)
+    .bind(&event.event_type)
+    .bind(&event.entity_type)
+    .bind(&event.entity_id)
+    .bind(&event.actor_employee_id)
+    .bind(&event.actor_clockify_user_id)
+    .bind(&event.actor_huly_person_id)
+    .bind(&event.actor_slack_user_id)
+    .bind(&event.occurred_at)
+    .bind(&event.severity)
+    .bind(&event.payload_json)
+    .bind(&event.detected_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn upsert_agent_feed_item(
+    pool: &SqlitePool,
+    item: &AgentFeedItem,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO agent_feed (
+            sync_key,
+            schema_version,
+            source,
+            event_type,
+            entity_type,
+            entity_id,
+            occurred_at,
+            detected_at,
+            severity,
+            owner_hint,
+            actor_employee_id,
+            actor_clockify_user_id,
+            actor_huly_person_id,
+            actor_slack_user_id,
+            payload_json,
+            metadata_json,
+            refreshed_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+        ON CONFLICT(sync_key) DO UPDATE SET
+          schema_version = excluded.schema_version,
+          source = excluded.source,
+          event_type = excluded.event_type,
+          entity_type = excluded.entity_type,
+          entity_id = excluded.entity_id,
+          occurred_at = excluded.occurred_at,
+          detected_at = excluded.detected_at,
+          severity = excluded.severity,
+          owner_hint = excluded.owner_hint,
+          actor_employee_id = excluded.actor_employee_id,
+          actor_clockify_user_id = excluded.actor_clockify_user_id,
+          actor_huly_person_id = excluded.actor_huly_person_id,
+          actor_slack_user_id = excluded.actor_slack_user_id,
+          payload_json = excluded.payload_json,
+          metadata_json = excluded.metadata_json,
+          refreshed_at = excluded.refreshed_at",
+    )
+    .bind(&item.sync_key)
+    .bind(&item.schema_version)
+    .bind(&item.source)
+    .bind(&item.event_type)
+    .bind(&item.entity_type)
+    .bind(&item.entity_id)
+    .bind(&item.occurred_at)
+    .bind(&item.detected_at)
+    .bind(&item.severity)
+    .bind(&item.owner_hint)
+    .bind(&item.actor_employee_id)
+    .bind(&item.actor_clockify_user_id)
+    .bind(&item.actor_huly_person_id)
+    .bind(&item.actor_slack_user_id)
+    .bind(&item.payload_json)
+    .bind(&item.metadata_json)
+    .bind(&item.refreshed_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_agent_feed(
+    pool: &SqlitePool,
+    limit: i64,
+) -> Result<Vec<AgentFeedItem>, sqlx::Error> {
+    sqlx::query_as::<_, AgentFeedItem>(
+        "SELECT *
+         FROM agent_feed
+         ORDER BY occurred_at DESC, detected_at DESC
+         LIMIT ?1",
+    )
+    .bind(limit.max(1))
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_agent_feed_export_rows(
+    pool: &SqlitePool,
+    since_timestamp: Option<&str>,
+    since_cursor: Option<(&str, &str)>,
+    limit: i64,
+) -> Result<Vec<AgentFeedItem>, sqlx::Error> {
+    let row_limit = limit.max(1);
+    match (since_timestamp, since_cursor) {
+        (_, Some((detected_at, sync_key))) => {
+            sqlx::query_as::<_, AgentFeedItem>(
+                "SELECT *
+                 FROM agent_feed
+                 WHERE (detected_at > ?1)
+                    OR (detected_at = ?1 AND sync_key > ?2)
+                 ORDER BY detected_at ASC, sync_key ASC
+                 LIMIT ?3",
+            )
+            .bind(detected_at)
+            .bind(sync_key)
+            .bind(row_limit)
+            .fetch_all(pool)
+            .await
+        }
+        (Some(timestamp), None) => {
+            sqlx::query_as::<_, AgentFeedItem>(
+                "SELECT *
+                 FROM agent_feed
+                 WHERE detected_at >= ?1
+                 ORDER BY detected_at ASC, sync_key ASC
+                 LIMIT ?2",
+            )
+            .bind(timestamp)
+            .bind(row_limit)
+            .fetch_all(pool)
+            .await
+        }
+        (None, None) => {
+            sqlx::query_as::<_, AgentFeedItem>(
+                "SELECT *
+                 FROM agent_feed
+                 ORDER BY detected_at ASC, sync_key ASC
+                 LIMIT ?1",
+            )
+            .bind(row_limit)
+            .fetch_all(pool)
+            .await
+        }
+    }
+}
+
+pub async fn refresh_agent_feed_projection(pool: &SqlitePool) -> Result<u32, sqlx::Error> {
+    let state = get_sync_state(pool, "agent_feed", "projection").await?;
+    let now = chrono::Utc::now();
+    let lookback_days = chrono::Duration::days(7);
+
+    let since = state
+        .as_ref()
+        .and_then(|existing| parse_sync_timestamp(&existing.last_sync_at))
+        .map(|timestamp| timestamp - lookback_days)
+        .unwrap_or_else(|| now - chrono::Duration::days(90))
+        .to_rfc3339();
+
+    let ops_events = sqlx::query_as::<_, OpsEvent>(
+        "SELECT *
+         FROM ops_events
+         WHERE detected_at >= ?1
+         ORDER BY detected_at ASC, occurred_at ASC, sync_key ASC",
+    )
+    .bind(&since)
+    .fetch_all(pool)
+    .await?;
+
+    let employee_name_by_id: HashMap<String, String> = get_employees(pool)
+        .await?
+        .into_iter()
+        .map(|employee| (employee.id, employee.name))
+        .collect();
+
+    let refreshed_at = now.to_rfc3339();
+    let mut upserted = 0u32;
+    for event in ops_events {
+        let owner_hint = event
+            .actor_employee_id
+            .as_ref()
+            .and_then(|employee_id| employee_name_by_id.get(employee_id).cloned())
+            .or_else(|| {
+                event
+                    .actor_slack_user_id
+                    .clone()
+                    .map(|value| format!("slack:{value}"))
+            })
+            .or_else(|| {
+                event
+                    .actor_huly_person_id
+                    .clone()
+                    .map(|value| format!("huly:{value}"))
+            })
+            .or_else(|| {
+                event
+                    .actor_clockify_user_id
+                    .clone()
+                    .map(|value| format!("clockify:{value}"))
+            });
+
+        let metadata_json = serde_json::json!({
+            "projection": "agent_feed/v1",
+            "owner_hint_source": if event.actor_employee_id.is_some() {
+                "employee_name"
+            } else if event.actor_slack_user_id.is_some() {
+                "slack_user_id"
+            } else if event.actor_huly_person_id.is_some() {
+                "huly_person_id"
+            } else if event.actor_clockify_user_id.is_some() {
+                "clockify_user_id"
+            } else {
+                "unknown"
+            },
+        })
+        .to_string();
+
+        let row = AgentFeedItem {
+            id: None,
+            sync_key: event.sync_key.clone(),
+            schema_version: event.schema_version.clone(),
+            source: event.source.clone(),
+            event_type: event.event_type.clone(),
+            entity_type: event.entity_type.clone(),
+            entity_id: event.entity_id.clone(),
+            occurred_at: event.occurred_at.clone(),
+            detected_at: event.detected_at.clone(),
+            severity: event.severity.clone(),
+            owner_hint,
+            actor_employee_id: event.actor_employee_id.clone(),
+            actor_clockify_user_id: event.actor_clockify_user_id.clone(),
+            actor_huly_person_id: event.actor_huly_person_id.clone(),
+            actor_slack_user_id: event.actor_slack_user_id.clone(),
+            payload_json: event.payload_json.clone(),
+            metadata_json: Some(metadata_json),
+            refreshed_at: refreshed_at.clone(),
+        };
+        upsert_agent_feed_item(pool, &row).await?;
+        upserted += 1;
+    }
+
+    let projection_state = SyncState {
+        source: "agent_feed".to_string(),
+        entity: "projection".to_string(),
+        last_sync_at: now.format("%Y-%m-%dT%H:%M:%S").to_string(),
+        last_cursor: Some(
+            serde_json::json!({
+                "strategy": "incremental-lookback",
+                "lookback_days": 7,
+                "window_start": since,
+                "upserted": upserted,
+            })
+            .to_string(),
+        ),
+    };
+    set_sync_state(pool, &projection_state).await?;
+
+    Ok(upserted)
+}
+
+fn parse_sync_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
+        .ok()
+        .or_else(|| {
+            chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
+                .ok()
+                .map(|value| value.and_utc())
+        })
+        .or_else(|| {
+            chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|value| value.and_utc())
+        })
 }
 
 #[cfg(test)]
@@ -695,6 +1297,331 @@ mod tests {
             .await
             .expect("reload manual holidays")
             .is_empty());
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn upsert_ops_event_is_idempotent_by_sync_key() {
+        let dir = unique_test_dir();
+        let pool = init_db(&dir).await.expect("init db");
+
+        let event = OpsEvent {
+            id: None,
+            sync_key: "ops:v1:clockify:clockify.time_entry.logged:clockify_time_entry:te_1:na:clockify_1:na:na:2026_04_12t16_00_00z".to_string(),
+            schema_version: "ops_event/v1".to_string(),
+            source: "clockify".to_string(),
+            event_type: "clockify.time_entry.logged".to_string(),
+            entity_type: "clockify_time_entry".to_string(),
+            entity_id: "te_1".to_string(),
+            actor_employee_id: None,
+            actor_clockify_user_id: Some("clockify_1".to_string()),
+            actor_huly_person_id: None,
+            actor_slack_user_id: None,
+            occurred_at: "2026-04-12T16:00:00Z".to_string(),
+            severity: "info".to_string(),
+            payload_json: r#"{"kind":"time_entry","id":"te_1"}"#.to_string(),
+            detected_at: "2026-04-12T16:00:01Z".to_string(),
+        };
+
+        upsert_ops_event(&pool, &event)
+            .await
+            .expect("first upsert ops event");
+        upsert_ops_event(&pool, &event)
+            .await
+            .expect("second upsert ops event");
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ops_events WHERE sync_key = ?1")
+            .bind(&event.sync_key)
+            .fetch_one(&pool)
+            .await
+            .expect("count ops events");
+        assert_eq!(count, 1);
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn upsert_slack_message_activity_is_idempotent_by_message_key() {
+        let dir = unique_test_dir();
+        let pool = init_db(&dir).await.expect("init db");
+
+        let employee = Employee {
+            id: "emp-slack-1".to_string(),
+            clockify_user_id: "clockify-slack-1".to_string(),
+            huly_person_id: Some("person-slack-1".to_string()),
+            name: "Slack Person".to_string(),
+            email: "slack-person@example.com".to_string(),
+            avatar_url: None,
+            monthly_quota_hours: 160.0,
+            is_active: true,
+            created_at: "2026-04-12T00:00:00Z".to_string(),
+            updated_at: "2026-04-12T00:00:00Z".to_string(),
+        };
+        upsert_employee(&pool, &employee)
+            .await
+            .expect("upsert employee");
+
+        let activity = SlackMessageActivity {
+            id: None,
+            message_key: "slack:C123:1744470000.123456".to_string(),
+            slack_channel_id: "C123".to_string(),
+            slack_user_id: Some("U123".to_string()),
+            employee_id: Some(employee.id.clone()),
+            message_ts: "1744470000.123456".to_string(),
+            message_ts_ms: Some(1_744_470_000_000),
+            content_preview: Some("Daily standup update".to_string()),
+            detected_at: "2026-04-12T10:00:00Z".to_string(),
+        };
+
+        upsert_slack_message_activity(&pool, &activity)
+            .await
+            .expect("first slack upsert");
+        upsert_slack_message_activity(&pool, &activity)
+            .await
+            .expect("second slack upsert");
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM slack_message_activity WHERE message_key = ?1",
+        )
+        .bind(&activity.message_key)
+        .fetch_one(&pool)
+        .await
+        .expect("count slack rows");
+        assert_eq!(count, 1);
+
+        let rows = get_slack_message_activity_since(&pool, 1_744_469_000_000)
+            .await
+            .expect("load persisted slack activity");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].employee_id.as_deref(), Some(employee.id.as_str()));
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn identity_map_seeding_and_orphan_tracking_round_trip() {
+        let dir = unique_test_dir();
+        let pool = init_db(&dir).await.expect("init db");
+
+        let employee = Employee {
+            id: "emp-identity-1".to_string(),
+            clockify_user_id: "clockify-identity-1".to_string(),
+            huly_person_id: Some("person-identity-1".to_string()),
+            name: "Identity Person".to_string(),
+            email: "identity.person@example.com".to_string(),
+            avatar_url: None,
+            monthly_quota_hours: 160.0,
+            is_active: true,
+            created_at: "2026-04-12T00:00:00Z".to_string(),
+            updated_at: "2026-04-12T00:00:00Z".to_string(),
+        };
+        upsert_employee(&pool, &employee)
+            .await
+            .expect("upsert identity employee");
+
+        seed_identity_map_from_employees(&pool)
+            .await
+            .expect("seed identity map");
+
+        let clockify = resolve_employee_id_by_identity(&pool, "clockify", "clockify-identity-1")
+            .await
+            .expect("resolve clockify identity");
+        let huly = resolve_employee_id_by_identity(&pool, "huly", "person-identity-1")
+            .await
+            .expect("resolve huly identity");
+        assert_eq!(clockify.as_deref(), Some(employee.id.as_str()));
+        assert_eq!(huly.as_deref(), Some(employee.id.as_str()));
+
+        let orphan = IdentityMapEntry {
+            id: None,
+            source: "slack".to_string(),
+            external_id: "U_ORPHAN_1".to_string(),
+            employee_id: None,
+            confidence: 0.0,
+            resolution_status: "orphaned".to_string(),
+            match_method: Some("test.orphan".to_string()),
+            is_override: false,
+            override_by: None,
+            override_reason: None,
+            override_at: None,
+            first_seen_at: "2026-04-12T10:00:00Z".to_string(),
+            last_seen_at: "2026-04-12T10:00:00Z".to_string(),
+            created_at: "2026-04-12T10:00:00Z".to_string(),
+            updated_at: "2026-04-12T10:00:00Z".to_string(),
+        };
+        upsert_identity_map_entry(&pool, &orphan)
+            .await
+            .expect("upsert orphan identity");
+
+        let unresolved = resolve_employee_id_by_identity(&pool, "slack", "U_ORPHAN_1")
+            .await
+            .expect("resolve orphan identity");
+        assert!(unresolved.is_none());
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM identity_map WHERE source = 'slack' AND resolution_status = 'orphaned'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count orphan rows");
+        assert_eq!(count, 1);
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn identity_override_rows_are_not_replaced_by_non_override_upserts() {
+        let dir = unique_test_dir();
+        let pool = init_db(&dir).await.expect("init db");
+
+        let employee_a = Employee {
+            id: "emp-override-a".to_string(),
+            clockify_user_id: "clockify-override-a".to_string(),
+            huly_person_id: Some("person-override-a".to_string()),
+            name: "Override A".to_string(),
+            email: "override-a@example.com".to_string(),
+            avatar_url: None,
+            monthly_quota_hours: 160.0,
+            is_active: true,
+            created_at: "2026-04-12T00:00:00Z".to_string(),
+            updated_at: "2026-04-12T00:00:00Z".to_string(),
+        };
+        let employee_b = Employee {
+            id: "emp-override-b".to_string(),
+            clockify_user_id: "clockify-override-b".to_string(),
+            huly_person_id: Some("person-override-b".to_string()),
+            name: "Override B".to_string(),
+            email: "override-b@example.com".to_string(),
+            avatar_url: None,
+            monthly_quota_hours: 160.0,
+            is_active: true,
+            created_at: "2026-04-12T00:00:00Z".to_string(),
+            updated_at: "2026-04-12T00:00:00Z".to_string(),
+        };
+        upsert_employee(&pool, &employee_a)
+            .await
+            .expect("upsert employee a");
+        upsert_employee(&pool, &employee_b)
+            .await
+            .expect("upsert employee b");
+
+        let manual_override = IdentityMapEntry {
+            id: None,
+            source: "slack".to_string(),
+            external_id: "U_OVERRIDE_1".to_string(),
+            employee_id: Some(employee_a.id.clone()),
+            confidence: 1.0,
+            resolution_status: "linked".to_string(),
+            match_method: Some("manual.override".to_string()),
+            is_override: true,
+            override_by: Some("ops-admin".to_string()),
+            override_reason: Some("authoritative mapping".to_string()),
+            override_at: Some("2026-04-12T10:00:00Z".to_string()),
+            first_seen_at: "2026-04-12T10:00:00Z".to_string(),
+            last_seen_at: "2026-04-12T10:00:00Z".to_string(),
+            created_at: "2026-04-12T10:00:00Z".to_string(),
+            updated_at: "2026-04-12T10:00:00Z".to_string(),
+        };
+        upsert_identity_map_entry(&pool, &manual_override)
+            .await
+            .expect("insert override identity");
+
+        let heuristic_update = IdentityMapEntry {
+            id: None,
+            source: "slack".to_string(),
+            external_id: "U_OVERRIDE_1".to_string(),
+            employee_id: Some(employee_b.id.clone()),
+            confidence: 0.6,
+            resolution_status: "linked".to_string(),
+            match_method: Some("heuristic.email".to_string()),
+            is_override: false,
+            override_by: None,
+            override_reason: None,
+            override_at: None,
+            first_seen_at: "2026-04-12T11:00:00Z".to_string(),
+            last_seen_at: "2026-04-12T11:00:00Z".to_string(),
+            created_at: "2026-04-12T11:00:00Z".to_string(),
+            updated_at: "2026-04-12T11:00:00Z".to_string(),
+        };
+        upsert_identity_map_entry(&pool, &heuristic_update)
+            .await
+            .expect("apply heuristic update");
+
+        let resolved = resolve_employee_id_by_identity(&pool, "slack", "U_OVERRIDE_1")
+            .await
+            .expect("resolve identity");
+        assert_eq!(resolved.as_deref(), Some(employee_a.id.as_str()));
+
+        let row: IdentityMapEntry = sqlx::query_as(
+            "SELECT * FROM identity_map WHERE source = 'slack' AND external_id = 'U_OVERRIDE_1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("load identity row");
+        assert_eq!(row.employee_id.as_deref(), Some(employee_a.id.as_str()));
+        assert!(row.is_override);
+        assert_eq!(row.override_by.as_deref(), Some("ops-admin"));
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn agent_feed_projection_materializes_ops_events_incrementally() {
+        let dir = unique_test_dir();
+        let pool = init_db(&dir).await.expect("init db");
+
+        let employee = Employee {
+            id: "emp-feed-1".to_string(),
+            clockify_user_id: "clockify-feed-1".to_string(),
+            huly_person_id: Some("person-feed-1".to_string()),
+            name: "Feed Owner".to_string(),
+            email: "feed-owner@example.com".to_string(),
+            avatar_url: None,
+            monthly_quota_hours: 160.0,
+            is_active: true,
+            created_at: "2026-04-12T00:00:00Z".to_string(),
+            updated_at: "2026-04-12T00:00:00Z".to_string(),
+        };
+        upsert_employee(&pool, &employee)
+            .await
+            .expect("upsert feed employee");
+
+        let event = OpsEvent {
+            id: None,
+            sync_key: "ops:v1:slack:slack.message.posted:slack_message:msg_1:emp_feed_1:na:na:u_feed_1:2026_04_12t10_00_00z".to_string(),
+            schema_version: "ops_event/v1".to_string(),
+            source: "slack".to_string(),
+            event_type: "slack.message.posted".to_string(),
+            entity_type: "slack_message".to_string(),
+            entity_id: "msg_1".to_string(),
+            actor_employee_id: Some(employee.id.clone()),
+            actor_clockify_user_id: None,
+            actor_huly_person_id: None,
+            actor_slack_user_id: Some("U_FEED_1".to_string()),
+            occurred_at: "2026-04-12T10:00:00Z".to_string(),
+            severity: "info".to_string(),
+            payload_json: r#"{"channel":"C123","text":"daily update"}"#.to_string(),
+            detected_at: "2026-04-12T10:00:05Z".to_string(),
+        };
+        upsert_ops_event(&pool, &event)
+            .await
+            .expect("upsert source event");
+
+        let upserted = refresh_agent_feed_projection(&pool)
+            .await
+            .expect("refresh agent feed");
+        assert!(upserted >= 1);
+
+        let feed_rows = get_agent_feed(&pool, 10).await.expect("query agent feed");
+        assert_eq!(feed_rows.len(), 1);
+        assert_eq!(feed_rows[0].sync_key, event.sync_key);
+        assert_eq!(feed_rows[0].owner_hint.as_deref(), Some("Feed Owner"));
 
         pool.close().await;
         let _ = std::fs::remove_dir_all(dir);

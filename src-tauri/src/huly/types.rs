@@ -274,6 +274,8 @@ pub struct HulyDocument {
     pub content: Option<String>,
     pub parent: Option<String>,
     pub space: Option<String>,
+    pub created_by: Option<String>,
+    pub modified_on: Option<i64>,
     #[serde(rename = "_class")]
     pub class: Option<String>,
 }

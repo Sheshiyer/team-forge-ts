@@ -1,4 +1,5 @@
 import type { Env } from "../lib/env";
+import { requireBearerAuth } from "../lib/auth";
 import { jsonError, jsonOk } from "../lib/response";
 
 function mask(token: string): string {
@@ -16,8 +17,22 @@ function mask(token: string): string {
  *
  * Query params:
  *   ?audience=<string>  — must match TF_ACCESS_AUDIENCE (default "teamforge-desktop")
+ *
+ * Headers:
+ *   Authorization: Bearer <token> — must match TF_CREDENTIAL_ENVELOPE_KEY
  */
-export async function handleGetCredentials(env: Env, url: URL): Promise<Response> {
+export async function handleGetCredentials(
+  env: Env,
+  url: URL,
+  request: Request,
+): Promise<Response> {
+  const authFailure = requireBearerAuth(
+    request,
+    env.TF_CREDENTIAL_ENVELOPE_KEY,
+    "credentials",
+  );
+  if (authFailure) return authFailure;
+
   const audience = url.searchParams.get("audience");
   const expected = env.TF_ACCESS_AUDIENCE ?? "teamforge-desktop";
 

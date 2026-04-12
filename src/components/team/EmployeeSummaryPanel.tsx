@@ -1,6 +1,7 @@
 import type React from "react";
 import Avatar from "../ui/Avatar";
 import { lcarsPageStyles } from "../../lib/lcarsPageStyles";
+import { useViewportWidth } from "../../hooks/useViewportWidth";
 import type { Employee, EmployeeSummaryView } from "../../lib/types";
 
 type EmployeeSummaryPanelProps = {
@@ -78,9 +79,52 @@ export default function EmployeeSummaryPanel({
   loading,
   error,
 }: EmployeeSummaryPanelProps) {
+  const viewportWidth = useViewportWidth();
+  const isNarrowLayout = viewportWidth < 940;
+  const isMobileLayout = viewportWidth < 760;
+
+  const headerRowStyle = {
+    ...styles.headerRow,
+    flexDirection: isMobileLayout ? "column" : styles.headerRow.flexDirection,
+    alignItems: isMobileLayout ? "stretch" : styles.headerRow.alignItems,
+  };
+  const selectorWrapStyle = {
+    ...styles.selectorWrap,
+    minWidth: isMobileLayout ? 0 : styles.selectorWrap.minWidth,
+    flex: isMobileLayout ? "1 1 auto" : styles.selectorWrap.flex,
+  };
+  const identityCardStyle = {
+    ...styles.identityCard,
+    flexDirection: isNarrowLayout ? "column" : styles.identityCard.flexDirection,
+    alignItems: isNarrowLayout ? "stretch" : styles.identityCard.alignItems,
+  };
+  const identityAsideStyle = {
+    ...styles.identityAside,
+    minWidth: isNarrowLayout ? 0 : styles.identityAside.minWidth,
+    textAlign: isNarrowLayout ? "left" : styles.identityAside.textAlign,
+  };
+  const metricsGridStyle = {
+    ...styles.metricsGrid,
+    gridTemplateColumns: isMobileLayout
+      ? "1fr"
+      : (styles.metricsGrid.gridTemplateColumns as string),
+  };
+  const detailGridStyle = {
+    ...styles.detailGrid,
+    gridTemplateColumns: isMobileLayout
+      ? "1fr"
+      : (styles.detailGrid.gridTemplateColumns as string),
+  };
+  const detailRowStyle = {
+    ...styles.detailRow,
+    flexDirection: isMobileLayout ? "column" : styles.detailRow.flexDirection,
+    alignItems: isMobileLayout ? "flex-start" : styles.detailRow.alignItems,
+    gap: isMobileLayout ? 4 : styles.detailRow.gap,
+  };
+
   return (
     <div style={styles.card}>
-      <div style={styles.headerRow}>
+      <div style={headerRowStyle}>
         <div>
           <h2 style={styles.sectionTitle}>EMPLOYEE OPERATIONS SUMMARY</h2>
           <p style={styles.helperText}>
@@ -88,7 +132,7 @@ export default function EmployeeSummaryPanel({
             member.
           </p>
         </div>
-        <div style={styles.selectorWrap}>
+        <div style={selectorWrapStyle}>
           <label style={styles.selectorLabel}>Crew Member</label>
           <select
             value={selectedEmployeeId}
@@ -115,7 +159,7 @@ export default function EmployeeSummaryPanel({
 
       {!error && !loading && summary ? (
         <>
-          <div style={styles.identityCard}>
+          <div style={identityCardStyle}>
             <div style={styles.identityRow}>
               <Avatar
                 name={summary.employee.name}
@@ -144,7 +188,7 @@ export default function EmployeeSummaryPanel({
                 </div>
               </div>
             </div>
-            <div style={styles.identityAside}>
+            <div style={identityAsideStyle}>
               <div style={styles.metricLabel}>MONTHLY QUOTA</div>
               <div style={styles.metricValue}>
                 {summary.employee.monthlyQuotaHours.toFixed(0)}H
@@ -152,7 +196,7 @@ export default function EmployeeSummaryPanel({
             </div>
           </div>
 
-          <div style={styles.metricsGrid}>
+          <div style={metricsGridStyle}>
             <MetricTile
               label="WORK THIS WEEK"
               value={`${summary.workHoursThisWeek.toFixed(1)}H`}
@@ -192,14 +236,14 @@ export default function EmployeeSummaryPanel({
             />
           </div>
 
-          <div style={styles.detailGrid}>
+          <div style={detailGridStyle}>
             <DetailList
               title="Current Leave"
               emptyLabel="NO ACTIVE LEAVE"
             >
               {summary.currentLeave ? (
                 <div style={styles.detailList}>
-                  <div style={styles.detailRow}>
+                  <div style={detailRowStyle}>
                     <span style={styles.detailPrimary}>
                       {summary.currentLeave.leaveType.toUpperCase()}
                     </span>
@@ -226,7 +270,7 @@ export default function EmployeeSummaryPanel({
                 <div style={styles.detailList}>
                   {summary.upcomingLeaves.map((leave) => (
                     <div key={leave.id} style={styles.listItem}>
-                      <div style={styles.detailRow}>
+                      <div style={detailRowStyle}>
                         <span style={styles.detailPrimary}>
                           {leave.leaveType.toUpperCase()}
                         </span>
@@ -249,7 +293,7 @@ export default function EmployeeSummaryPanel({
                 <div style={styles.detailList}>
                   {summary.upcomingEvents.map((event) => (
                     <div key={event.id} style={styles.listItem}>
-                      <div style={styles.detailRow}>
+                      <div style={detailRowStyle}>
                         <span style={styles.detailPrimary}>
                           {event.title.toUpperCase()}
                         </span>

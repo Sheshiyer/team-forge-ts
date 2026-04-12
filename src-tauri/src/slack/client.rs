@@ -7,6 +7,14 @@ use super::types::{
 
 const BASE_URL: &str = "https://slack.com/api";
 const PAGE_SIZE: usize = 200;
+const MAX_RATE_LIMIT_RETRIES: u8 = 5;
+const MAX_SERVER_RETRIES: u8 = 3;
+
+#[derive(Debug, Clone)]
+pub struct SlackHistoryPage {
+    pub messages: Vec<SlackMessage>,
+    pub next_cursor: Option<String>,
+}
 
 pub struct SlackClient {
     http: reqwest::Client,
@@ -32,14 +40,54 @@ impl SlackClient {
         T: DeserializeOwned,
     {
         let url = format!("{}/{}", self.base_url, method);
-        let response = self
-            .http
-            .get(url)
-            .bearer_auth(&self.bot_token)
-            .query(query)
-            .send()
-            .await
-            .map_err(|e| format!("Slack request failed for {method}: {e}"))?;
+        let mut rate_limit_retries = 0u8;
+        let mut server_retries = 0u8;
+
+        let response = loop {
+            let response = self
+                .http
+                .get(&url)
+                .bearer_auth(&self.bot_token)
+                .query(query)
+                .send()
+                .await
+                .map_err(|e| format!("Slack request failed for {method}: {e}"))?;
+
+            if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                if rate_limit_retries >= MAX_RATE_LIMIT_RETRIES {
+                    return Err(format!(
+                        "Slack API rate limited {method} after {MAX_RATE_LIMIT_RETRIES} retries"
+                    ));
+                }
+                let wait_seconds = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .filter(|value| *value > 0)
+                    .unwrap_or(1);
+                rate_limit_retries += 1;
+                tokio::time::sleep(std::time::Duration::from_secs(wait_seconds)).await;
+                continue;
+            }
+
+            if response.status().is_server_error() {
+                if server_retries >= MAX_SERVER_RETRIES {
+                    return Err(format!(
+                        "Slack API server error {} for {} after {} retries",
+                        response.status(),
+                        method,
+                        MAX_SERVER_RETRIES
+                    ));
+                }
+                let backoff_seconds = 1u64 << server_retries;
+                server_retries += 1;
+                tokio::time::sleep(std::time::Duration::from_secs(backoff_seconds)).await;
+                continue;
+            }
+
+            break response;
+        };
 
         if !response.status().is_success() {
             return Err(format!(
@@ -182,25 +230,11 @@ impl SlackClient {
         let mut cursor: Option<String> = None;
 
         loop {
-            let mut query = vec![
-                ("channel", channel_id.to_string()),
-                ("limit", PAGE_SIZE.to_string()),
-                ("oldest", oldest_ts.to_string()),
-                ("inclusive", "true".to_string()),
-            ];
-            if let Some(current_cursor) = cursor.clone() {
-                query.push(("cursor", current_cursor));
-            }
-
-            let envelope = self
-                .get::<SlackHistoryData>("conversations.history", &query)
+            let page = self
+                .get_channel_messages_page(channel_id, oldest_ts, cursor.as_deref())
                 .await?;
-            messages.extend(envelope.data.messages);
-
-            cursor = envelope
-                .response_metadata
-                .and_then(|metadata| metadata.next_cursor)
-                .filter(|value| !value.is_empty());
+            messages.extend(page.messages);
+            cursor = page.next_cursor;
 
             if cursor.is_none() {
                 break;
@@ -208,5 +242,38 @@ impl SlackClient {
         }
 
         Ok(messages)
+    }
+
+    pub async fn get_channel_messages_page(
+        &self,
+        channel_id: &str,
+        oldest_ts: &str,
+        cursor: Option<&str>,
+    ) -> Result<SlackHistoryPage, String> {
+        let mut query = vec![
+            ("channel", channel_id.to_string()),
+            ("limit", PAGE_SIZE.to_string()),
+            ("oldest", oldest_ts.to_string()),
+            ("inclusive", "true".to_string()),
+        ];
+        if let Some(current_cursor) = cursor
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+        {
+            query.push(("cursor", current_cursor));
+        }
+
+        let envelope = self
+            .get::<SlackHistoryData>("conversations.history", &query)
+            .await?;
+        let next_cursor = envelope
+            .response_metadata
+            .and_then(|metadata| metadata.next_cursor)
+            .filter(|value| !value.is_empty());
+        Ok(SlackHistoryPage {
+            messages: envelope.data.messages,
+            next_cursor,
+        })
     }
 }

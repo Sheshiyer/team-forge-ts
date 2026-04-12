@@ -16,12 +16,12 @@ use crate::huly::client::HulyClient;
 use crate::huly::sync::HulySyncEngine;
 use crate::huly::types::{
     HulyAccountInfo, HulyBoard, HulyBoardCard, HulyCalendarEvent, HulyChannel, HulyDepartment,
-    HulyDocument, HulyEmployee, HulyHoliday, HulyIssue, HulyLeaveRequest, HulyPerson,
-    HulyProject, HulyWorkspaceNormalizationAction, HulyWorkspaceNormalizationReport,
+    HulyDocument, HulyEmployee, HulyHoliday, HulyIssue, HulyLeaveRequest, HulyPerson, HulyProject,
+    HulyWorkspaceNormalizationAction, HulyWorkspaceNormalizationReport,
     HulyWorkspaceNormalizationSnapshot,
 };
 use crate::slack::client::SlackClient;
-use crate::slack::types::{SlackConversation, SlackUser};
+use crate::slack::types::{SlackConversation, SlackMessage, SlackUser};
 use crate::sync::scheduler::SyncScheduler;
 use crate::{DbPool, SchedulerState};
 
@@ -136,6 +136,49 @@ fn humanize_slack_connection_error(error: String) -> String {
     error
 }
 
+fn machine_error(code: &str, message: &str) -> String {
+    json!({
+        "code": code,
+        "message": message,
+    })
+    .to_string()
+}
+
+fn parse_agent_feed_cursor(value: &str) -> Result<(String, String), String> {
+    let trimmed = value.trim();
+    let mut segments = trimmed.splitn(2, '|');
+    let detected_at = segments.next().unwrap_or_default().trim();
+    let sync_key = segments.next().unwrap_or_default().trim();
+    if detected_at.is_empty() || sync_key.is_empty() {
+        return Err("Cursor must be encoded as '<detected_at_rfc3339>|<sync_key>'".to_string());
+    }
+    Ok((detected_at.to_string(), sync_key.to_string()))
+}
+
+fn parse_sync_timestamp_utc(value: &str) -> Option<chrono::DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+        .ok()
+        .or_else(|| {
+            chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
+                .ok()
+                .map(|value| value.and_utc())
+        })
+        .or_else(|| {
+            chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|value| value.and_utc())
+        })
+}
+
+fn lag_seconds_from_sync_timestamp(
+    last_sync_at: Option<&str>,
+    now: chrono::DateTime<Utc>,
+) -> Option<i64> {
+    let timestamp = last_sync_at.and_then(parse_sync_timestamp_utc)?;
+    Some((now - timestamp).num_seconds().max(0))
+}
+
 fn normalize_person_key(value: &str) -> String {
     value
         .chars()
@@ -157,6 +200,183 @@ fn person_token_signature(value: &str) -> String {
 fn slack_ts_to_millis(ts: &str) -> Option<i64> {
     let seconds = ts.split('.').next()?.parse::<i64>().ok()?;
     Some(seconds.saturating_mul(1000))
+}
+
+fn slack_message_key(channel_id: &str, ts: &str) -> String {
+    format!("slack:{}:{}", channel_id.trim(), ts.trim())
+}
+
+fn slack_content_preview(text: Option<&str>) -> Option<String> {
+    text.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(280).collect())
+}
+
+async fn persist_slack_message_activity(
+    pool: &sqlx::SqlitePool,
+    channel_id: &str,
+    slack_user_id: Option<&str>,
+    employee_id: Option<&str>,
+    message: &SlackMessage,
+) -> Result<(), String> {
+    let activity = SlackMessageActivity {
+        id: None,
+        message_key: slack_message_key(channel_id, &message.ts),
+        slack_channel_id: channel_id.to_string(),
+        slack_user_id: slack_user_id.map(|value| value.to_string()),
+        employee_id: employee_id.map(|value| value.to_string()),
+        message_ts: message.ts.clone(),
+        message_ts_ms: slack_ts_to_millis(&message.ts),
+        content_preview: slack_content_preview(message.text.as_deref()),
+        detected_at: Utc::now().to_rfc3339(),
+    };
+
+    queries::upsert_slack_message_activity(pool, &activity)
+        .await
+        .map_err(|e| format!("persist slack message activity: {e}"))
+}
+
+async fn upsert_slack_identity_map_entry(
+    pool: &sqlx::SqlitePool,
+    slack_user_id: &str,
+    employee_id: Option<&str>,
+    confidence: f64,
+    resolution_status: &str,
+    match_method: &str,
+) -> Result<(), String> {
+    let now = Utc::now().to_rfc3339();
+    let entry = IdentityMapEntry {
+        id: None,
+        source: "slack".to_string(),
+        external_id: slack_user_id.to_string(),
+        employee_id: employee_id.map(|value| value.to_string()),
+        confidence,
+        resolution_status: resolution_status.to_string(),
+        match_method: Some(match_method.to_string()),
+        is_override: false,
+        override_by: None,
+        override_reason: None,
+        override_at: None,
+        first_seen_at: now.clone(),
+        last_seen_at: now.clone(),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    queries::upsert_identity_map_entry(pool, &entry)
+        .await
+        .map_err(|e| format!("upsert slack identity map entry: {e}"))
+}
+
+async fn resolve_slack_user_employee_ids(
+    pool: &sqlx::SqlitePool,
+    employees: &[Employee],
+    users: &[SlackUser],
+) -> Result<HashMap<String, String>, String> {
+    queries::seed_identity_map_from_employees(pool)
+        .await
+        .map_err(|e| format!("seed identity map from employees: {e}"))?;
+
+    let active_employees: Vec<&Employee> = employees
+        .iter()
+        .filter(|employee| employee.is_active)
+        .collect();
+    let employee_by_email: HashMap<String, String> = active_employees
+        .iter()
+        .map(|employee| (normalize_email(&employee.email), employee.id.clone()))
+        .collect();
+    let mut employee_name_aliases: HashMap<String, String> = HashMap::new();
+    for employee in &active_employees {
+        for alias in [
+            normalize_person_key(&employee.name),
+            person_token_signature(&employee.name),
+        ] {
+            if !alias.is_empty() {
+                employee_name_aliases.insert(alias, employee.id.clone());
+            }
+        }
+    }
+
+    let mut mapping = HashMap::new();
+    for user in users.iter().filter(|user| !user.deleted && !user.is_bot) {
+        if let Some(employee_id) = queries::resolve_employee_id_by_identity(pool, "slack", &user.id)
+            .await
+            .map_err(|e| format!("resolve slack identity {}: {e}", user.id))?
+        {
+            mapping.insert(user.id.clone(), employee_id.clone());
+            if let Err(error) = upsert_slack_identity_map_entry(
+                pool,
+                &user.id,
+                Some(employee_id.as_str()),
+                1.0,
+                "linked",
+                "identity_map.existing",
+            )
+            .await
+            {
+                eprintln!("[commands] warning: {error}");
+            }
+            continue;
+        }
+
+        let mut heuristic_match: Option<(String, &'static str, f64)> = None;
+        if let Some(email) = user
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.email.as_ref())
+            .map(|value| normalize_email(value))
+        {
+            if let Some(employee_id) = employee_by_email.get(&email) {
+                heuristic_match = Some((employee_id.clone(), "heuristic.email", 0.98));
+            }
+        }
+        if heuristic_match.is_none() {
+            'outer: for display_name in slack_user_display_names(user) {
+                for alias in [
+                    normalize_person_key(&display_name),
+                    person_token_signature(&display_name),
+                ] {
+                    if let Some(employee_id) = employee_name_aliases.get(&alias) {
+                        heuristic_match = Some((employee_id.clone(), "heuristic.name_alias", 0.75));
+                        break 'outer;
+                    }
+                }
+            }
+        }
+
+        match heuristic_match {
+            Some((employee_id, match_method, confidence)) => {
+                mapping.insert(user.id.clone(), employee_id.clone());
+                if let Err(error) = upsert_slack_identity_map_entry(
+                    pool,
+                    &user.id,
+                    Some(employee_id.as_str()),
+                    confidence,
+                    "linked",
+                    match_method,
+                )
+                .await
+                {
+                    eprintln!("[commands] warning: {error}");
+                }
+            }
+            None => {
+                if let Err(error) = upsert_slack_identity_map_entry(
+                    pool,
+                    &user.id,
+                    None,
+                    0.0,
+                    "orphaned",
+                    "commands.unmatched",
+                )
+                .await
+                {
+                    eprintln!("[commands] warning: {error}");
+                }
+            }
+        }
+    }
+
+    Ok(mapping)
 }
 
 async fn load_ignored_clockify_emails(pool: &sqlx::SqlitePool) -> Result<HashSet<String>, String> {
@@ -373,7 +593,11 @@ fn employee_matches_calendar_event(event: &HulyCalendarEvent, person_id: &str) -
         || event
             .participants
             .as_ref()
-            .map(|participants| participants.iter().any(|participant| participant == person_id))
+            .map(|participants| {
+                participants
+                    .iter()
+                    .any(|participant| participant == person_id)
+            })
             .unwrap_or(false)
 }
 
@@ -669,6 +893,7 @@ pub async fn get_project_breakdown(
 
     #[derive(sqlx::FromRow)]
     struct Row {
+        project_id: Option<String>,
         project_name: String,
         total_seconds: f64,
         billable_seconds: f64,
@@ -677,6 +902,7 @@ pub async fn get_project_breakdown(
 
     let rows: Vec<Row> = sqlx::query_as(
         "SELECT
+            te.project_id AS project_id,
             COALESCE(p.name, 'No Project') AS project_name,
             COALESCE(SUM(te.duration_seconds), 0) AS total_seconds,
             COALESCE(SUM(CASE WHEN te.is_billable = 1 THEN te.duration_seconds ELSE 0 END), 0) AS billable_seconds,
@@ -705,6 +931,7 @@ pub async fn get_project_breakdown(
                 0.0
             };
             ProjectStats {
+                project_id: r.project_id,
                 project_name: r.project_name,
                 total_hours,
                 billable_hours,
@@ -713,6 +940,30 @@ pub async fn get_project_breakdown(
             }
         })
         .collect())
+}
+
+#[tauri::command]
+pub async fn get_projects_catalog(
+    db: State<'_, DbPool>,
+) -> Result<Vec<ProjectCatalogItem>, String> {
+    let pool = &db.0;
+    let projects = queries::get_projects(pool)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    let mut rows: Vec<ProjectCatalogItem> = projects
+        .into_iter()
+        .map(|project| ProjectCatalogItem {
+            id: project.id,
+            name: project.name,
+            client_name: project.client_name,
+            is_billable: project.is_billable,
+            is_archived: project.is_archived,
+        })
+        .collect();
+
+    rows.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    Ok(rows)
 }
 
 // ─── Timesheet ──────────────────────────────────────────────────
@@ -913,6 +1164,236 @@ pub async fn get_sync_status(db: State<'_, DbPool>) -> Result<Vec<SyncState>, St
             .await
             .map_err(|e| format!("db error: {e}"))?;
     Ok(states)
+}
+
+#[tauri::command]
+pub async fn get_identity_review_queue(
+    db: State<'_, DbPool>,
+    max_confidence: Option<f64>,
+) -> Result<Vec<IdentityMapEntry>, String> {
+    let threshold = max_confidence.unwrap_or(0.85).clamp(0.0, 1.0);
+    queries::get_identity_review_queue(&db.0, threshold)
+        .await
+        .map_err(|e| format!("db error: {e}"))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityOverrideInput {
+    pub source: String,
+    pub external_id: String,
+    pub employee_id: String,
+    pub operator: String,
+    pub reason: String,
+}
+
+#[tauri::command]
+pub async fn set_identity_override(
+    db: State<'_, DbPool>,
+    input: IdentityOverrideInput,
+) -> Result<String, String> {
+    let pool = &db.0;
+    let source = sanitize_required_text("Identity source", &input.source)?.to_lowercase();
+    let external_id = sanitize_required_text("External identity id", &input.external_id)?;
+    let employee_id = sanitize_required_text("Employee id", &input.employee_id)?;
+    let operator = sanitize_required_text("Override operator", &input.operator)?;
+    let reason = sanitize_required_text("Override reason", &input.reason)?;
+
+    queries::get_employee_by_id(pool, &employee_id)
+        .await
+        .map_err(|e| format!("db error: {e}"))?
+        .ok_or_else(|| format!("Unknown employee id: {employee_id}"))?;
+
+    queries::clear_competing_identity_links(pool, &source, &employee_id, &external_id)
+        .await
+        .map_err(|e| format!("clear competing identity links: {e}"))?;
+
+    let now = Utc::now().to_rfc3339();
+    let entry = IdentityMapEntry {
+        id: None,
+        source: source.clone(),
+        external_id: external_id.clone(),
+        employee_id: Some(employee_id.clone()),
+        confidence: 1.0,
+        resolution_status: "linked".to_string(),
+        match_method: Some("manual.override".to_string()),
+        is_override: true,
+        override_by: Some(operator),
+        override_reason: Some(reason),
+        override_at: Some(now.clone()),
+        first_seen_at: now.clone(),
+        last_seen_at: now.clone(),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    queries::upsert_identity_map_entry(pool, &entry)
+        .await
+        .map_err(|e| format!("persist identity override: {e}"))?;
+
+    Ok(format!(
+        "Identity override set: source={} external_id={} → employee_id={}",
+        source, external_id, employee_id
+    ))
+}
+
+#[tauri::command]
+pub async fn refresh_agent_feed(db: State<'_, DbPool>) -> Result<String, String> {
+    let upserted = queries::refresh_agent_feed_projection(&db.0)
+        .await
+        .map_err(|e| format!("refresh agent feed projection: {e}"))?;
+    Ok(format!("Agent feed refreshed ({upserted} upserts)"))
+}
+
+#[tauri::command]
+pub async fn get_agent_feed(
+    db: State<'_, DbPool>,
+    limit: Option<u32>,
+) -> Result<Vec<AgentFeedItem>, String> {
+    let row_limit = limit.unwrap_or(500).clamp(1, 5_000) as i64;
+    queries::get_agent_feed(&db.0, row_limit)
+        .await
+        .map_err(|e| format!("query agent feed: {e}"))
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFeedExportRequest {
+    pub since_cursor: Option<String>,
+    pub since_timestamp: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFeedSourceLag {
+    pub source: String,
+    pub entity: String,
+    pub last_sync_at: Option<String>,
+    pub lag_seconds: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFeedLagMetadata {
+    pub projection_lag_seconds: Option<i64>,
+    pub max_source_lag_seconds: Option<i64>,
+    pub sources: Vec<AgentFeedSourceLag>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFeedExportResponse {
+    pub schema_version: String,
+    pub generated_at: String,
+    pub since_cursor: Option<String>,
+    pub since_timestamp: Option<String>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub lag: AgentFeedLagMetadata,
+    pub items: Vec<AgentFeedItem>,
+}
+
+#[tauri::command]
+pub async fn export_agent_feed_snapshot(
+    db: State<'_, DbPool>,
+    request: Option<AgentFeedExportRequest>,
+) -> Result<AgentFeedExportResponse, String> {
+    let pool = &db.0;
+    let request = request.unwrap_or_default();
+    let row_limit = request.limit.unwrap_or(500).clamp(1, 5_000) as usize;
+    let fetch_limit = (row_limit + 1) as i64;
+
+    let parsed_cursor = match request
+        .since_cursor
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(cursor) => Some(
+            parse_agent_feed_cursor(cursor)
+                .map_err(|message| machine_error("invalid_cursor", &message))?,
+        ),
+        None => None,
+    };
+
+    let since_timestamp = request
+        .since_timestamp
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+    if let Some(value) = since_timestamp.as_deref() {
+        if parse_sync_timestamp_utc(value).is_none() {
+            return Err(machine_error(
+                "invalid_since_timestamp",
+                "sinceTimestamp must be RFC3339 or ISO datetime format",
+            ));
+        }
+    }
+
+    let mut items = queries::get_agent_feed_export_rows(
+        pool,
+        since_timestamp.as_deref(),
+        parsed_cursor
+            .as_ref()
+            .map(|(detected_at, sync_key)| (detected_at.as_str(), sync_key.as_str())),
+        fetch_limit,
+    )
+    .await
+    .map_err(|e| machine_error("query_failed", &format!("query agent feed export: {e}")))?;
+
+    let has_more = items.len() > row_limit;
+    if has_more {
+        items.truncate(row_limit);
+    }
+    let next_cursor = items
+        .last()
+        .map(|row| format!("{}|{}", row.detected_at, row.sync_key));
+
+    let now = Utc::now();
+    let mut source_lag = Vec::new();
+    for (source, entity) in [
+        ("clockify", "time_entries"),
+        ("huly", "issues"),
+        ("slack", "messages_delta"),
+        ("agent_feed", "projection"),
+    ] {
+        let state = queries::get_sync_state(pool, source, entity)
+            .await
+            .map_err(|e| machine_error("lag_metadata_failed", &format!("load sync state: {e}")))?;
+        let last_sync_at = state.as_ref().map(|value| value.last_sync_at.clone());
+        source_lag.push(AgentFeedSourceLag {
+            source: source.to_string(),
+            entity: entity.to_string(),
+            lag_seconds: lag_seconds_from_sync_timestamp(last_sync_at.as_deref(), now),
+            last_sync_at,
+        });
+    }
+
+    let projection_lag_seconds = source_lag
+        .iter()
+        .find(|entry| entry.source == "agent_feed" && entry.entity == "projection")
+        .and_then(|entry| entry.lag_seconds);
+    let max_source_lag_seconds = source_lag
+        .iter()
+        .filter(|entry| entry.source != "agent_feed")
+        .filter_map(|entry| entry.lag_seconds)
+        .max();
+
+    Ok(AgentFeedExportResponse {
+        schema_version: "agent_feed/v1".to_string(),
+        generated_at: now.to_rfc3339(),
+        since_cursor: request.since_cursor,
+        since_timestamp,
+        next_cursor,
+        has_more,
+        lag: AgentFeedLagMetadata {
+            projection_lag_seconds,
+            max_source_lag_seconds,
+            sources: source_lag,
+        },
+        items,
+    })
 }
 
 // ─── Huly connection commands ──────────────────────────────────
@@ -3465,23 +3946,11 @@ pub async fn get_chat_activity(db: State<'_, DbPool>) -> Result<Vec<ChatActivity
         })
         .collect();
 
-    let employee_name_by_email: HashMap<String, String> = employees
+    let employee_name_by_id: HashMap<String, String> = employees
         .iter()
         .filter(|employee| employee.is_active)
-        .map(|employee| (normalize_email(&employee.email), employee.name.clone()))
+        .map(|employee| (employee.id.clone(), employee.name.clone()))
         .collect();
-
-    let mut employee_name_aliases: HashMap<String, String> = HashMap::new();
-    for employee in employees.iter().filter(|employee| employee.is_active) {
-        for alias in [
-            normalize_person_key(&employee.name),
-            person_token_signature(&employee.name),
-        ] {
-            if !alias.is_empty() {
-                employee_name_aliases.insert(alias, employee.name.clone());
-            }
-        }
-    }
 
     let mut per_user: HashMap<String, ChatActivityAccum> = HashMap::new();
 
@@ -3516,7 +3985,9 @@ pub async fn get_chat_activity(db: State<'_, DbPool>) -> Result<Vec<ChatActivity
         }
     }
 
+    let mut slack_live_synced = false;
     if let Some(client) = get_optional_slack_client(pool).await? {
+        slack_live_synced = true;
         let channel_filters = queries::get_setting(pool, "slack_channel_filters")
             .await
             .map_err(|e| format!("read slack_channel_filters: {e}"))?
@@ -3527,36 +3998,8 @@ pub async fn get_chat_activity(db: State<'_, DbPool>) -> Result<Vec<ChatActivity
             &channel_filters,
         );
         let users = client.list_users().await.unwrap_or_default();
-
-        let slack_user_to_employee: HashMap<String, String> = users
-            .iter()
-            .filter(|user| !user.deleted && !user.is_bot)
-            .filter_map(|user| {
-                if let Some(email) = user
-                    .profile
-                    .as_ref()
-                    .and_then(|profile| profile.email.as_ref())
-                    .map(|email| normalize_email(email))
-                {
-                    if let Some(employee_name) = employee_name_by_email.get(&email) {
-                        return Some((user.id.clone(), employee_name.clone()));
-                    }
-                }
-
-                for display_name in slack_user_display_names(user) {
-                    for alias in [
-                        normalize_person_key(&display_name),
-                        person_token_signature(&display_name),
-                    ] {
-                        if let Some(employee_name) = employee_name_aliases.get(&alias) {
-                            return Some((user.id.clone(), employee_name.clone()));
-                        }
-                    }
-                }
-
-                None
-            })
-            .collect();
+        let slack_user_to_employee_id =
+            resolve_slack_user_employee_ids(pool, &employees, &users).await?;
 
         let oldest_ts = format!(
             "{}.000000",
@@ -3578,10 +4021,27 @@ pub async fn get_chat_activity(db: State<'_, DbPool>) -> Result<Vec<ChatActivity
                     continue;
                 }
 
-                let Some(slack_user_id) = message.user.as_ref() else {
-                    continue;
-                };
-                let Some(employee_name) = slack_user_to_employee.get(slack_user_id) else {
+                let slack_user_id = message.user.as_deref();
+                let mapped_employee_id = slack_user_id
+                    .and_then(|id| slack_user_to_employee_id.get(id))
+                    .cloned();
+                let mapped_employee_name = mapped_employee_id
+                    .as_ref()
+                    .and_then(|id| employee_name_by_id.get(id));
+
+                if let Err(error) = persist_slack_message_activity(
+                    pool,
+                    &channel_id,
+                    slack_user_id,
+                    mapped_employee_id.as_deref(),
+                    &message,
+                )
+                .await
+                {
+                    eprintln!("[commands] warning: {error}");
+                }
+
+                let Some(employee_name) = mapped_employee_name else {
                     continue;
                 };
 
@@ -3590,6 +4050,33 @@ pub async fn get_chat_activity(db: State<'_, DbPool>) -> Result<Vec<ChatActivity
                     employee_name,
                     channel_id.clone(),
                     slack_ts_to_millis(&message.ts),
+                    "Slack",
+                );
+            }
+        }
+    }
+
+    if !slack_live_synced {
+        let seven_days_ago_ms = Utc::now()
+            .checked_sub_signed(chrono::Duration::days(7))
+            .unwrap_or_else(Utc::now)
+            .timestamp_millis();
+        if let Ok(persisted_rows) =
+            queries::get_slack_message_activity_since(pool, seven_days_ago_ms).await
+        {
+            for row in persisted_rows {
+                let Some(employee_id) = row.employee_id.as_ref() else {
+                    continue;
+                };
+                let Some(employee_name) = employee_name_by_id.get(employee_id) else {
+                    continue;
+                };
+
+                add_chat_activity(
+                    &mut per_user,
+                    employee_name,
+                    row.slack_channel_id.clone(),
+                    row.message_ts_ms,
                     "Slack",
                 );
             }
@@ -3838,6 +4325,9 @@ pub async fn get_employee_summary(
             employee.name
         ));
     }
+    let employees = queries::get_employees(pool)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
 
     let snapshot = build_team_snapshot_from_cache(pool, None).await?;
     let today = Local::now().date_naive();
@@ -3858,9 +4348,10 @@ pub async fn get_employee_summary(
 
     let mut department_names = Vec::new();
     let mut role_labels = Vec::new();
-    if let (Some(org_chart), Some(person_id)) =
-        (snapshot.org_chart.as_ref(), employee.huly_person_id.as_ref())
-    {
+    if let (Some(org_chart), Some(person_id)) = (
+        snapshot.org_chart.as_ref(),
+        employee.huly_person_id.as_ref(),
+    ) {
         for department in &org_chart.departments {
             if department
                 .member_person_ids
@@ -3952,7 +4443,8 @@ pub async fn get_employee_summary(
                 messages_last_7_days += 1;
                 if let Some(timestamp_ms) = message.created_on.or(message.modified_on) {
                     last_message_at_ms = Some(
-                        last_message_at_ms.map_or(timestamp_ms, |current| current.max(timestamp_ms)),
+                        last_message_at_ms
+                            .map_or(timestamp_ms, |current| current.max(timestamp_ms)),
                     );
                     if message
                         .attached_to
@@ -4025,37 +4517,26 @@ pub async fn get_employee_summary(
             .map(|channel| channel.id.clone())
             .collect();
         let users = client.list_users().await.unwrap_or_default();
-
-        let employee_email = normalize_email(&employee.email);
-        let employee_aliases: HashSet<String> = [
-            normalize_person_key(&employee.name),
-            person_token_signature(&employee.name),
-        ]
-        .into_iter()
-        .filter(|alias| !alias.is_empty())
-        .collect();
-
-        let slack_user_ids: HashSet<String> = users
-            .into_iter()
-            .filter(|user| !user.deleted && !user.is_bot)
-            .filter(|user| {
-                if user
-                    .profile
-                    .as_ref()
-                    .and_then(|profile| profile.email.as_ref())
-                    .map(|email| normalize_email(email) == employee_email)
-                    .unwrap_or(false)
-                {
-                    return true;
-                }
-
-                slack_user_display_names(user).iter().any(|name| {
-                    employee_aliases.contains(&normalize_person_key(name))
-                        || employee_aliases.contains(&person_token_signature(name))
+        let mut slack_user_ids: HashSet<String> =
+            queries::get_identity_external_ids_for_employee(pool, "slack", &employee.id)
+                .await
+                .map_err(|e| format!("load slack identity ids: {e}"))?
+                .into_iter()
+                .collect();
+        if slack_user_ids.is_empty() {
+            let slack_user_to_employee_id =
+                resolve_slack_user_employee_ids(pool, &employees, &users).await?;
+            slack_user_ids = slack_user_to_employee_id
+                .iter()
+                .filter_map(|(user_id, employee_id)| {
+                    if employee_id == &employee.id {
+                        Some(user_id.clone())
+                    } else {
+                        None
+                    }
                 })
-            })
-            .map(|user| user.id)
-            .collect();
+                .collect();
+        }
 
         if !slack_user_ids.is_empty() {
             let oldest_ts = format!(
@@ -4073,23 +4554,35 @@ pub async fn get_employee_summary(
                     .await
                     .unwrap_or_default()
                 {
-                    if message.bot_id.is_some()
-                        || message.subtype.as_deref() == Some("bot_message")
+                    if message.bot_id.is_some() || message.subtype.as_deref() == Some("bot_message")
                     {
                         continue;
                     }
 
-                    let Some(slack_user_id) = message.user.as_ref() else {
-                        continue;
-                    };
-                    if !slack_user_ids.contains(slack_user_id) {
+                    let slack_user_id = message.user.as_deref();
+                    let mapped_employee_id = slack_user_id
+                        .filter(|user_id| slack_user_ids.contains(*user_id))
+                        .map(|_| employee.id.clone());
+                    if let Err(error) = persist_slack_message_activity(
+                        pool,
+                        &channel.id,
+                        slack_user_id,
+                        mapped_employee_id.as_deref(),
+                        &message,
+                    )
+                    .await
+                    {
+                        eprintln!("[commands] warning: {error}");
+                    }
+                    if mapped_employee_id.is_none() {
                         continue;
                     }
 
                     messages_last_7_days += 1;
                     if let Some(timestamp_ms) = slack_ts_to_millis(&message.ts) {
                         last_message_at_ms = Some(
-                            last_message_at_ms.map_or(timestamp_ms, |current| current.max(timestamp_ms)),
+                            last_message_at_ms
+                                .map_or(timestamp_ms, |current| current.max(timestamp_ms)),
                         );
                         if is_standup_channel {
                             standups_last_7_days += 1;
@@ -4127,7 +4620,9 @@ pub async fn get_employee_summary(
 
 // ─── Naming convention (#13) ──────────────────────────────────
 
-use crate::huly::naming::{compute_compliance_stats, parse_task_name, NamingComplianceStats, ParsedTaskName};
+use crate::huly::naming::{
+    compute_compliance_stats, parse_task_name, NamingComplianceStats, ParsedTaskName,
+};
 
 #[tauri::command]
 pub async fn get_naming_compliance(db: State<'_, DbPool>) -> Result<NamingComplianceStats, String> {
@@ -4138,16 +4633,15 @@ pub async fn get_naming_compliance(db: State<'_, DbPool>) -> Result<NamingCompli
     };
 
     let issues = client.get_issues(None).await.unwrap_or_default();
-    let titles: Vec<String> = issues
-        .iter()
-        .filter_map(|i| i.title.clone())
-        .collect();
+    let titles: Vec<String> = issues.iter().filter_map(|i| i.title.clone()).collect();
 
     Ok(compute_compliance_stats(&titles))
 }
 
 #[tauri::command]
-pub async fn get_issues_with_naming(db: State<'_, DbPool>) -> Result<Vec<serde_json::Value>, String> {
+pub async fn get_issues_with_naming(
+    db: State<'_, DbPool>,
+) -> Result<Vec<serde_json::Value>, String> {
     let pool = &db.0;
     let client = match get_huly_client(pool).await {
         Ok(c) => c,
@@ -4162,7 +4656,11 @@ pub async fn get_issues_with_naming(db: State<'_, DbPool>) -> Result<Vec<serde_j
     let emp_map: HashMap<String, String> = employees
         .iter()
         .filter(|e| e.is_active)
-        .filter_map(|e| e.huly_person_id.as_ref().map(|pid| (pid.clone(), e.name.clone())))
+        .filter_map(|e| {
+            e.huly_person_id
+                .as_ref()
+                .map(|pid| (pid.clone(), e.name.clone()))
+        })
         .collect();
 
     let results = issues
@@ -4170,7 +4668,11 @@ pub async fn get_issues_with_naming(db: State<'_, DbPool>) -> Result<Vec<serde_j
         .map(|issue| {
             let title = issue.title.as_deref().unwrap_or("");
             let parsed = parse_task_name(title);
-            let assignee_name = issue.assignee.as_ref().and_then(|a| emp_map.get(a)).cloned();
+            let assignee_name = issue
+                .assignee
+                .as_ref()
+                .and_then(|a| emp_map.get(a))
+                .cloned();
             json!({
                 "id": issue.id,
                 "identifier": issue.identifier,
@@ -4226,7 +4728,11 @@ pub async fn get_standup_report(db: State<'_, DbPool>) -> Result<StandupReport, 
     // Map huly person id → employee name
     let huly_person_to_name: HashMap<String, String> = active_employees
         .iter()
-        .filter_map(|e| e.huly_person_id.as_ref().map(|pid| (pid.clone(), e.name.clone())))
+        .filter_map(|e| {
+            e.huly_person_id
+                .as_ref()
+                .map(|pid| (pid.clone(), e.name.clone()))
+        })
         .collect();
 
     // Map employee name → posted entry
@@ -4257,8 +4763,12 @@ pub async fn get_standup_report(db: State<'_, DbPool>) -> Result<StandupReport, 
             .unwrap_or_default();
 
         for msg in &messages {
-            let Some(creator) = &msg.created_by else { continue };
-            let Some(name) = huly_person_to_name.get(creator) else { continue };
+            let Some(creator) = &msg.created_by else {
+                continue;
+            };
+            let Some(name) = huly_person_to_name.get(creator) else {
+                continue;
+            };
 
             let in_standup = msg
                 .attached_to
@@ -4266,16 +4776,23 @@ pub async fn get_standup_report(db: State<'_, DbPool>) -> Result<StandupReport, 
                 .map(|ch_id| standup_channels.iter().any(|c| &c.id == ch_id))
                 .unwrap_or(false);
 
-            if !in_standup { continue; }
+            if !in_standup {
+                continue;
+            }
 
-            let channel_name = msg.attached_to.as_ref()
+            let channel_name = msg
+                .attached_to
+                .as_ref()
                 .and_then(|ch_id| standup_channels.iter().find(|c| &c.id == ch_id))
                 .and_then(|c| huly_channel_display_name(c))
                 .unwrap_or_else(|| "standup".to_string());
 
             posted.entry(name.clone()).or_insert_with(|| StandupEntry {
                 employee_name: name.clone(),
-                posted_at: msg.created_on.or(msg.modified_on).and_then(ms_to_datetime_string),
+                posted_at: msg
+                    .created_on
+                    .or(msg.modified_on)
+                    .and_then(ms_to_datetime_string),
                 channel: channel_name,
                 source: "huly".to_string(),
                 content_preview: msg.content.as_ref().map(|c| c.chars().take(120).collect()),
@@ -4299,32 +4816,53 @@ pub async fn get_standup_report(db: State<'_, DbPool>) -> Result<StandupReport, 
             .filter(|c| c.name.as_deref().map(is_standup_label).unwrap_or(false))
             .collect();
 
-        let oldest_ts = format!("{}.000000", today.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp());
+        let oldest_ts = format!(
+            "{}.000000",
+            today.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()
+        );
         let users = slack_client.list_users().await.unwrap_or_default();
-
-        // Build slack user id → employee name map
-        let slack_user_to_name: HashMap<String, String> = users
+        let slack_user_to_employee_id = resolve_slack_user_employee_ids(pool, &employees, &users)
+            .await
+            .unwrap_or_default();
+        let active_employee_name_by_id: HashMap<String, String> = active_employees
             .iter()
-            .filter(|u| !u.deleted && !u.is_bot)
-            .filter_map(|user| {
-                let email = user.profile.as_ref()?.email.as_ref().map(|e| normalize_email(e))?;
-                active_employees
-                    .iter()
-                    .find(|e| normalize_email(&e.email) == email)
-                    .map(|e| (user.id.clone(), e.name.clone()))
-            })
+            .map(|employee| (employee.id.clone(), employee.name.clone()))
             .collect();
 
         for channel in &standup_channels {
-            let channel_name = channel.name.clone().unwrap_or_else(|| "standup".to_string());
+            let channel_name = channel
+                .name
+                .clone()
+                .unwrap_or_else(|| "standup".to_string());
             for msg in slack_client
                 .get_channel_messages_since(&channel.id, &oldest_ts)
                 .await
                 .unwrap_or_default()
             {
-                if msg.bot_id.is_some() { continue; }
-                let Some(uid) = &msg.user else { continue };
-                let Some(name) = slack_user_to_name.get(uid) else { continue };
+                if msg.bot_id.is_some() {
+                    continue;
+                }
+                let slack_user_id = msg.user.as_deref();
+                let mapped_employee_id = slack_user_id
+                    .and_then(|uid| slack_user_to_employee_id.get(uid))
+                    .cloned();
+                let mapped_name = mapped_employee_id
+                    .as_ref()
+                    .and_then(|employee_id| active_employee_name_by_id.get(employee_id));
+                if let Err(error) = persist_slack_message_activity(
+                    pool,
+                    &channel.id,
+                    slack_user_id,
+                    mapped_employee_id.as_deref(),
+                    &msg,
+                )
+                .await
+                {
+                    eprintln!("[commands] warning: {error}");
+                }
+                let Some(name) = mapped_name else {
+                    continue;
+                };
 
                 posted.entry(name.clone()).or_insert_with(|| StandupEntry {
                     employee_name: name.clone(),
@@ -4342,21 +4880,26 @@ pub async fn get_standup_report(db: State<'_, DbPool>) -> Result<StandupReport, 
     let mut entries: Vec<StandupEntry> = active_employees
         .iter()
         .map(|e| {
-            posted.get(&e.name).cloned().unwrap_or_else(|| StandupEntry {
-                employee_name: e.name.clone(),
-                posted_at: None,
-                channel: String::new(),
-                source: String::new(),
-                content_preview: None,
-                status: "missing".to_string(),
-            })
+            posted
+                .get(&e.name)
+                .cloned()
+                .unwrap_or_else(|| StandupEntry {
+                    employee_name: e.name.clone(),
+                    posted_at: None,
+                    channel: String::new(),
+                    source: String::new(),
+                    content_preview: None,
+                    status: "missing".to_string(),
+                })
         })
         .collect();
 
     entries.sort_by(|a, b| {
         let a_order = if a.status == "posted" { 0 } else { 1 };
         let b_order = if b.status == "posted" { 0 } else { 1 };
-        a_order.cmp(&b_order).then(a.employee_name.cmp(&b.employee_name))
+        a_order
+            .cmp(&b_order)
+            .then(a.employee_name.cmp(&b.employee_name))
     });
 
     let posted_count = entries.iter().filter(|e| e.status == "posted").count() as u32;
@@ -4401,23 +4944,826 @@ pub struct ClientView {
 #[serde(rename_all = "camelCase")]
 pub struct ClientDetailView {
     pub client: ClientView,
-    pub linked_projects: Vec<serde_json::Value>,
-    pub linked_devices: Vec<serde_json::Value>,
-    pub resources: Vec<serde_json::Value>,
-    pub recent_activity: Vec<serde_json::Value>,
+    pub linked_projects: Vec<ClientLinkedProjectView>,
+    pub linked_devices: Vec<ClientLinkedDeviceView>,
+    pub resources: Vec<ClientResourceView>,
+    pub recent_activity: Vec<ActivityItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientLinkedProjectView {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientLinkedDeviceView {
+    pub id: String,
+    pub name: String,
+    pub platform: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientResourceView {
+    pub name: String,
+    pub r#type: String,
+    pub url: Option<String>,
+}
+
+fn slugify_client_name(value: &str) -> String {
+    let mut slug = String::with_capacity(value.len());
+    let mut previous_was_separator = false;
+
+    for ch in value.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            slug.push('_');
+            previous_was_separator = true;
+        }
+    }
+
+    let trimmed = slug.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        "client".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn parse_csv_values(csv: Option<String>) -> Vec<String> {
+    csv.unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .collect()
+}
+
+fn parse_datetime_flexible(value: &str) -> Option<chrono::DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|dt| dt.with_timezone(&Utc))
+        .or_else(|_| {
+            chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S")
+                .map(|dt| chrono::DateTime::from_naive_utc_and_offset(dt, Utc))
+        })
+        .or_else(|_| {
+            chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
+                .map(|dt| chrono::DateTime::from_naive_utc_and_offset(dt, Utc))
+        })
+        .ok()
+}
+
+fn infer_client_tier(monthly_value: f64, active_projects: u32) -> String {
+    if monthly_value >= 20_000.0 {
+        "Tier 1".to_string()
+    } else if monthly_value >= 10_000.0 {
+        "Tier 2".to_string()
+    } else if monthly_value >= 5_000.0 {
+        "Tier 3".to_string()
+    } else if active_projects >= 3 {
+        "Tier 4".to_string()
+    } else {
+        "R&D".to_string()
+    }
+}
+
+fn infer_client_industry(client_name: &str, project_names: &[String]) -> Option<String> {
+    let haystack = format!("{} {}", client_name, project_names.join(" ")).to_lowercase();
+    if haystack.contains("erp") {
+        return Some("Enterprise Software".to_string());
+    }
+    if haystack.contains("retail") || haystack.contains("commerce") {
+        return Some("Retail".to_string());
+    }
+    if haystack.contains("health") || haystack.contains("med") {
+        return Some("Healthcare".to_string());
+    }
+    if haystack.contains("bank") || haystack.contains("finance") || haystack.contains("fintech") {
+        return Some("Financial Services".to_string());
+    }
+    if haystack.contains("edu") || haystack.contains("learning") {
+        return Some("Education".to_string());
+    }
+    None
+}
+
+fn infer_client_tech_stack(project_names: &[String]) -> Vec<String> {
+    let haystack = project_names.join(" ").to_lowercase();
+    let mut tags = Vec::new();
+
+    let checks = [
+        ("rust", "Rust"),
+        ("tauri", "Tauri"),
+        ("react", "React"),
+        ("next", "Next.js"),
+        ("api", "API"),
+        ("erp", "ERP"),
+        ("mobile", "Mobile"),
+        ("ios", "iOS"),
+        ("android", "Android"),
+        ("infra", "Infra"),
+    ];
+
+    for (needle, label) in checks {
+        if haystack.contains(needle) {
+            tags.push(label.to_string());
+        }
+    }
+
+    if tags.is_empty() {
+        tags.push("General Delivery".to_string());
+    }
+
+    tags.truncate(4);
+    tags
+}
+
+fn infer_contract_health(last_activity_at: Option<&str>) -> (String, Option<String>, Option<i32>) {
+    let Some(last_activity_raw) = last_activity_at else {
+        return ("pending".to_string(), None, None);
+    };
+
+    let Some(last_activity) = parse_datetime_flexible(last_activity_raw) else {
+        return ("active".to_string(), None, None);
+    };
+
+    let now = Utc::now();
+    let days_since = now.signed_duration_since(last_activity).num_days().max(0);
+
+    if days_since <= 30 {
+        return ("active".to_string(), None, None);
+    }
+
+    let renewal_window_days = 60;
+    let contract_end = (last_activity + chrono::Duration::days(renewal_window_days))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    if days_since < renewal_window_days {
+        return (
+            "renewal".to_string(),
+            Some(contract_end),
+            Some((renewal_window_days - days_since) as i32),
+        );
+    }
+
+    ("expired".to_string(), Some(contract_end), Some(0))
+}
+
+fn infer_project_status(is_archived: bool, last_activity_at: Option<&str>) -> String {
+    if is_archived {
+        return "archived".to_string();
+    }
+
+    let Some(last_activity_raw) = last_activity_at else {
+        return "planned".to_string();
+    };
+    let Some(last_activity) = parse_datetime_flexible(last_activity_raw) else {
+        return "active".to_string();
+    };
+
+    let days_since = Utc::now()
+        .signed_duration_since(last_activity)
+        .num_days()
+        .max(0);
+    if days_since <= 30 {
+        "active".to_string()
+    } else {
+        "idle".to_string()
+    }
+}
+
+async fn get_client_setting_value(
+    pool: &sqlx::SqlitePool,
+    client_slug: &str,
+    suffix: &str,
+) -> Result<Option<String>, String> {
+    let key = format!("client_{}_{}", client_slug, suffix);
+    let value = queries::get_setting(pool, &key)
+        .await
+        .map_err(|e| format!("read {key}: {e}"))?
+        .and_then(|item| {
+            let trimmed = item.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+
+    if value.is_some() {
+        return Ok(value);
+    }
+
+    let legacy_key = format!("client.{}.{}", client_slug, suffix);
+    let legacy_value = queries::get_setting(pool, &legacy_key)
+        .await
+        .map_err(|e| format!("read {legacy_key}: {e}"))?
+        .and_then(|item| {
+            let trimmed = item.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+
+    Ok(legacy_value)
+}
+
+async fn load_client_hourly_rate(pool: &sqlx::SqlitePool) -> Result<f64, String> {
+    for key in [
+        "client_default_hourly_rate",
+        "default_hourly_rate",
+        "billing_hourly_rate",
+    ] {
+        if let Some(value) = queries::get_setting(pool, key)
+            .await
+            .map_err(|e| format!("read {key}: {e}"))?
+        {
+            if let Ok(rate) = value.trim().parse::<f64>() {
+                if rate.is_finite() && rate > 0.0 {
+                    return Ok(rate);
+                }
+            }
+        }
+    }
+
+    Ok(100.0)
+}
+
+async fn load_clients(pool: &sqlx::SqlitePool) -> Result<Vec<ClientView>, String> {
+    #[derive(sqlx::FromRow)]
+    struct ClientAggregateRow {
+        client_name: String,
+        active_projects: i64,
+        month_billable_seconds: i64,
+        last_activity_at: Option<String>,
+        project_names_csv: Option<String>,
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct ClientContactRow {
+        client_name: String,
+        employee_name: String,
+        month_seconds: i64,
+    }
+
+    let now = Local::now();
+    let month_start = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
+        .unwrap()
+        .format("%Y-%m-%d")
+        .to_string();
+    let next_month = if now.month() == 12 {
+        NaiveDate::from_ymd_opt(now.year() + 1, 1, 1).unwrap()
+    } else {
+        NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1).unwrap()
+    }
+    .format("%Y-%m-%d")
+    .to_string();
+
+    let hourly_rate = load_client_hourly_rate(pool).await?;
+
+    let rows: Vec<ClientAggregateRow> = sqlx::query_as::<_, ClientAggregateRow>(
+        "SELECT
+            TRIM(p.client_name) AS client_name,
+            COUNT(DISTINCT CASE WHEN p.is_archived = 0 THEN p.id ELSE NULL END) AS active_projects,
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN te.start_time >= ?1
+                             AND te.start_time < ?2
+                             AND te.is_billable = 1
+                        THEN COALESCE(te.duration_seconds, 0)
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS month_billable_seconds,
+            MAX(te.start_time) AS last_activity_at,
+            GROUP_CONCAT(DISTINCT p.name) AS project_names_csv
+         FROM projects p
+         LEFT JOIN time_entries te ON te.project_id = p.id
+         WHERE p.client_name IS NOT NULL AND TRIM(p.client_name) <> ''
+         GROUP BY TRIM(p.client_name)
+         ORDER BY TRIM(p.client_name) COLLATE NOCASE",
+    )
+    .bind(&month_start)
+    .bind(&next_month)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("query clients: {e}"))?;
+
+    let contact_rows: Vec<ClientContactRow> = sqlx::query_as::<_, ClientContactRow>(
+        "SELECT
+            TRIM(p.client_name) AS client_name,
+            e.name AS employee_name,
+            COALESCE(SUM(COALESCE(te.duration_seconds, 0)), 0) AS month_seconds
+         FROM projects p
+         JOIN time_entries te ON te.project_id = p.id
+         JOIN employees e ON e.id = te.employee_id
+         WHERE p.client_name IS NOT NULL
+           AND TRIM(p.client_name) <> ''
+           AND e.is_active = 1
+           AND te.start_time >= ?1
+           AND te.start_time < ?2
+         GROUP BY TRIM(p.client_name), e.name
+         ORDER BY TRIM(p.client_name) COLLATE NOCASE, month_seconds DESC, e.name COLLATE NOCASE",
+    )
+    .bind(&month_start)
+    .bind(&next_month)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("query client contacts: {e}"))?;
+
+    let mut primary_contact_by_client: HashMap<String, String> = HashMap::new();
+    for row in contact_rows {
+        if row.month_seconds > 0 {
+            primary_contact_by_client
+                .entry(row.client_name)
+                .or_insert(row.employee_name);
+        }
+    }
+
+    let mut clients = Vec::with_capacity(rows.len());
+    for row in rows {
+        let client_name = row.client_name.trim().to_string();
+        let client_slug = slugify_client_name(&client_name);
+        let project_names = parse_csv_values(row.project_names_csv);
+        let active_projects = row.active_projects.max(0) as u32;
+        let monthly_value = ((row.month_billable_seconds as f64) / 3600.0 * hourly_rate).round();
+        let tier = infer_client_tier(monthly_value, active_projects);
+        let industry = infer_client_industry(&client_name, &project_names);
+        let tech_stack = infer_client_tech_stack(&project_names);
+        let (contract_status, contract_end_date, days_remaining) =
+            infer_contract_health(row.last_activity_at.as_deref());
+
+        clients.push(ClientView {
+            id: format!("client-{client_slug}"),
+            name: client_name.clone(),
+            tier,
+            industry,
+            monthly_value,
+            active_projects,
+            primary_contact: primary_contact_by_client.get(&client_name).cloned(),
+            contract_status,
+            contract_end_date,
+            days_remaining,
+            tech_stack,
+            drive_link: get_client_setting_value(pool, &client_slug, "drive_link").await?,
+            chrome_profile: get_client_setting_value(pool, &client_slug, "chrome_profile").await?,
+        });
+    }
+
+    clients.sort_by(|left, right| {
+        right
+            .monthly_value
+            .partial_cmp(&left.monthly_value)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(left.name.cmp(&right.name))
+    });
+
+    Ok(clients)
 }
 
 #[tauri::command]
-pub async fn get_clients(_db: State<'_, DbPool>) -> Result<Vec<ClientView>, String> {
-    Ok(vec![])
+pub async fn get_clients(db: State<'_, DbPool>) -> Result<Vec<ClientView>, String> {
+    load_clients(&db.0).await
 }
 
 #[tauri::command]
 pub async fn get_client_detail(
-    _db: State<'_, DbPool>,
-    _client_id: String,
+    db: State<'_, DbPool>,
+    client_id: String,
 ) -> Result<ClientDetailView, String> {
-    Err("Client not found".to_string())
+    let pool = &db.0;
+    let clients = load_clients(pool).await?;
+    let client = clients
+        .into_iter()
+        .find(|item| item.id == client_id)
+        .ok_or_else(|| "Client not found".to_string())?;
+
+    #[derive(sqlx::FromRow)]
+    struct LinkedProjectRow {
+        id: String,
+        name: String,
+        is_archived: bool,
+        last_activity_at: Option<String>,
+    }
+
+    let linked_project_rows: Vec<LinkedProjectRow> = sqlx::query_as::<_, LinkedProjectRow>(
+        "SELECT
+            p.id AS id,
+            p.name AS name,
+            p.is_archived AS is_archived,
+            MAX(te.start_time) AS last_activity_at
+         FROM projects p
+         LEFT JOIN time_entries te ON te.project_id = p.id
+         WHERE p.client_name IS NOT NULL
+           AND LOWER(TRIM(p.client_name)) = LOWER(TRIM(?1))
+         GROUP BY p.id, p.name, p.is_archived
+         ORDER BY p.is_archived ASC, p.name COLLATE NOCASE",
+    )
+    .bind(&client.name)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("query linked projects: {e}"))?;
+
+    let linked_projects = linked_project_rows
+        .into_iter()
+        .map(|project| ClientLinkedProjectView {
+            id: project.id,
+            name: project.name,
+            status: infer_project_status(project.is_archived, project.last_activity_at.as_deref()),
+        })
+        .collect();
+
+    let mut resources = Vec::new();
+    if let Some(link) = &client.drive_link {
+        resources.push(ClientResourceView {
+            name: "Client Drive".to_string(),
+            r#type: "drive".to_string(),
+            url: Some(link.clone()),
+        });
+    }
+    if let Some(profile) = &client.chrome_profile {
+        resources.push(ClientResourceView {
+            name: format!("Chrome Profile: {profile}"),
+            r#type: "chrome-profile".to_string(),
+            url: None,
+        });
+    }
+
+    let doc_rows: Vec<(Option<String>,)> = sqlx::query_as(
+        "SELECT DISTINCT doc_title
+         FROM huly_document_activity
+         WHERE doc_title IS NOT NULL
+           AND LOWER(doc_title) LIKE '%' || LOWER(?1) || '%'
+         ORDER BY occurred_at DESC
+         LIMIT 6",
+    )
+    .bind(&client.name)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("query client resources: {e}"))?;
+
+    for (doc_title,) in doc_rows {
+        if let Some(title) = doc_title.map(|value| value.trim().to_string()) {
+            if !title.is_empty() {
+                resources.push(ClientResourceView {
+                    name: title,
+                    r#type: "huly-doc".to_string(),
+                    url: None,
+                });
+            }
+        }
+    }
+
+    let mut recent_activity: Vec<ActivityItem> = sqlx::query_as::<_, ActivityItem>(
+        "SELECT
+            'clockify' AS source,
+            e.name AS employee_name,
+            'logged time' AS action,
+            COALESCE(te.description, p.name) AS detail,
+            te.start_time AS occurred_at
+         FROM time_entries te
+         JOIN projects p ON p.id = te.project_id
+         JOIN employees e ON e.id = te.employee_id
+         WHERE e.is_active = 1
+           AND p.client_name IS NOT NULL
+           AND LOWER(TRIM(p.client_name)) = LOWER(TRIM(?1))
+         ORDER BY te.start_time DESC
+         LIMIT 14",
+    )
+    .bind(&client.name)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("query client clockify activity: {e}"))?;
+
+    let issue_activity: Vec<ActivityItem> = sqlx::query_as::<_, ActivityItem>(
+        "SELECT
+            'huly' AS source,
+            e.name AS employee_name,
+            h.action AS action,
+            COALESCE(h.issue_identifier || ': ' || h.issue_title, h.issue_title, h.huly_issue_id) AS detail,
+            h.occurred_at AS occurred_at
+         FROM huly_issue_activity h
+         JOIN employees e ON e.id = h.employee_id
+         WHERE e.is_active = 1
+           AND (
+                LOWER(COALESCE(h.issue_title, '')) LIKE '%' || LOWER(?1) || '%'
+                OR LOWER(COALESCE(h.issue_identifier, '')) LIKE '%' || LOWER(?1) || '%'
+           )
+         ORDER BY h.occurred_at DESC
+         LIMIT 8",
+    )
+    .bind(&client.name)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("query client issue activity: {e}"))?;
+
+    let doc_activity: Vec<ActivityItem> = sqlx::query_as::<_, ActivityItem>(
+        "SELECT
+            'huly' AS source,
+            e.name AS employee_name,
+            h.action AS action,
+            h.doc_title AS detail,
+            h.occurred_at AS occurred_at
+         FROM huly_document_activity h
+         JOIN employees e ON e.id = h.employee_id
+         WHERE e.is_active = 1
+           AND LOWER(COALESCE(h.doc_title, '')) LIKE '%' || LOWER(?1) || '%'
+         ORDER BY h.occurred_at DESC
+         LIMIT 8",
+    )
+    .bind(&client.name)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("query client document activity: {e}"))?;
+
+    recent_activity.extend(issue_activity);
+    recent_activity.extend(doc_activity);
+    recent_activity.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
+    recent_activity.truncate(20);
+
+    Ok(ClientDetailView {
+        client,
+        linked_projects,
+        linked_devices: vec![],
+        resources,
+        recent_activity,
+    })
+}
+
+fn is_device_candidate(text: &str) -> bool {
+    let haystack = text.to_lowercase();
+    [
+        "device",
+        "iot",
+        "tuya",
+        "firmware",
+        "hardware",
+        "sensor",
+        "gateway",
+        "bridge",
+        "thermostat",
+        "camera",
+        "ble",
+        "bluetooth",
+        "zigbee",
+        "esp32",
+        "esp8266",
+        "rfid",
+        "mqtt",
+        "modbus",
+        "nfc",
+    ]
+    .iter()
+    .any(|keyword| haystack.contains(keyword))
+}
+
+fn status_priority(status: &str) -> u8 {
+    match status {
+        "issue" => 5,
+        "in progress" => 4,
+        "testing" => 3,
+        "not started" => 2,
+        "deployed" => 1,
+        _ => 0,
+    }
+}
+
+fn normalize_device_status(status_text: &str, context: &str) -> String {
+    let raw = format!("{status_text} {context}").to_lowercase();
+
+    if [
+        "blocked",
+        "bug",
+        "issue",
+        "error",
+        "failed",
+        "failure",
+        "regression",
+    ]
+    .iter()
+    .any(|keyword| raw.contains(keyword))
+    {
+        return "issue".to_string();
+    }
+
+    if [
+        "deployed",
+        "released",
+        "done",
+        "closed",
+        "resolved",
+        "production",
+        "live",
+    ]
+    .iter()
+    .any(|keyword| raw.contains(keyword))
+    {
+        return "deployed".to_string();
+    }
+
+    if ["testing", "test", "qa", "uat", "staging"]
+        .iter()
+        .any(|keyword| raw.contains(keyword))
+    {
+        return "testing".to_string();
+    }
+
+    if ["in progress", "progress", "doing", "wip", "active"]
+        .iter()
+        .any(|keyword| raw.contains(keyword))
+    {
+        return "in progress".to_string();
+    }
+
+    if [
+        "todo",
+        "to do",
+        "backlog",
+        "open",
+        "new",
+        "planned",
+        "not started",
+    ]
+    .iter()
+    .any(|keyword| raw.contains(keyword))
+    {
+        return "not started".to_string();
+    }
+
+    "in progress".to_string()
+}
+
+fn infer_device_platform(text: &str) -> String {
+    let haystack = text.to_lowercase();
+    if ["ios", "iphone", "ipad"]
+        .iter()
+        .any(|keyword| haystack.contains(keyword))
+    {
+        return "iOS".to_string();
+    }
+    if ["android", "apk", "play store"]
+        .iter()
+        .any(|keyword| haystack.contains(keyword))
+    {
+        return "Android".to_string();
+    }
+    if [
+        "firmware",
+        "embedded",
+        "hardware",
+        "esp32",
+        "esp8266",
+        "mcu",
+        "microcontroller",
+        "zigbee",
+        "rfid",
+        "nfc",
+    ]
+    .iter()
+    .any(|keyword| haystack.contains(keyword))
+    {
+        return "Firmware".to_string();
+    }
+    if ["api", "backend", "server", "cloud"]
+        .iter()
+        .any(|keyword| haystack.contains(keyword))
+    {
+        return "Backend".to_string();
+    }
+    if ["web", "dashboard", "portal", "frontend"]
+        .iter()
+        .any(|keyword| haystack.contains(keyword))
+    {
+        return "Web".to_string();
+    }
+    "Cross-platform".to_string()
+}
+
+fn normalize_device_key(value: &str) -> String {
+    let mut key = String::with_capacity(value.len());
+    let mut previous_was_separator = false;
+
+    for ch in value.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            key.push(ch.to_ascii_lowercase());
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            key.push('_');
+            previous_was_separator = true;
+        }
+    }
+
+    key.trim_matches('_').to_string()
+}
+
+fn derive_device_name(title: Option<&str>, identifier: Option<&str>) -> Option<String> {
+    if let Some(raw_title) = title.map(str::trim).filter(|value| !value.is_empty()) {
+        let candidate = raw_title
+            .replace('\n', " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !candidate.is_empty() {
+            return Some(candidate.chars().take(80).collect());
+        }
+    }
+
+    identifier
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("Device {value}"))
+}
+
+fn extract_first_url(text: &str) -> Option<String> {
+    for token in text.split_whitespace() {
+        if token.starts_with("http://") || token.starts_with("https://") {
+            let trimmed = token.trim_matches(|ch: char| {
+                matches!(ch, ',' | '.' | ';' | ')' | '(' | ']' | '[' | '"' | '\'')
+            });
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn extract_firmware_version(text: &str) -> Option<String> {
+    for token in text.split_whitespace() {
+        let candidate = token.trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '.');
+        let lower = candidate.to_lowercase();
+        if lower.starts_with('v')
+            && lower.len() >= 3
+            && lower.chars().any(|ch| ch.is_ascii_digit())
+            && lower.contains('.')
+        {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
+#[derive(Debug, Clone)]
+struct DeviceAccum {
+    key: String,
+    name: String,
+    model: Option<String>,
+    platform: String,
+    client_name: Option<String>,
+    status: String,
+    status_rank: u8,
+    responsible_dev: Option<String>,
+    issue_count: u32,
+    technical_notes: Option<String>,
+    api_docs_link: Option<String>,
+    firmware_version: Option<String>,
+    latest_activity_ms: i64,
+}
+
+impl DeviceAccum {
+    fn new(
+        key: String,
+        name: String,
+        platform: String,
+        status: String,
+        latest_activity_ms: i64,
+    ) -> Self {
+        let status_rank = status_priority(&status);
+        Self {
+            key,
+            name,
+            model: None,
+            platform,
+            client_name: None,
+            status,
+            status_rank,
+            responsible_dev: None,
+            issue_count: 0,
+            technical_notes: None,
+            api_docs_link: None,
+            firmware_version: None,
+            latest_activity_ms,
+        }
+    }
+
+    fn merge_status(&mut self, status: String) {
+        let rank = status_priority(&status);
+        if rank > self.status_rank {
+            self.status = status;
+            self.status_rank = rank;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4437,8 +5783,292 @@ pub struct DeviceView {
 }
 
 #[tauri::command]
-pub async fn get_devices(_db: State<'_, DbPool>) -> Result<Vec<DeviceView>, String> {
-    Ok(vec![])
+pub async fn get_devices(db: State<'_, DbPool>) -> Result<Vec<DeviceView>, String> {
+    let pool = &db.0;
+    let client = match get_huly_client(pool).await {
+        Ok(c) => c,
+        Err(_) => return Ok(vec![]),
+    };
+
+    let (issues, cards, huly_projects, huly_people) = tokio::join!(
+        client.get_issues(None),
+        client.get_board_cards(),
+        client.get_projects(),
+        client.get_persons(),
+    );
+    let issues = issues.unwrap_or_default();
+    let cards = cards.unwrap_or_default();
+    let huly_projects = huly_projects.unwrap_or_default();
+    let huly_people = huly_people.unwrap_or_default();
+
+    let people_name_by_id: HashMap<String, String> = huly_people
+        .into_iter()
+        .filter_map(|person| {
+            person
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|name| (person.id, name.to_string()))
+        })
+        .collect();
+
+    let local_projects = queries::get_projects(pool)
+        .await
+        .map_err(|e| format!("load projects for devices: {e}"))?;
+
+    let mut client_by_huly_project_id: HashMap<String, String> = HashMap::new();
+    let mut client_by_project_name: HashMap<String, String> = HashMap::new();
+    for project in local_projects {
+        let Some(client_name) = project.client_name.map(|value| value.trim().to_string()) else {
+            continue;
+        };
+        if client_name.is_empty() {
+            continue;
+        }
+
+        if let Some(huly_project_id) = project
+            .huly_project_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            client_by_huly_project_id
+                .entry(huly_project_id.to_string())
+                .or_insert(client_name.clone());
+        }
+
+        client_by_project_name
+            .entry(project.name.to_lowercase())
+            .or_insert(client_name);
+    }
+
+    let huly_project_name_by_id: HashMap<String, String> = huly_projects
+        .into_iter()
+        .filter_map(|project| {
+            project
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|name| (project.id, name.to_string()))
+        })
+        .collect();
+
+    let employees = queries::get_employees(pool)
+        .await
+        .map_err(|e| format!("load employees for devices: {e}"))?;
+    let assignee_name_by_person: HashMap<String, String> = employees
+        .into_iter()
+        .filter(|employee| employee.is_active)
+        .filter_map(|employee| {
+            employee
+                .huly_person_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|person_id| (person_id.to_string(), employee.name))
+        })
+        .collect();
+
+    let resolve_client_name = |space: Option<&str>| -> Option<String> {
+        let project_id = space
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())?;
+
+        if let Some(client_name) = client_by_huly_project_id.get(&project_id) {
+            return Some(client_name.clone());
+        }
+
+        let project_name = huly_project_name_by_id.get(&project_id)?;
+        client_by_project_name
+            .get(&project_name.to_lowercase())
+            .cloned()
+    };
+
+    let mut devices_by_key: HashMap<String, DeviceAccum> = HashMap::new();
+
+    for issue in issues {
+        let title = issue
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let description = issue
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let identifier = issue
+            .identifier
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+
+        let project_name = issue
+            .space
+            .as_deref()
+            .and_then(|space| huly_project_name_by_id.get(space))
+            .cloned();
+
+        let combined_text = format!(
+            "{} {} {} {}",
+            title.unwrap_or_default(),
+            description.unwrap_or_default(),
+            identifier.unwrap_or_default(),
+            project_name.as_deref().unwrap_or_default()
+        );
+
+        if !is_device_candidate(&combined_text) {
+            continue;
+        }
+
+        let Some(device_name) = derive_device_name(title, identifier) else {
+            continue;
+        };
+        let key = normalize_device_key(&device_name);
+        if key.is_empty() {
+            continue;
+        }
+
+        let status_text = issue
+            .status
+            .as_ref()
+            .map(|value| value.as_str().unwrap_or(&value.to_string()).to_string())
+            .unwrap_or_default();
+        let normalized_status = normalize_device_status(&status_text, &combined_text);
+        let platform = infer_device_platform(&combined_text);
+        let latest_activity_ms = issue.modified_on.or(issue.created_on).unwrap_or_default();
+
+        let entry = devices_by_key.entry(key.clone()).or_insert_with(|| {
+            DeviceAccum::new(
+                key.clone(),
+                device_name.clone(),
+                platform.clone(),
+                normalized_status.clone(),
+                latest_activity_ms,
+            )
+        });
+
+        entry.platform = platform;
+        entry.merge_status(normalized_status);
+        entry.issue_count = entry.issue_count.saturating_add(1);
+        entry.latest_activity_ms = entry.latest_activity_ms.max(latest_activity_ms);
+
+        if entry.client_name.is_none() {
+            entry.client_name = resolve_client_name(issue.space.as_deref());
+        }
+        if entry.responsible_dev.is_none() {
+            if let Some(assignee) = issue.assignee.as_deref() {
+                entry.responsible_dev = assignee_name_by_person
+                    .get(assignee)
+                    .cloned()
+                    .or_else(|| people_name_by_id.get(assignee).cloned());
+            }
+        }
+        if entry.technical_notes.is_none() {
+            entry.technical_notes = description.map(|value| value.chars().take(220).collect());
+        }
+        if entry.api_docs_link.is_none() {
+            if let Some(description_text) = description {
+                entry.api_docs_link = extract_first_url(description_text);
+            }
+        }
+        if entry.firmware_version.is_none() {
+            entry.firmware_version = extract_firmware_version(&combined_text);
+        }
+    }
+
+    for card in cards {
+        let title = card
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let combined_text = format!(
+            "{} {}",
+            title.unwrap_or_default(),
+            card.space
+                .as_deref()
+                .and_then(|space| huly_project_name_by_id.get(space))
+                .map(|value| value.as_str())
+                .unwrap_or_default()
+        );
+
+        if !is_device_candidate(&combined_text) {
+            continue;
+        }
+
+        let Some(device_name) = derive_device_name(title, None) else {
+            continue;
+        };
+        let key = normalize_device_key(&device_name);
+        if key.is_empty() {
+            continue;
+        }
+
+        let status_text = card
+            .status
+            .as_ref()
+            .map(|value| value.as_str().unwrap_or(&value.to_string()).to_string())
+            .unwrap_or_default();
+        let normalized_status = normalize_device_status(&status_text, &combined_text);
+        let platform = infer_device_platform(&combined_text);
+        let latest_activity_ms = card.modified_on.or(card.created_on).unwrap_or_default();
+
+        let entry = devices_by_key.entry(key.clone()).or_insert_with(|| {
+            DeviceAccum::new(
+                key.clone(),
+                device_name.clone(),
+                platform.clone(),
+                normalized_status.clone(),
+                latest_activity_ms,
+            )
+        });
+
+        entry.platform = platform;
+        entry.merge_status(normalized_status);
+        entry.issue_count = entry.issue_count.saturating_add(1);
+        entry.latest_activity_ms = entry.latest_activity_ms.max(latest_activity_ms);
+
+        if entry.client_name.is_none() {
+            entry.client_name = resolve_client_name(card.space.as_deref());
+        }
+        if entry.responsible_dev.is_none() {
+            if let Some(assignee) = card.assignee.as_deref() {
+                entry.responsible_dev = assignee_name_by_person
+                    .get(assignee)
+                    .cloned()
+                    .or_else(|| people_name_by_id.get(assignee).cloned());
+            }
+        }
+    }
+
+    let mut rows: Vec<DeviceView> = devices_by_key
+        .into_values()
+        .map(|device| DeviceView {
+            id: format!("device-{}", device.key),
+            name: device.name,
+            model: device.model,
+            platform: device.platform,
+            client_name: device.client_name,
+            status: device.status,
+            responsible_dev: device.responsible_dev,
+            issue_count: device.issue_count,
+            technical_notes: device.technical_notes,
+            api_docs_link: device.api_docs_link,
+            firmware_version: device.firmware_version,
+        })
+        .collect();
+
+    rows.sort_by(|left, right| {
+        right
+            .issue_count
+            .cmp(&left.issue_count)
+            .then(left.name.cmp(&right.name))
+    });
+    Ok(rows)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4456,9 +6086,139 @@ pub struct KnowledgeArticleView {
 
 #[tauri::command]
 pub async fn get_knowledge_articles(
-    _db: State<'_, DbPool>,
+    db: State<'_, DbPool>,
 ) -> Result<Vec<KnowledgeArticleView>, String> {
-    Ok(vec![])
+    let pool = &db.0;
+    let client = match get_huly_client(pool).await {
+        Ok(c) => c,
+        Err(_) => return Ok(vec![]),
+    };
+
+    let people = client.get_persons().await.unwrap_or_default();
+    let person_name_by_id: HashMap<String, String> = people
+        .into_iter()
+        .map(|person| {
+            (
+                person.id,
+                person
+                    .name
+                    .unwrap_or_else(|| "Unknown".to_string())
+                    .trim()
+                    .to_string(),
+            )
+        })
+        .collect();
+
+    let documents = client.get_documents().await.unwrap_or_default();
+    let mut rows: Vec<KnowledgeArticleView> = documents
+        .into_iter()
+        .map(|document| {
+            let title = document
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("Untitled")
+                .to_string();
+            let content = document
+                .content
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .to_string();
+            let preview = if content.is_empty() {
+                "No preview available.".to_string()
+            } else {
+                let snippet = content
+                    .split_whitespace()
+                    .take(28)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if content.split_whitespace().count() > 28 {
+                    format!("{snippet}...")
+                } else {
+                    snippet
+                }
+            };
+            let category = infer_knowledge_category(document.space.as_deref(), &content);
+            let mut tags = Vec::new();
+            if let Some(space) = document
+                .space
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                tags.push(space.to_string());
+            }
+            if let Some(class) = document
+                .class
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                tags.push(class.replace(':', "-"));
+            }
+            tags.sort();
+            tags.dedup();
+
+            let updated_at = document
+                .modified_on
+                .and_then(ms_to_datetime_string)
+                .unwrap_or_else(|| Utc::now().to_rfc3339());
+
+            KnowledgeArticleView {
+                id: document.id,
+                title,
+                category,
+                author: document
+                    .created_by
+                    .as_deref()
+                    .and_then(|id| person_name_by_id.get(id))
+                    .cloned(),
+                updated_at,
+                tags,
+                content_preview: preview,
+                content: if content.is_empty() {
+                    None
+                } else {
+                    Some(content)
+                },
+            }
+        })
+        .collect();
+
+    rows.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    Ok(rows)
+}
+
+fn infer_knowledge_category(space: Option<&str>, content: &str) -> String {
+    let haystack = format!(
+        "{} {}",
+        space.unwrap_or_default().to_lowercase(),
+        content.to_lowercase()
+    );
+    if haystack.contains("faq") {
+        return "FAQ".to_string();
+    }
+    if haystack.contains("client") {
+        return "Client Doc".to_string();
+    }
+    if haystack.contains("sop") || haystack.contains("runbook") {
+        return "SOP".to_string();
+    }
+    if haystack.contains("tool") || haystack.contains("integration") {
+        return "Tool Discovery".to_string();
+    }
+    if haystack.contains("training") || haystack.contains("onboarding") {
+        return "Training".to_string();
+    }
+    if haystack.contains("guide") || haystack.contains("api") || haystack.contains("architecture") {
+        return "Technical Guide".to_string();
+    }
+    if haystack.contains("http://") || haystack.contains("https://") {
+        return "Resource Link".to_string();
+    }
+    "Technical Guide".to_string()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4501,10 +6261,259 @@ pub struct SprintDetailView {
 
 #[tauri::command]
 pub async fn get_sprint_detail(
-    _db: State<'_, DbPool>,
-    _sprint_id: String,
+    db: State<'_, DbPool>,
+    sprint_id: String,
 ) -> Result<SprintDetailView, String> {
-    Err("Sprint detail not available yet".to_string())
+    let pool = &db.0;
+    let client = get_huly_client(pool).await?;
+
+    let (milestones, issues, time_reports, projects, persons, employees) = tokio::join!(
+        client.get_milestones(),
+        client.get_issues(None),
+        client.get_time_reports(None),
+        client.get_projects(),
+        client.get_persons(),
+        queries::get_employees(pool),
+    );
+
+    let milestones = milestones.unwrap_or_default();
+    let issues = issues.unwrap_or_default();
+    let time_reports = time_reports.unwrap_or_default();
+    let projects = projects.unwrap_or_default();
+    let persons = persons.unwrap_or_default();
+    let employees = employees.map_err(|e| format!("load employees for sprint detail: {e}"))?;
+
+    let milestone = milestones
+        .iter()
+        .find(|item| item.id == sprint_id)
+        .ok_or_else(|| "Sprint not found".to_string())?;
+
+    let project_name_by_id: HashMap<String, String> = projects
+        .into_iter()
+        .filter_map(|project| {
+            project
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|name| (project.id, name.to_string()))
+        })
+        .collect();
+
+    let person_name_by_id: HashMap<String, String> = persons
+        .into_iter()
+        .filter_map(|person| {
+            person
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|name| (person.id, name.to_string()))
+        })
+        .collect();
+
+    let employee_name_by_person: HashMap<String, String> = employees
+        .iter()
+        .filter(|employee| employee.is_active)
+        .filter_map(|employee| {
+            employee
+                .huly_person_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|person_id| (person_id.to_string(), employee.name.clone()))
+        })
+        .collect();
+
+    let sprint_issues: Vec<&HulyIssue> = issues
+        .iter()
+        .filter(|issue| {
+            milestone.space.is_some()
+                && issue.space.as_deref().map(str::trim)
+                    == milestone.space.as_deref().map(str::trim)
+        })
+        .collect();
+
+    let total_issues = sprint_issues.len() as u32;
+    let completed_issues = sprint_issues
+        .iter()
+        .filter(|issue| issue_is_completed(issue))
+        .count() as u32;
+
+    let now_ms = Utc::now().timestamp_millis();
+    let day_ms = 86_400_000_i64;
+    let target_ms = milestone.target_date.unwrap_or(now_ms + 13 * day_ms);
+    let earliest_issue_ms = sprint_issues
+        .iter()
+        .filter_map(|issue| issue.created_on.or(issue.modified_on))
+        .min();
+    let start_ms = milestone
+        .created_on
+        .or(earliest_issue_ms)
+        .unwrap_or(target_ms - 13 * day_ms);
+
+    let day_count = (((target_ms - start_ms).max(day_ms) / day_ms) + 1).clamp(7, 14) as u32;
+    let burndown: Vec<SprintBurndownPoint> = (0..day_count)
+        .map(|index| {
+            let cutoff_ms = start_ms + ((index as i64 + 1) * day_ms) - 1;
+            let remaining = sprint_issues
+                .iter()
+                .filter(|issue| match issue_completed_at(issue) {
+                    Some(completed_at) => completed_at > cutoff_ms,
+                    None => true,
+                })
+                .count() as u32;
+            let ideal = if day_count > 1 {
+                (((day_count - 1 - index) as f64 / (day_count - 1) as f64) * total_issues as f64)
+                    .round() as u32
+            } else {
+                0
+            };
+
+            SprintBurndownPoint {
+                day: index + 1,
+                remaining,
+                ideal,
+            }
+        })
+        .collect();
+
+    let issue_ids: HashSet<&str> = sprint_issues
+        .iter()
+        .map(|issue| issue.id.as_str())
+        .collect();
+    let mut est_hours_by_person: HashMap<String, f64> = HashMap::new();
+    for issue in &sprint_issues {
+        if let (Some(assignee), Some(estimation_ms)) = (issue.assignee.as_ref(), issue.estimation) {
+            if estimation_ms > 0 {
+                *est_hours_by_person.entry(assignee.clone()).or_default() +=
+                    estimation_ms as f64 / 3_600_000.0;
+            }
+        }
+    }
+
+    let mut actual_hours_by_person: HashMap<String, f64> = HashMap::new();
+    for report in &time_reports {
+        let Some(issue_ref) = report.attached_to.as_deref() else {
+            continue;
+        };
+        if !issue_ids.contains(issue_ref) {
+            continue;
+        }
+        let Some(person_id) = report.employee.as_ref() else {
+            continue;
+        };
+        *actual_hours_by_person.entry(person_id.clone()).or_default() +=
+            report.value.unwrap_or(0.0);
+    }
+
+    let mut person_ids: HashSet<String> = est_hours_by_person.keys().cloned().collect();
+    person_ids.extend(actual_hours_by_person.keys().cloned());
+
+    let mut capacity: Vec<SprintCapacityView> = person_ids
+        .into_iter()
+        .map(|person_id| {
+            let estimated = est_hours_by_person.get(&person_id).copied().unwrap_or(0.0);
+            let actual = actual_hours_by_person
+                .get(&person_id)
+                .copied()
+                .unwrap_or(0.0);
+            let scheduled_hours = if estimated > 0.0 { estimated } else { actual };
+            let available_hours = 40.0;
+            let utilization = if available_hours > 0.0 {
+                scheduled_hours / available_hours
+            } else {
+                0.0
+            };
+            let employee_name = employee_name_by_person
+                .get(&person_id)
+                .cloned()
+                .or_else(|| person_name_by_id.get(&person_id).cloned())
+                .unwrap_or(person_id);
+
+            SprintCapacityView {
+                employee_name,
+                scheduled_hours,
+                available_hours,
+                utilization,
+            }
+        })
+        .collect();
+    capacity.sort_by(|left, right| {
+        right
+            .scheduled_hours
+            .partial_cmp(&left.scheduled_hours)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(left.employee_name.cmp(&right.employee_name))
+    });
+
+    let window_end = now_ms.min(target_ms.max(now_ms));
+    let current_window_start = window_end - (14 * day_ms);
+    let previous_window_start = current_window_start - (14 * day_ms);
+
+    let current_velocity = sprint_issues
+        .iter()
+        .filter_map(|issue| issue_completed_at(issue))
+        .filter(|completed_at| *completed_at >= current_window_start && *completed_at <= window_end)
+        .count() as u32;
+    let previous_velocity = sprint_issues
+        .iter()
+        .filter_map(|issue| issue_completed_at(issue))
+        .filter(|completed_at| {
+            *completed_at >= previous_window_start && *completed_at < current_window_start
+        })
+        .count() as u32;
+    let previous_completed = sprint_issues
+        .iter()
+        .filter_map(|issue| issue_completed_at(issue))
+        .filter(|completed_at| *completed_at < current_window_start)
+        .count() as u32;
+
+    let comparison = if total_issues > 0 {
+        Some(SprintComparisonView {
+            current_velocity,
+            previous_velocity,
+            current_completion: ((completed_issues as f64 / total_issues as f64) * 100.0).round(),
+            previous_completion: ((previous_completed as f64 / total_issues as f64) * 100.0)
+                .round(),
+        })
+    } else {
+        None
+    };
+
+    let sprint_label = milestone
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Sprint")
+        .to_string();
+    let goal = Some(
+        milestone
+            .space
+            .as_deref()
+            .and_then(|space| project_name_by_id.get(space))
+            .map(|project_name| format!("Deliver {sprint_label} outcomes for {project_name}."))
+            .unwrap_or_else(|| format!("Deliver planned outcomes for {sprint_label}.")),
+    );
+    let retro_notes = if total_issues == 0 {
+        None
+    } else {
+        let open_issues = total_issues.saturating_sub(completed_issues);
+        Some(format!(
+            "{total_issues} linked issues tracked. {completed_issues} completed and {open_issues} still open."
+        ))
+    };
+
+    Ok(SprintDetailView {
+        id: sprint_id,
+        label: sprint_label,
+        goal,
+        retro_notes,
+        burndown,
+        capacity,
+        comparison,
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4576,10 +6585,44 @@ pub struct TrainingTrackView {
 }
 
 #[tauri::command]
-pub async fn get_training_tracks(
-    _db: State<'_, DbPool>,
-) -> Result<Vec<TrainingTrackView>, String> {
-    Ok(vec![])
+pub async fn get_training_tracks(db: State<'_, DbPool>) -> Result<Vec<TrainingTrackView>, String> {
+    let pool = &db.0;
+    let signals = load_training_signals(pool).await?;
+    let rows = build_training_status_rows(&signals);
+
+    let mut by_track: HashMap<String, (f64, u32, u32)> = HashMap::new();
+    for row in &rows {
+        let entry = by_track.entry(row.track.clone()).or_insert((0.0, 0, 0));
+        entry.0 += row.progress;
+        entry.1 += 1;
+        if row.status.eq_ignore_ascii_case("overdue") {
+            entry.2 += 1;
+        }
+    }
+
+    let mut tracks: Vec<TrainingTrackView> = training_track_catalog()
+        .iter()
+        .map(|track| {
+            let (sum_progress, count, overdue) =
+                by_track.get(track.name).copied().unwrap_or((0.0, 0, 0));
+            let completion_rate = if count > 0 {
+                (sum_progress / count as f64).clamp(0.0, 100.0)
+            } else {
+                0.0
+            };
+
+            TrainingTrackView {
+                id: track.id.to_string(),
+                name: track.name.to_string(),
+                total_modules: track.total_modules,
+                completion_rate,
+                overdue_count: overdue,
+            }
+        })
+        .collect();
+
+    tracks.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(tracks)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4596,10 +6639,10 @@ pub struct TrainingStatusRow {
 }
 
 #[tauri::command]
-pub async fn get_training_status(
-    _db: State<'_, DbPool>,
-) -> Result<Vec<TrainingStatusRow>, String> {
-    Ok(vec![])
+pub async fn get_training_status(db: State<'_, DbPool>) -> Result<Vec<TrainingStatusRow>, String> {
+    let pool = &db.0;
+    let signals = load_training_signals(pool).await?;
+    Ok(build_training_status_rows(&signals))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4611,8 +6654,54 @@ pub struct SkillsMatrixCell {
 }
 
 #[tauri::command]
-pub async fn get_skills_matrix(_db: State<'_, DbPool>) -> Result<Vec<SkillsMatrixCell>, String> {
-    Ok(vec![])
+pub async fn get_skills_matrix(db: State<'_, DbPool>) -> Result<Vec<SkillsMatrixCell>, String> {
+    let pool = &db.0;
+    let signals = load_training_signals(pool).await?;
+
+    let mut cells = Vec::new();
+    for signal in &signals {
+        let total = signal.hours_month.max(1.0);
+        let hours_ratio = (signal.hours_month / 160.0).clamp(0.0, 1.0);
+        let projects_ratio = (signal.distinct_projects as f64 / 4.0).clamp(0.0, 1.0);
+        let device_ratio = (signal.device_hours / total).clamp(0.0, 1.0);
+        let docs_ratio = (signal.documentation_hours / total).clamp(0.0, 1.0);
+        let coordination_ratio = (signal.coordination_hours / total).clamp(0.0, 1.0);
+        let experimentation_ratio = (signal.experimentation_hours / total).clamp(0.0, 1.0);
+
+        let scored_skills: Vec<(&str, f64)> = vec![
+            (
+                "Clockify Discipline",
+                (0.7 * hours_ratio + 0.3 * projects_ratio).clamp(0.0, 1.0),
+            ),
+            (
+                "Huly Workflow",
+                (0.5 * projects_ratio + 0.5 * coordination_ratio).clamp(0.0, 1.0),
+            ),
+            (
+                "Client Delivery",
+                (0.4 * hours_ratio + 0.4 * projects_ratio + 0.2 * coordination_ratio)
+                    .clamp(0.0, 1.0),
+            ),
+            ("IoT Integration", device_ratio),
+            ("Documentation", docs_ratio),
+            ("R&D Execution", experimentation_ratio),
+        ];
+
+        for (skill, score) in scored_skills {
+            cells.push(SkillsMatrixCell {
+                employee_name: signal.employee_name.clone(),
+                skill: skill.to_string(),
+                level: score_to_skill_level(score),
+            });
+        }
+    }
+
+    cells.sort_by(|left, right| {
+        left.employee_name
+            .cmp(&right.employee_name)
+            .then(left.skill.cmp(&right.skill))
+    });
+    Ok(cells)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4641,9 +6730,254 @@ pub struct OnboardingFlowView {
 
 #[tauri::command]
 pub async fn get_onboarding_flows(
-    _db: State<'_, DbPool>,
+    db: State<'_, DbPool>,
 ) -> Result<Vec<OnboardingFlowView>, String> {
-    Ok(vec![])
+    let pool = &db.0;
+    let projects = queries::get_projects(pool)
+        .await
+        .map_err(|e| format!("load projects for onboarding: {e}"))?;
+
+    let client = get_huly_client(pool).await.ok();
+    let (huly_docs, huly_issues, huly_cards) = if let Some(client) = client.as_ref() {
+        let (docs, issues, cards) = tokio::join!(
+            client.get_documents(),
+            client.get_issues(None),
+            client.get_board_cards(),
+        );
+        (
+            docs.unwrap_or_default(),
+            issues.unwrap_or_default(),
+            cards.unwrap_or_default(),
+        )
+    } else {
+        (vec![], vec![], vec![])
+    };
+
+    let mut projects_by_client: HashMap<String, Vec<Project>> = HashMap::new();
+    for project in projects {
+        let Some(client_name) = project
+            .client_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+        else {
+            continue;
+        };
+        projects_by_client
+            .entry(client_name)
+            .or_default()
+            .push(project);
+    }
+
+    let mut flows = Vec::new();
+    for (client_name, client_projects) in projects_by_client {
+        let client_key = client_name.to_lowercase();
+        let huly_project_ids: HashSet<String> = client_projects
+            .iter()
+            .filter_map(|project| {
+                project
+                    .huly_project_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_string())
+            })
+            .collect();
+
+        let primary_project = client_projects
+            .iter()
+            .map(|project| project.name.trim())
+            .find(|name| !name.is_empty())
+            .map(|name| name.to_string());
+        let first_project_created = client_projects
+            .iter()
+            .filter_map(|project| {
+                if project.created_at.trim().is_empty() {
+                    None
+                } else {
+                    Some(project.created_at.clone())
+                }
+            })
+            .min();
+
+        let client_stats: (Option<String>, Option<String>, f64) = sqlx::query_as(
+            "SELECT
+                MIN(te.start_time) AS first_entry,
+                MAX(te.start_time) AS latest_entry,
+                COALESCE(SUM(COALESCE(te.duration_seconds, 0)) / 3600.0, 0) AS total_hours
+             FROM time_entries te
+             JOIN projects p ON p.id = te.project_id
+             WHERE p.client_name IS NOT NULL
+               AND LOWER(TRIM(p.client_name)) = LOWER(TRIM(?1))",
+        )
+        .bind(&client_name)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("query onboarding stats for {client_name}: {e}"))?;
+
+        let (first_time_entry, _latest_time_entry, logged_hours) = client_stats;
+
+        let matching_docs: Vec<&HulyDocument> = huly_docs
+            .iter()
+            .filter(|doc| {
+                doc.space
+                    .as_deref()
+                    .map(|space| huly_project_ids.contains(space))
+                    .unwrap_or(false)
+                    || doc
+                        .title
+                        .as_deref()
+                        .map(|title| title.to_lowercase().contains(&client_key))
+                        .unwrap_or(false)
+                    || doc
+                        .content
+                        .as_deref()
+                        .map(|content| content.to_lowercase().contains(&client_key))
+                        .unwrap_or(false)
+            })
+            .collect();
+
+        let matching_issues = huly_issues
+            .iter()
+            .filter(|issue| {
+                issue
+                    .space
+                    .as_deref()
+                    .map(|space| huly_project_ids.contains(space))
+                    .unwrap_or(false)
+                    || issue
+                        .title
+                        .as_deref()
+                        .map(|title| title.to_lowercase().contains(&client_key))
+                        .unwrap_or(false)
+            })
+            .count() as u32;
+
+        let matching_cards = huly_cards
+            .iter()
+            .filter(|card| {
+                card.space
+                    .as_deref()
+                    .map(|space| huly_project_ids.contains(space))
+                    .unwrap_or(false)
+                    || card
+                        .title
+                        .as_deref()
+                        .map(|title| title.to_lowercase().contains(&client_key))
+                        .unwrap_or(false)
+            })
+            .count() as u32;
+
+        let mut tasks = Vec::new();
+
+        let workspace_ready = !client_projects.is_empty();
+        tasks.push(OnboardingTaskView {
+            id: format!("{}-workspace", slugify_client_name(&client_name)),
+            title: "Workspace mapped in Clockify".to_string(),
+            completed: workspace_ready,
+            completed_at: first_project_created.clone(),
+            resource_created: primary_project.clone(),
+        });
+
+        let primary_project_created = primary_project.is_some();
+        tasks.push(OnboardingTaskView {
+            id: format!("{}-project", slugify_client_name(&client_name)),
+            title: "Primary project created".to_string(),
+            completed: primary_project_created,
+            completed_at: first_project_created.clone(),
+            resource_created: primary_project.clone(),
+        });
+
+        let kickoff_logged = logged_hours > 0.0;
+        tasks.push(OnboardingTaskView {
+            id: format!("{}-kickoff", slugify_client_name(&client_name)),
+            title: "Kickoff execution logged".to_string(),
+            completed: kickoff_logged,
+            completed_at: first_time_entry.clone(),
+            resource_created: if kickoff_logged {
+                Some(format!("{logged_hours:.1}h logged"))
+            } else {
+                None
+            },
+        });
+
+        let docs_ready = !matching_docs.is_empty();
+        let first_doc_date = matching_docs
+            .iter()
+            .filter_map(|doc| doc.modified_on)
+            .min()
+            .and_then(ms_to_datetime_string);
+        tasks.push(OnboardingTaskView {
+            id: format!("{}-docs", slugify_client_name(&client_name)),
+            title: "Knowledge docs linked".to_string(),
+            completed: docs_ready,
+            completed_at: first_doc_date,
+            resource_created: if docs_ready {
+                Some(format!("{} docs", matching_docs.len()))
+            } else {
+                None
+            },
+        });
+
+        let delivery_active = matching_issues + matching_cards > 0;
+        tasks.push(OnboardingTaskView {
+            id: format!("{}-delivery", slugify_client_name(&client_name)),
+            title: "Delivery board activity detected".to_string(),
+            completed: delivery_active,
+            completed_at: None,
+            resource_created: if delivery_active {
+                Some(format!("{} signals", matching_issues + matching_cards))
+            } else {
+                None
+            },
+        });
+
+        let total_tasks = tasks.len() as u32;
+        let completed_tasks = tasks.iter().filter(|task| task.completed).count() as u32;
+        let progress_percent = if total_tasks > 0 {
+            (completed_tasks as f64 / total_tasks as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let start_date = first_time_entry
+            .clone()
+            .or(first_project_created.clone())
+            .unwrap_or_else(|| Utc::now().format("%Y-%m-%dT00:00:00").to_string());
+        let days_elapsed = parse_datetime_flexible(&start_date)
+            .map(|start| Utc::now().signed_duration_since(start).num_days().max(0) as u32)
+            .unwrap_or(0);
+
+        let status = if completed_tasks == total_tasks && total_tasks > 0 {
+            "completed"
+        } else if days_elapsed >= 14 && progress_percent < 60.0 {
+            "stalled"
+        } else {
+            "in_progress"
+        }
+        .to_string();
+
+        flows.push(OnboardingFlowView {
+            client_id: format!("onboarding-{}", slugify_client_name(&client_name)),
+            client_name,
+            start_date,
+            completed_tasks,
+            total_tasks,
+            progress_percent,
+            status,
+            tasks,
+            days_elapsed,
+        });
+    }
+
+    flows.sort_by(|left, right| {
+        left.status
+            .cmp(&right.status)
+            .then(right.days_elapsed.cmp(&left.days_elapsed))
+            .then(left.client_name.cmp(&right.client_name))
+    });
+    Ok(flows)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4658,15 +6992,435 @@ pub struct PlannerSlotView {
 }
 
 #[tauri::command]
-pub async fn get_planner_capacity(
-    _db: State<'_, DbPool>,
-) -> Result<Vec<PlannerSlotView>, String> {
-    Ok(vec![])
+pub async fn get_planner_capacity(db: State<'_, DbPool>) -> Result<Vec<PlannerSlotView>, String> {
+    let pool = &db.0;
+    let employees = queries::get_employees(pool)
+        .await
+        .map_err(|e| format!("load employees for planner: {e}"))?;
+
+    let now = Local::now();
+    let today = now.date_naive();
+    let day_start = today
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let next_day = (today + chrono::Duration::days(1))
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let day_start_ms = today
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+    let day_end_ms = (today + chrono::Duration::days(1))
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+
+    let mut meetings_by_person: HashMap<String, u32> = HashMap::new();
+    let mut open_issue_load_by_person: HashMap<String, f64> = HashMap::new();
+
+    if let Ok(client) = get_huly_client(pool).await {
+        let (events, issues) = tokio::join!(client.get_calendar_events(), client.get_issues(None));
+        let events = events.unwrap_or_default();
+        let issues = issues.unwrap_or_default();
+
+        for event in events {
+            let Some(start_ms) = event.date else {
+                continue;
+            };
+            if start_ms < day_start_ms || start_ms >= day_end_ms {
+                continue;
+            }
+
+            if let Some(creator) = event.created_by.as_deref() {
+                *meetings_by_person.entry(creator.to_string()).or_default() += 1;
+            }
+            if let Some(participants) = event.participants {
+                for participant in participants {
+                    *meetings_by_person.entry(participant).or_default() += 1;
+                }
+            }
+        }
+
+        for issue in issues {
+            if issue_is_completed(&issue) {
+                continue;
+            }
+            let Some(assignee) = issue.assignee.as_deref() else {
+                continue;
+            };
+            *open_issue_load_by_person
+                .entry(assignee.to_string())
+                .or_default() += 0.5;
+        }
+    }
+
+    let mut rows = Vec::new();
+    for employee in employees.into_iter().filter(|employee| employee.is_active) {
+        let actual_hours = query_hours_for_range(pool, &employee.id, &day_start, &next_day).await?;
+        let meeting_blocks = employee
+            .huly_person_id
+            .as_deref()
+            .and_then(|person_id| meetings_by_person.get(person_id))
+            .copied()
+            .unwrap_or(0);
+        let issue_load = employee
+            .huly_person_id
+            .as_deref()
+            .and_then(|person_id| open_issue_load_by_person.get(person_id))
+            .copied()
+            .unwrap_or(0.0);
+
+        let scheduled_hours = (actual_hours + meeting_blocks as f64 + issue_load).clamp(0.0, 12.0);
+        let focus_blocks = (scheduled_hours - meeting_blocks as f64).max(0.0).round() as u32;
+        let capacity_utilization = (scheduled_hours / 8.0) * 100.0;
+
+        rows.push(PlannerSlotView {
+            employee_name: employee.name,
+            scheduled_hours,
+            actual_hours,
+            focus_blocks,
+            meeting_blocks,
+            capacity_utilization,
+        });
+    }
+
+    rows.sort_by(|left, right| left.employee_name.cmp(&right.employee_name));
+    Ok(rows)
+}
+
+struct TrainingTrackBlueprint {
+    id: &'static str,
+    name: &'static str,
+    total_modules: u32,
+    modules: &'static [&'static str],
+}
+
+const TRAINING_TRACK_BLUEPRINTS: &[TrainingTrackBlueprint] = &[
+    TrainingTrackBlueprint {
+        id: "onboarding",
+        name: "Onboarding Track",
+        total_modules: 6,
+        modules: &[
+            "Repo Orientation",
+            "Sync Pipeline Basics",
+            "Operational Playbooks",
+            "Alerting & Escalation",
+            "Client Delivery QA",
+            "Release Readiness",
+        ],
+    },
+    TrainingTrackBlueprint {
+        id: "smart-home",
+        name: "Smart Home Integration Track",
+        total_modules: 8,
+        modules: &[
+            "Device Protocol Basics",
+            "Gateway Integrations",
+            "Firmware Lifecycle",
+            "IoT Reliability Patterns",
+            "Field Diagnostics",
+            "Telemetry Validation",
+            "Integration Regression",
+            "Production Hardening",
+        ],
+    },
+    TrainingTrackBlueprint {
+        id: "pm-dev",
+        name: "PM-Developer Track",
+        total_modules: 7,
+        modules: &[
+            "Scope Breakdown",
+            "Sprint Definition",
+            "Dependency Mapping",
+            "Execution Coordination",
+            "Risk Management",
+            "Retro Synthesis",
+            "Outcome Reporting",
+        ],
+    },
+    TrainingTrackBlueprint {
+        id: "rd",
+        name: "R&D Contributor Track",
+        total_modules: 5,
+        modules: &[
+            "Research Intake",
+            "Spike Design",
+            "Prototype Validation",
+            "Evidence Capture",
+            "Knowledge Transfer",
+        ],
+    },
+];
+
+#[derive(Debug, Clone)]
+struct EmployeeTrainingSignal {
+    employee_name: String,
+    hours_month: f64,
+    distinct_projects: u32,
+    device_hours: f64,
+    documentation_hours: f64,
+    coordination_hours: f64,
+    experimentation_hours: f64,
+}
+
+fn training_track_catalog() -> &'static [TrainingTrackBlueprint] {
+    TRAINING_TRACK_BLUEPRINTS
+}
+
+fn issue_status_text(issue: &HulyIssue) -> String {
+    issue
+        .status
+        .as_ref()
+        .map(|status| {
+            status
+                .as_str()
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| status.to_string())
+        })
+        .unwrap_or_default()
+}
+
+fn status_indicates_completion(status_text: &str) -> bool {
+    let normalized = status_text.to_lowercase();
+    [
+        "done",
+        "completed",
+        "closed",
+        "resolved",
+        "canceled",
+        "cancelled",
+        "deployed",
+    ]
+    .iter()
+    .any(|keyword| normalized.contains(keyword))
+}
+
+fn issue_is_completed(issue: &HulyIssue) -> bool {
+    status_indicates_completion(&issue_status_text(issue))
+}
+
+fn issue_completed_at(issue: &HulyIssue) -> Option<i64> {
+    if issue_is_completed(issue) {
+        issue.modified_on.or(issue.created_on)
+    } else {
+        None
+    }
+}
+
+fn score_to_skill_level(score: f64) -> u32 {
+    if score >= 0.75 {
+        3
+    } else if score >= 0.45 {
+        2
+    } else if score >= 0.2 {
+        1
+    } else {
+        0
+    }
+}
+
+fn compute_training_progress(track_id: &str, signal: &EmployeeTrainingSignal) -> f64 {
+    let hours_ratio = (signal.hours_month / 160.0).clamp(0.0, 1.0);
+    let project_ratio = (signal.distinct_projects as f64 / 4.0).clamp(0.0, 1.0);
+    let total_hours = signal.hours_month.max(1.0);
+    let device_ratio = (signal.device_hours / total_hours).clamp(0.0, 1.0);
+    let docs_ratio = (signal.documentation_hours / total_hours).clamp(0.0, 1.0);
+    let coordination_ratio = (signal.coordination_hours / total_hours).clamp(0.0, 1.0);
+    let experimentation_ratio = (signal.experimentation_hours / total_hours).clamp(0.0, 1.0);
+
+    let weighted = match track_id {
+        "onboarding" => 0.35 * hours_ratio + 0.35 * project_ratio + 0.30 * docs_ratio,
+        "smart-home" => 0.25 * hours_ratio + 0.55 * device_ratio + 0.20 * project_ratio,
+        "pm-dev" => 0.40 * hours_ratio + 0.30 * coordination_ratio + 0.30 * project_ratio,
+        "rd" => 0.25 * hours_ratio + 0.45 * experimentation_ratio + 0.30 * docs_ratio,
+        _ => 0.0,
+    };
+    (weighted * 100.0).clamp(0.0, 100.0)
+}
+
+fn build_training_status_rows(signals: &[EmployeeTrainingSignal]) -> Vec<TrainingStatusRow> {
+    let now = Local::now();
+    let deadline = if now.month() == 12 {
+        NaiveDate::from_ymd_opt(now.year() + 1, 1, 1)
+            .unwrap()
+            .pred_opt()
+            .unwrap()
+    } else {
+        NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1)
+            .unwrap()
+            .pred_opt()
+            .unwrap()
+    }
+    .format("%Y-%m-%d")
+    .to_string();
+
+    let mut rows = Vec::new();
+    for signal in signals {
+        for track in training_track_catalog() {
+            let progress = compute_training_progress(track.id, signal);
+            let mut modules_done = ((progress / 100.0) * track.total_modules as f64).floor() as u32;
+            if progress >= 99.5 {
+                modules_done = track.total_modules;
+            }
+            modules_done = modules_done.min(track.total_modules);
+
+            let next_module = if modules_done < track.total_modules {
+                track
+                    .modules
+                    .get(modules_done as usize)
+                    .map(|module| module.to_string())
+            } else {
+                None
+            };
+
+            let status = if modules_done >= track.total_modules {
+                "completed"
+            } else if now.day() >= 25 && progress < 60.0 {
+                "overdue"
+            } else {
+                "in progress"
+            }
+            .to_string();
+
+            rows.push(TrainingStatusRow {
+                employee_name: signal.employee_name.clone(),
+                track: track.name.to_string(),
+                progress,
+                modules_done,
+                total_modules: track.total_modules,
+                next_module,
+                deadline: Some(deadline.clone()),
+                status,
+            });
+        }
+    }
+
+    rows.sort_by(|left, right| {
+        left.employee_name
+            .cmp(&right.employee_name)
+            .then(left.track.cmp(&right.track))
+    });
+    rows
+}
+
+async fn load_training_signals(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<EmployeeTrainingSignal>, String> {
+    #[derive(sqlx::FromRow)]
+    struct TrainingSignalRow {
+        total_hours: f64,
+        distinct_projects: i64,
+        device_hours: f64,
+        documentation_hours: f64,
+        coordination_hours: f64,
+        experimentation_hours: f64,
+    }
+
+    let employees = queries::get_employees(pool)
+        .await
+        .map_err(|e| format!("load employees for training: {e}"))?;
+
+    let now = Local::now();
+    let month_start = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
+        .unwrap()
+        .format("%Y-%m-%dT00:00:00Z")
+        .to_string();
+    let month_end = if now.month() == 12 {
+        NaiveDate::from_ymd_opt(now.year() + 1, 1, 1).unwrap()
+    } else {
+        NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1).unwrap()
+    }
+    .format("%Y-%m-%dT00:00:00Z")
+    .to_string();
+
+    let mut signals = Vec::new();
+    for employee in employees.into_iter().filter(|employee| employee.is_active) {
+        let row: TrainingSignalRow = sqlx::query_as(
+            "SELECT
+                COALESCE(SUM(COALESCE(te.duration_seconds, 0)) / 3600.0, 0) AS total_hours,
+                COUNT(DISTINCT te.project_id) AS distinct_projects,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(COALESCE(te.description, '')) LIKE '%device%'
+                          OR LOWER(COALESCE(te.description, '')) LIKE '%iot%'
+                          OR LOWER(COALESCE(te.description, '')) LIKE '%firmware%'
+                          OR LOWER(COALESCE(p.name, '')) LIKE '%device%'
+                          OR LOWER(COALESCE(p.name, '')) LIKE '%iot%'
+                          OR LOWER(COALESCE(p.name, '')) LIKE '%firmware%'
+                        THEN COALESCE(te.duration_seconds, 0)
+                        ELSE 0
+                    END
+                ) / 3600.0, 0) AS device_hours,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(COALESCE(te.description, '')) LIKE '%doc%'
+                          OR LOWER(COALESCE(te.description, '')) LIKE '%guide%'
+                          OR LOWER(COALESCE(te.description, '')) LIKE '%runbook%'
+                          OR LOWER(COALESCE(te.description, '')) LIKE '%sop%'
+                        THEN COALESCE(te.duration_seconds, 0)
+                        ELSE 0
+                    END
+                ) / 3600.0, 0) AS documentation_hours,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(COALESCE(te.description, '')) LIKE '%meeting%'
+                          OR LOWER(COALESCE(te.description, '')) LIKE '%sync%'
+                          OR LOWER(COALESCE(te.description, '')) LIKE '%planning%'
+                          OR LOWER(COALESCE(te.description, '')) LIKE '%review%'
+                          OR LOWER(COALESCE(te.description, '')) LIKE '%retro%'
+                        THEN COALESCE(te.duration_seconds, 0)
+                        ELSE 0
+                    END
+                ) / 3600.0, 0) AS coordination_hours,
+                COALESCE(SUM(
+                    CASE
+                        WHEN LOWER(COALESCE(te.description, '')) LIKE '%research%'
+                          OR LOWER(COALESCE(te.description, '')) LIKE '%spike%'
+                          OR LOWER(COALESCE(te.description, '')) LIKE '%prototype%'
+                          OR LOWER(COALESCE(te.description, '')) LIKE '%experiment%'
+                          OR LOWER(COALESCE(te.description, '')) LIKE '%r&d%'
+                        THEN COALESCE(te.duration_seconds, 0)
+                        ELSE 0
+                    END
+                ) / 3600.0, 0) AS experimentation_hours
+             FROM time_entries te
+             LEFT JOIN projects p ON p.id = te.project_id
+             WHERE te.employee_id = ?1
+               AND te.start_time >= ?2
+               AND te.start_time < ?3",
+        )
+        .bind(&employee.id)
+        .bind(&month_start)
+        .bind(&month_end)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("query training signals for {}: {e}", employee.name))?;
+
+        signals.push(EmployeeTrainingSignal {
+            employee_name: employee.name,
+            hours_month: row.total_hours,
+            distinct_projects: row.distinct_projects.max(0) as u32,
+            device_hours: row.device_hours,
+            documentation_hours: row.documentation_hours,
+            coordination_hours: row.coordination_hours,
+            experimentation_hours: row.experimentation_hours,
+        });
+    }
+
+    signals.sort_by(|left, right| left.employee_name.cmp(&right.employee_name));
+    Ok(signals)
 }
 
 // ── Cloud credential sync ────────────────────────────────────────
 
-const WORKER_BASE_URL: &str = "https://teamforge-api.sheshnarayan-iyer.workers.dev";
+const DEFAULT_WORKER_BASE_URL: &str = "https://teamforge-api.sheshnarayan-iyer.workers.dev";
+const DEFAULT_CREDENTIALS_AUDIENCE: &str = "teamforge-desktop";
 
 #[derive(Debug, Clone, Deserialize)]
 struct CloudCredential {
@@ -4703,11 +7457,34 @@ pub struct CredentialSyncResult {
 #[tauri::command]
 pub async fn sync_cloud_credentials(db: State<'_, DbPool>) -> Result<CredentialSyncResult, String> {
     let pool = &db.0;
-    let url = format!("{}/v1/credentials?audience=teamforge-desktop", WORKER_BASE_URL);
+    let base_url = queries::get_setting(pool, "cloud_credentials_base_url")
+        .await
+        .map_err(|e| format!("read cloud_credentials_base_url: {e}"))?
+        .unwrap_or_else(|| DEFAULT_WORKER_BASE_URL.to_string());
+    let audience = queries::get_setting(pool, "cloud_credentials_audience")
+        .await
+        .map_err(|e| format!("read cloud_credentials_audience: {e}"))?
+        .unwrap_or_else(|| DEFAULT_CREDENTIALS_AUDIENCE.to_string());
+    let access_token = queries::get_setting(pool, "cloud_credentials_access_token")
+        .await
+        .map_err(|e| format!("read cloud_credentials_access_token: {e}"))?
+        .ok_or("cloud credential access token is not configured")?;
+
+    let access_token = access_token.trim();
+    if access_token.is_empty() {
+        return Err("cloud credential access token is not configured".to_string());
+    }
+
+    let mut url =
+        reqwest::Url::parse(&(base_url.trim_end_matches('/').to_string() + "/v1/credentials"))
+            .map_err(|e| format!("invalid cloud base url: {e}"))?;
+    url.query_pairs_mut()
+        .append_pair("audience", audience.trim());
 
     let client = reqwest::Client::new();
     let resp = client
-        .get(&url)
+        .get(url)
+        .bearer_auth(access_token)
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await
@@ -4717,7 +7494,8 @@ pub async fn sync_cloud_credentials(db: State<'_, DbPool>) -> Result<CredentialS
         return Err(format!("cloud returned status {}", resp.status()));
     }
 
-    let body: CloudCredentialResponse = resp.json().await.map_err(|e| format!("parse error: {e}"))?;
+    let body: CloudCredentialResponse =
+        resp.json().await.map_err(|e| format!("parse error: {e}"))?;
     if !body.ok {
         return Err("cloud returned ok=false".to_string());
     }
@@ -4753,7 +7531,11 @@ pub async fn sync_cloud_credentials(db: State<'_, DbPool>) -> Result<CredentialS
         }
     }
 
-    Ok(CredentialSyncResult { synced, skipped, errors })
+    Ok(CredentialSyncResult {
+        synced,
+        skipped,
+        errors,
+    })
 }
 
 #[cfg(test)]
@@ -4900,6 +7682,8 @@ mod tests {
                 content: None,
                 parent: None,
                 space: None,
+                created_by: None,
+                modified_on: None,
                 class: Some("document:class:Document".to_string()),
             }],
             boards: vec![HulyBoard {

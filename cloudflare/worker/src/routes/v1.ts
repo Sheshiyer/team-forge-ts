@@ -55,7 +55,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Credentials (shared integration tokens)
   if (method === "GET" && pathname === "/v1/credentials") {
-    return handleGetCredentials(env, url);
+    return handleGetCredentials(env, url, request);
   }
 
   // Connections

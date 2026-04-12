@@ -2,6 +2,7 @@ mod clockify;
 mod commands;
 mod db;
 mod huly;
+mod ops;
 mod slack;
 mod sync;
 
@@ -17,6 +18,8 @@ use crate::clockify::sync::ClockifySyncEngine;
 use crate::db::queries;
 use crate::huly::client::HulyClient;
 use crate::huly::sync::HulySyncEngine;
+use crate::slack::client::SlackClient;
+use crate::slack::sync::SlackSyncEngine;
 use crate::sync::scheduler::SyncScheduler;
 
 /// Managed state wrapper so Tauri commands can access the database pool.
@@ -105,11 +108,17 @@ pub fn run() {
             commands::get_quota_compliance,
             commands::get_time_entries_view,
             commands::get_project_breakdown,
+            commands::get_projects_catalog,
             commands::get_activity_feed,
             commands::get_presence_status,
             commands::get_employees,
             commands::update_employee_quota,
             commands::get_sync_status,
+            commands::get_identity_review_queue,
+            commands::set_identity_override,
+            commands::refresh_agent_feed,
+            commands::get_agent_feed,
+            commands::export_agent_feed_snapshot,
             commands::start_background_sync,
             commands::test_huly_connection,
             commands::test_slack_connection,
@@ -196,10 +205,25 @@ async fn run_tray_sync(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(token) = token {
         if !token.is_empty() {
             let client = HulyClient::connect(None, &token).await?;
-            let engine = HulySyncEngine::new(Arc::new(client), pool);
+            let engine = HulySyncEngine::new(Arc::new(client), pool.clone());
             engine.full_sync().await?;
         }
     }
+
+    let slack_token = queries::get_setting(&pool, "slack_bot_token")
+        .await
+        .map_err(|e| format!("read slack token: {e}"))?;
+
+    if let Some(token) = slack_token {
+        if !token.trim().is_empty() {
+            let engine = SlackSyncEngine::new(Arc::new(SlackClient::new(token)), pool.clone());
+            engine.sync_message_deltas().await?;
+        }
+    }
+
+    queries::refresh_agent_feed_projection(&pool)
+        .await
+        .map_err(|e| format!("refresh agent feed projection: {e}"))?;
 
     Ok(())
 }

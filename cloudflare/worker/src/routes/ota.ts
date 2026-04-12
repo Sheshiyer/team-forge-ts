@@ -21,17 +21,45 @@ interface OtaChannel {
   name: string;
 }
 
+function parseTarget(target: string): { platform: string; arch: string } | null {
+  const normalized = target.trim().toLowerCase();
+  const match = normalized.match(/^([a-z0-9_]+)-([a-z0-9_]+)$/);
+  if (!match) return null;
+
+  return { platform: match[1], arch: match[2] };
+}
+
+function otaNoUpdate(message: string): Response {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "x-teamforge-updater-status": message,
+    },
+  });
+}
+
+function otaManifestResponse(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+    },
+  });
+}
+
 export async function handleOtaCheck(env: Env, url: URL): Promise<Response> {
   if (!env.TEAMFORGE_DB) return jsonError({ code: "db_unavailable", message: "Database not available.", retryable: true }, 503);
 
   const channel = url.searchParams.get("channel") ?? env.TF_DEFAULT_OTA_CHANNEL ?? "stable";
-  const platform = url.searchParams.get("platform") ?? "darwin";
-  const arch = url.searchParams.get("arch") ?? "aarch64";
+  const target = url.searchParams.get("target");
+  const parsedTarget = target ? parseTarget(target) : null;
+  const platform = parsedTarget?.platform ?? url.searchParams.get("platform") ?? "darwin";
+  const arch = parsedTarget?.arch ?? url.searchParams.get("arch") ?? "aarch64";
   const currentVersion = url.searchParams.get("currentVersion");
 
   const ch = await queryFirst<OtaChannel>(env.TEAMFORGE_DB, "SELECT id, name FROM ota_channels WHERE name = ? AND is_active = 1", channel);
   if (!ch) {
-    return jsonOk({ update: null, message: `Channel '${channel}' not found or inactive.` });
+    return otaNoUpdate(`channel '${channel}' not found or inactive`);
   }
 
   const release = await queryFirst<OtaRelease>(
@@ -43,21 +71,23 @@ export async function handleOtaCheck(env: Env, url: URL): Promise<Response> {
   );
 
   if (!release) {
-    return jsonOk({ update: null, message: "No active release found for this channel/platform/arch." });
+    return otaNoUpdate("no active release for channel/platform/arch");
   }
 
   // If client is already on this version, no update needed
   if (currentVersion && currentVersion === release.version) {
-    return jsonOk({ update: null, message: "Already up to date." });
+    return otaNoUpdate("already up to date");
   }
 
-  // Tauri-compatible updater manifest
-  return jsonOk({
+  const targetKey = `${release.platform}-${release.arch}`;
+
+  // Tauri updater manifest (must be top-level; no envelope)
+  return otaManifestResponse({
     version: release.version,
     notes: release.release_notes ?? "",
     pub_date: release.pub_date,
     platforms: {
-      [`${platform}-${arch}`]: {
+      [targetKey]: {
         url: release.artifact_url,
         signature: release.signature,
       },

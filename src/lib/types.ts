@@ -28,11 +28,20 @@ export interface QuotaRow {
 }
 
 export interface ProjectStats {
+  projectId: string | null;
   projectName: string;
   totalHours: number;
   billableHours: number;
   teamMembers: number;
   utilization: number;
+}
+
+export interface ProjectCatalogItem {
+  id: string;
+  name: string;
+  clientName: string | null;
+  isBillable: boolean;
+  isArchived: boolean;
 }
 
 export interface PresenceStatus {

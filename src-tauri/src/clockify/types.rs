@@ -52,6 +52,7 @@ pub struct ClockifyTimeEntry {
     pub id: String,
     pub description: Option<String>,
     pub time_interval: ClockifyTimeInterval,
+    pub project_id: Option<String>,
     pub project: Option<ClockifyProjectRef>,
     pub billable: bool,
 }

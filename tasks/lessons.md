@@ -18,3 +18,7 @@
 - For LCARS screens, avoid generic dashboard cards and boxed admin panels; build the interface from segmented rails, bands, strips, and console sections that feel native to the Star Trek shell already in the app.
 - When the user asks for an overall design consistency overhaul, do not narrow the work to the page they mentioned first; audit and improve the shared shell, common controls, spacing system, and cross-page visual language together.
 - When a user explicitly asks to update the README after shipping visible product or release changes, refresh the repo landing page in the same pass instead of treating docs as optional follow-up work.
+- For small trusted teams, default cloud credential sync to enabled and require explicit opt-out; reducing setup friction for recurring sync workflows can be more important than adding extra toggle steps.
+- When the user asks to print a credential and run a clean rebuild, do both in the same pass: return the live token value and produce a verified fresh app artifact, including fallback for updater-signing blockers.
+- Do not equate “sync succeeded” with “page will render data”: verify each page’s query shape and ensure synced entities (for example, projects) are surfaced directly, not only through derived activity tables.
+- When Tauri updater public keys are configured, tagged GitHub releases will fail to publish assets unless `TAURI_SIGNING_PRIVATE_KEY` is present or updater artifact generation is explicitly disabled in CI build args.

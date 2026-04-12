@@ -12,6 +12,31 @@ CREATE TABLE IF NOT EXISTS employees (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS identity_map (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    employee_id TEXT REFERENCES employees(id),
+    confidence REAL NOT NULL DEFAULT 1.0,
+    resolution_status TEXT NOT NULL DEFAULT 'linked',
+    match_method TEXT,
+    is_override INTEGER NOT NULL DEFAULT 0,
+    override_by TEXT,
+    override_reason TEXT,
+    override_at TEXT,
+    first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(source, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_identity_map_employee_source
+    ON identity_map(employee_id, source);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_identity_map_linked_employee_source
+    ON identity_map(employee_id, source)
+    WHERE employee_id IS NOT NULL AND resolution_status = 'linked';
+
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
     clockify_project_id TEXT NOT NULL UNIQUE,
@@ -64,6 +89,74 @@ CREATE TABLE IF NOT EXISTS huly_document_activity (
     occurred_at TEXT NOT NULL,
     synced_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS slack_message_activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_key TEXT NOT NULL UNIQUE,
+    slack_channel_id TEXT NOT NULL,
+    slack_user_id TEXT,
+    employee_id TEXT REFERENCES employees(id),
+    message_ts TEXT NOT NULL,
+    message_ts_ms INTEGER,
+    content_preview TEXT,
+    detected_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_slack_message_activity_employee_ts
+    ON slack_message_activity(employee_id, message_ts_ms);
+CREATE INDEX IF NOT EXISTS idx_slack_message_activity_channel_ts
+    ON slack_message_activity(slack_channel_id, message_ts_ms);
+
+CREATE TABLE IF NOT EXISTS ops_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sync_key TEXT NOT NULL UNIQUE,
+    schema_version TEXT NOT NULL,
+    source TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    actor_employee_id TEXT REFERENCES employees(id),
+    actor_clockify_user_id TEXT,
+    actor_huly_person_id TEXT,
+    actor_slack_user_id TEXT,
+    occurred_at TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'info',
+    payload_json TEXT NOT NULL,
+    detected_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_ops_events_source_event_time
+    ON ops_events(source, event_type, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_ops_events_actor_time
+    ON ops_events(actor_employee_id, occurred_at);
+
+CREATE TABLE IF NOT EXISTS agent_feed (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sync_key TEXT NOT NULL UNIQUE,
+    schema_version TEXT NOT NULL,
+    source TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    detected_at TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    owner_hint TEXT,
+    actor_employee_id TEXT,
+    actor_clockify_user_id TEXT,
+    actor_huly_person_id TEXT,
+    actor_slack_user_id TEXT,
+    payload_json TEXT NOT NULL,
+    metadata_json TEXT,
+    refreshed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_feed_occurred_at
+    ON agent_feed(occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_feed_severity_occurred
+    ON agent_feed(severity, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_feed_owner_occurred
+    ON agent_feed(owner_hint, occurred_at DESC);
 
 CREATE TABLE IF NOT EXISTS presence (
     employee_id TEXT PRIMARY KEY REFERENCES employees(id),

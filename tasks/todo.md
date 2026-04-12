@@ -794,6 +794,77 @@ Execute workspace normalization issue `#18` against the live Huly workspace usin
   - `manualReviewCount = 2`
 - Verification:
   - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+
+## Goal
+
+Execute Issue #23: add periodic Huly sync to the background scheduler (currently Clockify-centric).
+
+## Plan
+
+- [x] Refactor scheduler startup to treat Clockify and Huly as independent integrations
+- [x] Add periodic Huly polling loops for issues/presence/team cache
+- [x] Preserve existing Clockify scheduling behavior and quota-alert checks
+- [x] Ensure scheduler can still start when only one integration is configured
+- [x] Verify with Rust tests
+
+## Review
+
+- Updated scheduler architecture in:
+  - `src-tauri/src/sync/scheduler.rs`
+- Behavior changes:
+  - Scheduler no longer hard-requires Clockify settings to start.
+  - It now starts when either integration is configured:
+    - Clockify config: `clockify_api_key` + `clockify_workspace_id`
+    - Huly config: `huly_token`
+  - Existing Clockify jobs remain:
+    - presence every 30s
+    - time entries every 5m
+    - users/projects + quota checks every 60m
+  - New Huly jobs added:
+    - issues every 10m
+    - presence every 2m
+    - team cache every 60m
+  - If Huly token exists but Huly connection fails at scheduler boot, Clockify jobs still run; scheduler only returns `None` if no jobs can be started.
+- Verification:
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+
+## Goal
+
+Execute Issue #22: persist Slack activity to durable SQLite tables so chat analytics and signals do not rely only on runtime Slack API aggregation.
+
+## Plan
+
+- [x] Add canonical `slack_message_activity` SQLite table + indexes
+- [x] Add DB model and query APIs for idempotent Slack message persistence
+- [x] Persist Slack messages during existing Slack fetch paths (`chat activity`, `employee summary`, `daily standup`)
+- [x] Add fallback read path from persisted Slack activity when live Slack API is unavailable
+- [x] Verify with Rust tests
+
+## Review
+
+- Added durable Slack activity table:
+  - `src-tauri/migrations/001_initial.sql`
+  - table: `slack_message_activity`
+  - unique key: `message_key`
+  - indexes: `(employee_id, message_ts_ms)` and `(slack_channel_id, message_ts_ms)`
+- Added model + queries:
+  - `src-tauri/src/db/models.rs`: `SlackMessageActivity`
+  - `src-tauri/src/db/queries.rs`:
+    - `upsert_slack_message_activity`
+    - `get_slack_message_activity_since`
+  - regression test:
+    - `upsert_slack_message_activity_is_idempotent_by_message_key`
+- Added command-layer persistence hooks:
+  - `src-tauri/src/commands/mod.rs`
+  - helper: `persist_slack_message_activity(...)`
+  - writes now occur in:
+    - `get_chat_activity` Slack loop
+    - employee summary Slack loop
+    - daily standup Slack loop
+- Added fallback analytics behavior:
+  - `get_chat_activity` now reads persisted `slack_message_activity` rows for the last 7 days when live Slack sync is unavailable.
+- Verification:
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
   - `cargo test --manifest-path src-tauri/Cargo.toml preview_live_huly_workspace_normalization -- --ignored --nocapture` ✅
   - `cargo test --manifest-path src-tauri/Cargo.toml apply_live_huly_workspace_normalization -- --ignored --nocapture` ✅
   - `cargo test --manifest-path src-tauri/Cargo.toml preview_live_huly_workspace_normalization -- --ignored --nocapture` ✅ post-apply
@@ -1687,3 +1758,201 @@ Align app/package version metadata with the new `v0.1.8` rollout.
 - Verification:
   - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
   - `pnpm build` ✅
+
+## Goal
+
+Create a concrete GitHub issue backlog for the 20-point TeamForge ↔ Paperclip ops-data unification program, with clear ownership slices across TeamForge runtime and Paperclip orchestration.
+
+## Plan
+
+- [x] Validate repo mapping and label strategy for issue creation
+- [x] Draft 20 implementation issues with acceptance criteria and dependency hints
+- [x] Publish issues in GitHub and capture the created issue links
+- [x] Add a review summary with ownership grouping and rollout order
+
+## Review
+
+- Created 20 backlog issues in `Sheshiyer/team-forge-ts` covering the full TeamForge ↔ Paperclip ops-data unification scope:
+  - `#20` Define canonical ops_event schema for TeamForge ↔ Paperclip
+  - `#21` Add deterministic sync_key generation for idempotent ops_event processing
+  - `#22` Persist Slack activity to SQLite for durable analytics and feed export
+  - `#23` Add periodic Huly sync in background scheduler
+  - `#24` Add Slack delta sync with cursor checkpoints
+  - `#25` Introduce cross-platform identity map (Clockify ↔ Huly ↔ Slack)
+  - `#26` Add identity-match confidence + manual override controls
+  - `#27` Create dedicated agent_feed projection in TeamForge
+  - `#28` Expose TeamForge agent_feed export API for Paperclip
+  - `#29` Build ts-paperclip teamforge-sync ingestion script
+  - `#30` Persist immutable dated feed snapshots into vault
+  - `#31` Enrich paperclip-sync dispatch with TeamForge feed context
+  - `#32` Implement role-specific agent_feed slices (Jarvis/Clawd/Sentinel/Sage)
+  - `#33` Inject role-specific feed slices into agent-prompt-assembler
+  - `#34` Add signal-to-owner routing rules for ops events
+  - `#35` Add severity scoring pipeline for ops signals
+  - `#36` Add dedupe windows and cooldown suppression for repeated alerts
+  - `#37` Add ingestion health metrics (lag/failure/coverage)
+  - `#38` Implement unified data quality checks and drift detection
+  - `#39` Add closed-loop action outcome tracking for agent interventions
+- Repo mapping decision:
+  - `ts-paperclip` local path points to repo `Sheshiyer/14113-X-vault`, not a separate `ts-paperclip` GitHub repo.
+  - All issues were created in `team-forge-ts` with explicit ownership notes for TeamForge runtime vs Paperclip scripts.
+- Suggested rollout waves encoded by dependency order:
+  - Wave 1 (contract + identity + persistence): `#20 #21 #22 #25 #26 #27`
+  - Wave 2 (sync + export + ingestion): `#23 #24 #28 #29 #30`
+  - Wave 3 (agent context + routing intelligence): `#31 #32 #33 #34 #35 #36`
+  - Wave 4 (operational excellence + learning loop): `#37 #38 #39`
+- Milestone created and linked:
+  - `Ops Fabric v0.3.0 — TeamForge ↔ Paperclip Unification`
+  - `https://github.com/Sheshiyer/team-forge-ts/milestone/2`
+  - Issues attached: `#20` through `#39` (20 total)
+- Project board created and populated:
+  - `TeamForge Ops Fabric Rollout`
+  - `https://github.com/users/Sheshiyer/projects/6`
+  - Items attached: 20 (`#20` through `#39`)
+
+## Goal
+
+Execute Ops Fabric backlog sequentially, starting with foundational Issue #20 (canonical ops_event schema) and Issue #21 (deterministic sync_key generation) in TeamForge.
+
+## Plan
+
+- [x] Add canonical `ops_events` persistence schema (SQLite table + indexes + model)
+- [x] Implement deterministic `sync_key` generation for `ops_event/v1`
+- [x] Emit canonical ops events from Clockify and Huly sync pipelines
+- [x] Add schema contract docs for TeamForge ↔ Paperclip consumption
+- [x] Run Rust test suite to verify no regressions
+
+## Review
+
+- Implemented canonical ops event foundation for Issues `#20` and `#21`:
+  - Added `ops_event/v1` sync-key helper module:
+    - `src-tauri/src/ops/mod.rs`
+    - deterministic `build_sync_key` + normalization rules + unit tests
+  - Added canonical persistence table and indexes:
+    - `src-tauri/migrations/001_initial.sql`
+    - table: `ops_events` with unique `sync_key`
+  - Added Rust model + query layer support:
+    - `src-tauri/src/db/models.rs` (`OpsEvent`)
+    - `src-tauri/src/db/queries.rs` (`upsert_ops_event`)
+    - query test: `upsert_ops_event_is_idempotent_by_sync_key`
+- Wired emission paths:
+  - Clockify:
+    - `src-tauri/src/clockify/sync.rs` now emits `clockify.time_entry.logged` ops events for each synced time entry.
+  - Huly:
+    - `src-tauri/src/huly/sync.rs` now emits `huly.issue.modified` ops events for each synced issue.
+    - events are emitted even when employee mapping is unresolved (actor person ID retained), while legacy `huly_issue_activity` still requires mapped employee.
+- Added TeamForge ↔ Paperclip contract doc:
+  - `docs/architecture/contracts/ops-event-schema-contract.md`
+  - linked from `docs/architecture/contracts/README.md`
+- Verification:
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
+
+## Goal
+
+Execute sequential Ops Fabric items `#22`, `#23`, and `#24` by hardening Slack persistence, expanding scheduler coverage, and introducing cursor-checkpointed Slack delta sync.
+
+## Plan
+
+- [x] `#22` Persist Slack message activity durably in SQLite with idempotent upsert semantics
+- [x] `#23` Run Huly issue/presence/team-cache sync on scheduler intervals independent of Clockify configuration
+- [x] `#24` Add Slack periodic delta sync with per-channel cursor checkpoints and bootstrap backfill strategy
+- [x] Add scheduler + tray integration for periodic/manual Slack delta sync execution
+- [x] Verify Rust formatting and tests after all sync changes
+
+## Review
+
+- Implemented `#22` durable Slack activity persistence:
+  - `src-tauri/migrations/001_initial.sql`
+    - `slack_message_activity` table + indexes (`message_key` unique idempotency key).
+  - `src-tauri/src/db/models.rs`
+    - `SlackMessageActivity` model.
+  - `src-tauri/src/db/queries.rs`
+    - `upsert_slack_message_activity`, `get_slack_message_activity_since`.
+    - idempotency test: `upsert_slack_message_activity_is_idempotent_by_message_key`.
+  - `src-tauri/src/commands/mod.rs`
+    - Slack ingestion paths now persist message activity rows as they ingest.
+- Implemented `#23` periodic Huly scheduler jobs:
+  - `src-tauri/src/sync/scheduler.rs`
+    - scheduler now starts with independent integration checks instead of hard coupling.
+    - added periodic jobs:
+      - Huly issues: every 10m
+      - Huly presence: every 2m
+      - Huly team cache refresh: every 60m
+- Implemented `#24` Slack delta sync with cursor checkpoints:
+  - `src-tauri/src/slack/sync.rs` (new)
+    - Added `SlackSyncEngine::sync_message_deltas` with:
+      - per-channel checkpoint scope via `sync_state` (`source=slack`, `entity=messages_channel:<channel_id>`),
+      - persisted JSON checkpoint payload (`cursor`, `oldest_ts`, `last_message_ts`),
+      - first-run bootstrap backfill strategy (`slack_sync_backfill_days`, default 7),
+      - resume-after-restart behavior by restoring cursor/oldest checkpoint,
+      - sync lag observability (`max_lag_seconds`) persisted in summary sync state (`source=slack`, `entity=messages_delta`).
+  - `src-tauri/src/slack/client.rs`
+    - Added rate-limit and transient server retry logic in Slack API requests.
+    - Added page-level history fetch API (`get_channel_messages_page`) to support checkpointed pagination.
+  - `src-tauri/src/sync/scheduler.rs`
+    - added periodic Slack delta sync job every 3m when `slack_bot_token` is configured.
+  - `src-tauri/src/lib.rs`
+    - tray/manual sync (`Sync Now`) now also executes Slack delta sync.
+  - `src-tauri/src/slack/mod.rs`
+    - exported new `sync` module.
+  - `src-tauri/src/slack/sync.rs`
+    - added unit tests for checkpoint parsing and Slack timestamp parsing.
+- Verification:
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅ (`21 passed`, `0 failed`, `3 ignored`)
+
+## Goal
+
+Execute the remaining Ops Fabric backlog items `#29` through `#39` in one continuous implementation pass across TeamForge + ts-paperclip.
+
+## Plan
+
+- [x] `#29` Add `teamforge-sync.sh` ingestion with cursor checkpoints, schema validation, idempotent ingest, and cycle integration
+- [x] `#30` Persist immutable date-partitioned TeamForge feed snapshots with replay metadata and retention notes
+- [x] `#31` Enrich Paperclip dispatch payloads using TeamForge feed context with bounded deterministic formatting and dry-run preview
+- [x] `#32` Add deterministic role-specific feed slices (`jarvis`, `clawd`, `sentinel`, `sage`) plus explicit overlap/fallback policy
+- [x] `#33` Inject role-specific feed slice blocks into `agent-prompt-assembler.sh` with missing-slice handling and prompt-size guardrails
+- [x] `#34` Implement signal-to-owner routing rules with override + fallback behavior and evaluation traces
+- [x] `#35` Add severity scoring + rationale fields and plumb severity into dispatch priority assignment
+- [x] `#36` Add cooldown-based dedupe suppression with bypass for critical events and suppression counters
+- [x] `#37` Expose ingestion health metrics (lag/failure/coverage) as persisted artifacts and command output
+- [x] `#38` Add data-quality checks (orphan refs, stale mappings, timestamp drift) and quality score output
+- [x] `#39` Track closed-loop outcomes by linking dispatched tasks back to `sync_key` and recording resolution/recurrence metrics
+- [x] Run script-level verification for TeamForge sync/cycle/prompt assembly behavior and log all outcomes in review notes
+
+## Review
+
+- Implemented the full `#29`-`#39` Paperclip-side Ops Fabric surface in `ts-paperclip`:
+  - Added `scripts/teamforge-sync.sh` with:
+    - schema validation against `agent_feed/v1`,
+    - cursor-aware incremental ingestion,
+    - idempotent handling by `syncKey`,
+    - immutable snapshot writes to date-partitioned vault paths,
+    - replay + status + quality command modes,
+    - role-slice materialization (`jarvis`, `clawd`, `sentinel`, `sage`),
+    - routing rules + severity scoring + cooldown suppression,
+    - persisted health (`lag/failure/coverage`) and data quality findings,
+    - closed-loop outcome rollups based on task lifecycle + `source_sync_key`.
+- Integrated TeamForge sync into cycle orchestration:
+  - `scripts/paperclip-cycle.sh` now runs TeamForge sync before Paperclip issue sync and supports `--without-teamforge` and `--teamforge-dry-run`.
+  - `bootstrap.sh` now validates `scripts/teamforge-sync.sh` as a required executable.
+- Enriched dispatch and registry primitives:
+  - `scripts/dispatch-task.sh` supports `--details`, `--sync-key`, `--source-ref`, `--signal-severity`, `--score-rationale`, writes them into INBOX payloads, and forwards metadata to the registry.
+  - `scripts/task-registry.sh` now persists these fields (`details`, `source_sync_key`, `source_ref`, `signal_severity`, `score_rationale`) for downstream analytics and closed-loop reporting.
+- Added TeamForge context-driven paperclip dispatch enrichment:
+  - `scripts/paperclip-sync.sh` now reads role slices, builds deterministic bounded context blocks, supports `sync-issues --dry-run` preview mode, and attaches enrichment metadata on dispatch.
+- Added role-specific prompt injection:
+  - `scripts/agent-prompt-assembler.sh` now loads only the relevant TeamForge slice for the executing role, falls back gracefully to `jarvis`, and enforces prompt-size guardrails.
+- Added documentation and config surface:
+  - `manifest.yaml` includes TeamForge feed/routing/health/cooldown configuration keys.
+  - `memory/teamforge-ops-feed.md` documents replay, retention, routing, severity rubric, dedupe policy, alert thresholds, quality remediation, and closed-loop metrics.
+  - `memory/processes.md` now references the TeamForge ops-feed contract.
+
+- Verification executed:
+  - `bash -n` validation passed for all changed shell scripts and `bootstrap.sh`.
+  - End-to-end dry/live simulation on a writable mirror (`/tmp/ts-paperclip-work`) with synthetic TeamForge exports:
+    - initial ingest: `new=3 skipped=0 suppressed=0 dispatched=0 errors=0`,
+    - idempotent replay: `new=0 skipped=3 suppressed=3 dispatched=0 errors=0`,
+    - dispatch run: `new=2 skipped=0 suppressed=0 dispatched=2 errors=0`,
+    - outcome rollup after lifecycle mutation shows resolved/no-change split and time-to-resolution metrics.
+  - `paperclip-sync.sh sync-issues --dry-run` against local API endpoint currently fails in this shell when `http://127.0.0.1:3100` is unreachable, but dry-run enrichment path and syntax are validated.

@@ -6,6 +6,7 @@ import type {
   QuotaRow,
   TimeEntry,
   ProjectStats,
+  ProjectCatalogItem,
   ActivityItem,
   PresenceStatus,
   Employee,
@@ -66,6 +67,8 @@ const invokeApi = {
     }),
   getProjectBreakdown: (start: string, end: string) =>
     invoke<ProjectStats[]>("get_project_breakdown", { start, end }),
+  getProjectsCatalog: () =>
+    invoke<ProjectCatalogItem[]>("get_projects_catalog"),
   getActivityFeed: (limit: number) =>
     invoke<ActivityItem[]>("get_activity_feed", { limit }),
   getPresenceStatus: () => invoke<PresenceStatus[]>("get_presence_status"),

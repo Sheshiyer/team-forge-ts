@@ -318,7 +318,7 @@ function CrewCard({
         <div style={styles.crewCardMeta}>{subtitle}</div>
       </div>
       {(controls || onRemove) ? (
-        <div style={styles.crewCardActions}>
+        <div style={controls ? styles.crewCardActions : styles.crewCardActionsTight}>
           {controls}
           {onRemove ? (
             <button
@@ -360,6 +360,8 @@ function Team() {
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [monthlyHours, setMonthlyHours] = useState<MonthlyHoursView[]>([]);
   const isCompactLayout = viewportWidth < 1180;
+  const isNarrowLayout = viewportWidth < 980;
+  const isMobileLayout = viewportWidth < 760;
 
   const applySnapshot = useCallback((snapshot: TeamSnapshotView) => {
     setDepartments(snapshot.departments);
@@ -706,12 +708,64 @@ function Team() {
   ]);
   const orgWorkspaceStyle = {
     ...styles.orgWorkspace,
-    gridTemplateColumns: isCompactLayout ? "1fr" : styles.orgWorkspace.gridTemplateColumns,
+    gridTemplateColumns: isCompactLayout
+      ? "1fr"
+      : (styles.orgWorkspace.gridTemplateColumns as string),
+    gap: isNarrowLayout ? 14 : (styles.orgWorkspace.gap as number),
   };
   const teamRailStyle = {
     ...styles.teamRail,
     position: isCompactLayout ? "static" : styles.teamRail.position,
     top: isCompactLayout ? undefined : styles.teamRail.top,
+    padding: isMobileLayout ? "12px" : styles.teamRail.padding,
+  };
+  const orgButtonRowStyle = {
+    ...styles.buttonRow,
+    alignItems: isNarrowLayout ? "stretch" : styles.buttonRow.alignItems,
+    gap: isNarrowLayout ? 8 : styles.buttonRow.gap,
+  };
+  const orgCanvasStyle = {
+    ...styles.orgCanvas,
+    overflowX: isNarrowLayout ? "auto" : styles.orgCanvas.overflowX,
+  };
+  const bentoGridStyle = {
+    ...styles.bentoGrid,
+    gridTemplateColumns: isMobileLayout
+      ? "1fr"
+      : isNarrowLayout
+        ? "repeat(auto-fit, minmax(240px, 1fr))"
+        : (styles.bentoGrid.gridTemplateColumns as string),
+  };
+  const roleGridStyle = {
+    ...styles.roleGrid,
+    gridTemplateColumns: isMobileLayout
+      ? "1fr"
+      : (styles.roleGrid.gridTemplateColumns as string),
+  };
+  const memberGridStyle = {
+    ...styles.memberGrid,
+    gridTemplateColumns: isMobileLayout
+      ? "1fr"
+      : (styles.memberGrid.gridTemplateColumns as string),
+  };
+  const directoryListStyle = {
+    ...styles.leftRailList,
+    maxHeight: isCompactLayout ? 280 : styles.leftRailList.maxHeight,
+  };
+  const cardSelectStyle = {
+    ...styles.cardSelect,
+    minWidth: isNarrowLayout ? 0 : styles.cardSelect.minWidth,
+    maxWidth: isNarrowLayout ? "100%" : styles.cardSelect.maxWidth,
+  };
+  const departmentGridStyle = {
+    ...styles.departmentGrid,
+    gridTemplateColumns: isMobileLayout
+      ? "1fr"
+      : (styles.departmentGrid.gridTemplateColumns as string),
+  };
+  const monthlyHoursTableStyle = {
+    ...styles.table,
+    minWidth: isMobileLayout ? 760 : 900,
   };
 
   return (
@@ -767,7 +821,7 @@ function Team() {
                 </div>
               </div>
 
-              <div style={styles.buttonRow}>
+              <div style={orgButtonRowStyle}>
                 <button
                   onClick={handleSaveOrgChart}
                   disabled={orgSaving || !hasDraftChanges}
@@ -840,7 +894,7 @@ function Team() {
                       EVERY VISIBLE PERSON IS CURRENTLY MAPPED TO A DEPARTMENT.
                     </div>
                   ) : (
-                    <div style={styles.leftRailList}>
+                    <div style={directoryListStyle}>
                       {visibleUnassignedPeople.map((person) => {
                         const assignmentValue = currentAssignmentValue(
                           draftDepartments,
@@ -863,7 +917,7 @@ function Team() {
                                     event.target.value
                                   )
                                 }
-                                style={styles.cardSelect}
+                                style={cardSelectStyle}
                                 aria-label={`Assign ${person.name}`}
                               >
                                 <option value="unassigned">UNASSIGNED</option>
@@ -886,7 +940,7 @@ function Team() {
                   <div style={styles.teamRailMeta}>DIRECT ROLE ASSIGNMENT</div>
                 </div>
 
-                <div style={styles.leftRailList}>
+                <div style={directoryListStyle}>
                   {visibleDirectoryPeople.map((person) => {
                     const assignmentValue = currentAssignmentValue(
                       draftDepartments,
@@ -925,7 +979,7 @@ function Team() {
                                 event.target.value
                               )
                             }
-                            style={styles.cardSelect}
+                            style={cardSelectStyle}
                             aria-label={`Assign ${person.name}`}
                           >
                             <option value="unassigned">UNASSIGNED</option>
@@ -942,8 +996,8 @@ function Team() {
                 </div>
               </aside>
 
-              <div style={styles.orgCanvas}>
-                <div style={styles.bentoGrid}>
+              <div style={orgCanvasStyle}>
+                <div style={bentoGridStyle}>
                   {orderedDepartments.map((department) => {
                     const accent = departmentAccent(department.name);
                     const memberOnlyPeople = department.memberPersonIds
@@ -989,7 +1043,7 @@ function Team() {
                           </div>
                         </div>
 
-                        <div style={styles.roleGrid}>
+                        <div style={roleGridStyle}>
                           <div style={styles.rolePanel}>
                             <div style={styles.dropZoneLabelRow}>
                               <span style={styles.label}>HEAD</span>
@@ -1114,7 +1168,7 @@ function Team() {
                               USE THE ROSTER ASSIGN CONTROL TO ADD MEMBERS HERE.
                             </div>
                           ) : (
-                            <div style={styles.memberGrid}>
+                            <div style={memberGridStyle}>
                               {memberOnlyPeople.map((person) => (
                                 <CrewCard
                                   key={`${department.id}-${person.personId}`}
@@ -1149,13 +1203,7 @@ function Team() {
         {departments.length === 0 ? (
           <p style={styles.emptyText}>NO DEPARTMENT DATA AVAILABLE</p>
         ) : (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-              gap: 12,
-            }}
-          >
+          <div style={departmentGridStyle}>
             {departments.map((dept) => (
               <div
                 key={dept.id}
@@ -1223,7 +1271,8 @@ function Team() {
         {monthlyHours.length === 0 ? (
           <p style={styles.emptyText}>NO MONTHLY HOURS DATA. SYNC CLOCKIFY + HULY FIRST.</p>
         ) : (
-          <table style={styles.table}>
+          <div style={styles.tableScrollWrap}>
+            <table style={monthlyHoursTableStyle}>
             <thead>
               <tr>
                 <th style={styles.th}>CREW MEMBER</th>
@@ -1310,7 +1359,8 @@ function Team() {
                 );
               })}
             </tbody>
-          </table>
+            </table>
+          </div>
         )}
       </div>
 
@@ -1573,7 +1623,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column" as const,
     gap: 8,
-    maxHeight: 420,
+    maxHeight: 360,
     overflowY: "auto" as const,
     paddingRight: 4,
   },
@@ -1585,6 +1635,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   orgCanvas: {
     minWidth: 0,
+    overflowX: "hidden" as const,
   },
   bentoGrid: {
     display: "grid",
@@ -1672,7 +1723,9 @@ const styles: Record<string, React.CSSProperties> = {
   },
   cardSelect: {
     ...lcarsPageStyles.input,
-    minWidth: 176,
+    minWidth: 148,
+    width: "100%",
+    maxWidth: 220,
     height: 34,
     padding: "6px 8px",
     marginBottom: 0,
@@ -1703,7 +1756,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   memberGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
     gap: 8,
   },
   crewCard: {
@@ -1743,6 +1796,12 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column" as const,
     alignItems: "flex-end",
     gap: 8,
+    width: "min(220px, 100%)",
+  },
+  crewCardActionsTight: {
+    display: "flex",
+    alignItems: "flex-end",
+    gap: 8,
   },
   cardRemoveButton: {
     background: "transparent",
@@ -1752,6 +1811,17 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1,
     cursor: "pointer",
     padding: 0,
+  },
+  departmentGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+    gap: 12,
+  },
+  tableScrollWrap: {
+    overflowX: "auto" as const,
+    border: "1px solid rgba(153, 153, 204, 0.08)",
+    borderRadius: "0 14px 14px 0",
+    background: "rgba(0, 0, 0, 0.12)",
   },
 };
 
