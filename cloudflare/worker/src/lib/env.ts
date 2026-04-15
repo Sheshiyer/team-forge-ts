@@ -40,6 +40,8 @@ export interface Env {
   TF_CLOCKIFY_API_TOKEN_GLOBAL?: string;
   TF_HULY_USER_TOKEN_GLOBAL?: string;
   TF_SLACK_BOT_TOKEN_GLOBAL?: string;
+  TF_GITHUB_TOKEN_GLOBAL?: string;
+  TF_INTEGRATION_CONFIG_JSON?: string;
   TF_CREDENTIAL_ENVELOPE_KEY?: string;
   TF_WEBHOOK_HMAC_SECRET?: string;
   TEAMFORGE_DB?: D1DatabaseLike;

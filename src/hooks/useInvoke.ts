@@ -7,6 +7,7 @@ import type {
   TimeEntry,
   ProjectStats,
   ProjectCatalogItem,
+  ExecutionProjectView,
   ActivityItem,
   PresenceStatus,
   Employee,
@@ -42,6 +43,8 @@ import type {
   OnboardingFlowView,
   PlannerSlotView,
   CredentialSyncResult,
+  CloudIntegrationSyncResult,
+  GitHubSyncReport,
 } from "../lib/types";
 
 const invokeApi = {
@@ -69,8 +72,12 @@ const invokeApi = {
     invoke<ProjectStats[]>("get_project_breakdown", { start, end }),
   getProjectsCatalog: () =>
     invoke<ProjectCatalogItem[]>("get_projects_catalog"),
+  getExecutionProjects: () =>
+    invoke<ExecutionProjectView[]>("get_execution_projects"),
   getActivityFeed: (limit: number) =>
     invoke<ActivityItem[]>("get_activity_feed", { limit }),
+  getProjectActivity: (projectId: string, limit: number) =>
+    invoke<ActivityItem[]>("get_project_activity", { projectId, limit }),
   getPresenceStatus: () => invoke<PresenceStatus[]>("get_presence_status"),
   getEmployees: () => invoke<Employee[]>("get_employees"),
   updateEmployeeQuota: (employeeId: string, quota: number) =>
@@ -137,6 +144,10 @@ const invokeApi = {
     invoke<PlannerSlotView[]>("get_planner_capacity"),
   syncCloudCredentials: () =>
     invoke<CredentialSyncResult>("sync_cloud_credentials"),
+  syncCloudIntegrations: () =>
+    invoke<CloudIntegrationSyncResult>("sync_cloud_integrations"),
+  syncGitHubPlans: () =>
+    invoke<GitHubSyncReport[]>("sync_github_plans"),
 };
 
 export function useInvoke() {

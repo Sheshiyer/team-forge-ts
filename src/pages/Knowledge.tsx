@@ -10,7 +10,7 @@ const CATEGORIES = [
   "Technical Guide",
   "Resource Link",
   "Tool Discovery",
-  "Training",
+  "Playbook",
   "FAQ",
   "Client Doc",
 ] as const;

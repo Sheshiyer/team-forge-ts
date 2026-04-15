@@ -1,23 +1,21 @@
 {
   "name": "@teamforge/huly-sidecar",
-  "version": "0.1.9",
+  "version": "0.1.14",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "seed:parkarea": "tsx src/seed-parkarea.ts",
+    "mirror:github": "tsx src/seed-parkarea.ts"
   },
   "dependencies": {
-    "@hcengineering/api-client": "^0.7.3",
-    "@hcengineering/core": "^0.7.4",
-    "@hcengineering/tracker": "^0.7.0",
-    "@hcengineering/document": "^0.7.0",
-    "ws": "^8.16.0"
+    "@hcengineering/api-client": "0.7.3"
   },
   "devDependencies": {
     "@types/node": "^22",
-    "@types/ws": "^8",
+    "tsx": "^4.19.0",
     "typescript": "^5.7"
   }
 }

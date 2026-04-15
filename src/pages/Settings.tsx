@@ -66,6 +66,12 @@ function Settings() {
   const [slackStatus, setSlackStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [slackMessage, setSlackMessage] = useState<string | null>(null);
 
+  const [githubToken, setGithubToken] = useState("");
+  const [showGithubToken, setShowGithubToken] = useState(false);
+  const [githubRepos, setGithubRepos] = useState("");
+  const [githubSyncing, setGithubSyncing] = useState(false);
+  const [githubMessage, setGithubMessage] = useState<string | null>(null);
+
   const [cloudCredentialSyncEnabled, setCloudCredentialSyncEnabled] =
     useState(true);
   const [cloudCredentialsAccessToken, setCloudCredentialsAccessToken] =
@@ -114,6 +120,8 @@ function Settings() {
       if (settings.huly_token) setHulyToken(settings.huly_token);
       if (settings.slack_bot_token) setSlackBotToken(settings.slack_bot_token);
       setSlackChannelFilters(settings.slack_channel_filters || "");
+      if (settings.github_token) setGithubToken(settings.github_token);
+      setGithubRepos(settings.github_repos || "");
       setCloudCredentialSyncEnabled(
         settings.cloud_credential_sync_enabled !== "false"
       );
@@ -318,6 +326,37 @@ function Settings() {
     }
   };
 
+  const handleSaveGithub = async () => {
+    setGithubMessage(null);
+    try {
+      const normalizedRepos = parseMultiValueSetting(githubRepos).join(", ");
+      await api.saveSetting("github_token", githubToken.trim());
+      await api.saveSetting("github_repos", normalizedRepos);
+      setGithubToken(githubToken.trim());
+      setGithubRepos(normalizedRepos);
+      setGithubMessage("GitHub settings saved");
+      setTimeout(() => setGithubMessage(null), 3000);
+    } catch (err) {
+      setGithubMessage(`Error: ${String(err)}`);
+    }
+  };
+
+  const handleGithubSync = async () => {
+    setGithubSyncing(true);
+    setGithubMessage(null);
+    try {
+      const reports = await api.syncGitHubPlans();
+      const issues = reports.reduce((sum, report) => sum + report.issuesSynced, 0);
+      const projects = reports.length;
+      setGithubMessage(`GitHub plans synced (${projects} projects, ${issues} issues)`);
+      await loadSyncStatus();
+    } catch (err) {
+      setGithubMessage(`Error: ${String(err)}`);
+    } finally {
+      setGithubSyncing(false);
+    }
+  };
+
   const handleSaveCloudSyncSettings = async () => {
     const trimmedToken = cloudCredentialsAccessToken.trim();
     setCloudSyncMessage(null);
@@ -341,16 +380,22 @@ function Settings() {
     setCloudSyncing(true);
     setCloudSyncMessage(null);
     try {
-      const result = await api.syncCloudCredentials();
+      const result = await api.syncCloudIntegrations();
       const detailParts: string[] = [];
-      if (result.synced.length > 0) detailParts.push(`synced ${result.synced.length}`);
-      if (result.skipped.length > 0) detailParts.push(`skipped ${result.skipped.length}`);
-      if (result.errors.length > 0) detailParts.push(`errors ${result.errors.length}`);
+      if (result.cloud.synced.length > 0) detailParts.push(`cloud ${result.cloud.synced.length}`);
+      if (result.clockify) detailParts.push("clockify");
+      if (result.huly) detailParts.push("huly");
+      if (result.slack) detailParts.push("slack");
+      if (result.github.length > 0) detailParts.push(`github ${result.github.length}`);
+      if (result.cloud.skipped.length > 0) detailParts.push(`skipped ${result.cloud.skipped.length}`);
+      if (result.cloud.errors.length + result.errors.length > 0) {
+        detailParts.push(`errors ${result.cloud.errors.length + result.errors.length}`);
+      }
 
       const prefix =
-        result.errors.length > 0
-          ? "Cloud sync completed with issues"
-          : "Cloud credentials synced";
+        result.cloud.errors.length + result.errors.length > 0
+          ? "Cloud integration sync completed with issues"
+          : "Cloud integrations synced";
       setCloudSyncMessage(
         `${prefix}${detailParts.length ? ` (${detailParts.join(", ")})` : ""}`
       );
@@ -666,6 +711,76 @@ function Settings() {
         </div>
       </div>
 
+      {/* GitHub Plans */}
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
+        <h2 style={styles.sectionTitle}>GITHUB PLANS</h2>
+        <div style={styles.sectionDivider} />
+
+        <div style={styles.field}>
+          <label style={styles.label}>TOKEN</label>
+          <div style={styles.inputRow}>
+            <input
+              type={showGithubToken ? "text" : "password"}
+              value={githubToken}
+              onChange={(event) => setGithubToken(event.target.value)}
+              placeholder="PASTE A GITHUB TOKEN OR SYNC IT FROM CLOUD CREDENTIALS"
+              style={{ ...styles.input, flex: 1 }}
+            />
+            <button
+              onClick={() => setShowGithubToken(!showGithubToken)}
+              style={styles.ghostButton}
+            >
+              {showGithubToken ? "HIDE" : "SHOW"}
+            </button>
+          </div>
+          <div style={styles.helperText}>
+            TOKEN STATUS: {githubToken.trim() ? "CONFIGURED" : "MISSING"}
+          </div>
+        </div>
+
+        <div style={styles.field}>
+          <label style={styles.label}>REPOSITORIES</label>
+          <textarea
+            value={githubRepos}
+            onChange={(event) => setGithubRepos(event.target.value)}
+            placeholder="SYNCED FROM CLOUDFLARE INTEGRATION CONFIG OR ENTER owner/repo"
+            style={{ ...styles.input, minHeight: 72, resize: "vertical" }}
+          />
+          <div style={styles.helperText}>
+            ONE REPO PER LINE OR COMMA. CLOUD CONFIG CAN ALSO PROVIDE DISPLAY NAME,
+            CLIENT, MILESTONE, HULY, AND CLOCKIFY ALIASES.
+          </div>
+        </div>
+
+        <div style={styles.buttonRow}>
+          <button onClick={handleSaveGithub} style={styles.primaryButton}>
+            SAVE GITHUB SETTINGS
+          </button>
+          <button
+            onClick={handleGithubSync}
+            disabled={githubSyncing || !githubToken.trim()}
+            style={{
+              ...styles.ghostButton,
+              opacity: githubSyncing || !githubToken.trim() ? 0.5 : 1,
+            }}
+          >
+            {githubSyncing ? "SYNCING..." : "SYNC GITHUB PLANS"}
+          </button>
+          {githubMessage && (
+            <span
+              style={{
+                ...styles.label,
+                color: githubMessage.startsWith("Error")
+                  ? "var(--lcars-red)"
+                  : "var(--lcars-green)",
+              }}
+            >
+              {githubMessage.toUpperCase()}
+            </span>
+          )}
+        </div>
+      </div>
+
       {/* Cloud Credential Sync */}
       <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
         <h2 style={styles.sectionTitle}>CLOUD CREDENTIAL SYNC</h2>
@@ -682,11 +797,11 @@ function Settings() {
               }
             />
             <span>
-              ENABLE CLOUD CREDENTIAL SYNC ON APP STARTUP (DEFAULT)
+            ENABLE CLOUD INTEGRATION SYNC ON APP STARTUP (DEFAULT)
             </span>
           </label>
           <div style={styles.helperText}>
-            THIS IS DEFAULT-ON FOR FOUNDER/COFOUNDER SHARED TOKEN WORKFLOWS.
+            THIS IS DEFAULT-ON FOR SHARED CLOUDFLARE INTEGRATION CONFIG AND TOKEN WORKFLOWS.
             TURN IT OFF ONLY IF YOU INTENTIONALLY WANT A LOCAL-ONLY SETTINGS FLOW.
           </div>
         </div>
@@ -715,8 +830,8 @@ function Settings() {
             </button>
           </div>
           <div style={styles.helperText}>
-            THIS TOKEN IS REQUIRED FOR MANUAL SYNC AND STARTUP SYNC. IT IS
-            STORED LOCALLY IN TEAMFORGE SETTINGS.
+            THIS TOKEN IS REQUIRED FOR MANUAL CLOUD INTEGRATION SYNC AND STARTUP SYNC.
+            IT IS STORED LOCALLY IN TEAMFORGE SETTINGS.
           </div>
           <div style={styles.helperText}>
             TOKEN STATUS:{" "}
@@ -736,7 +851,7 @@ function Settings() {
               opacity: cloudSyncing || !cloudAccessTokenPresent ? 0.5 : 1,
             }}
           >
-            {cloudSyncing ? "SYNCING..." : "SYNC CLOUD CREDENTIALS NOW"}
+            {cloudSyncing ? "SYNCING..." : "SYNC CLOUD INTEGRATIONS NOW"}
           </button>
           {cloudSyncMessage && (
             <span

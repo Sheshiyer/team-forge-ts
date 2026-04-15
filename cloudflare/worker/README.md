@@ -17,6 +17,8 @@ Wave 1 provides:
 - a Wrangler configuration with the required bindings
 - an additive `0001_initial.sql` D1 migration
 - sample payload fixtures for the first public route set
+- `/v1/credentials` as the desktop integration boundary for shared vendor tokens
+  and non-secret mapping/config
 
 Wave 1 does not yet provide:
 
@@ -55,3 +57,35 @@ Because of that, `wrangler.jsonc` still contains placeholder IDs for:
    - `/v1/projects`
    - `/v1/project-mappings`
 5. Add queue consumers and Durable Object coordination for sync flows.
+
+## Integration Config
+
+`/v1/credentials` returns:
+
+- `credentials`: shared Clockify, Huly, Slack, and GitHub tokens from Worker secrets.
+- `integrations`: non-secret mapping/config from `TF_INTEGRATION_CONFIG_JSON`.
+
+The desktop app persists that config into local SQLite before syncing. Display
+pages should consume the backend projections and should not hardcode repo,
+client, milestone, Huly, Clockify, or Slack assumptions.
+
+Example `TF_INTEGRATION_CONFIG_JSON`:
+
+```json
+{
+  "github": {
+    "repos": [
+      {
+        "repo": "Sheshiyer/parkarea-aleph",
+        "displayName": "ParkArea Phase 2 - Germany Launch",
+        "clientName": "ParkArea",
+        "defaultMilestoneNumber": 1,
+        "enabled": true
+      }
+    ]
+  },
+  "huly": { "mirrorMode": "read_only", "mirrorEnabled": true },
+  "slack": {},
+  "clockify": {}
+}
+```

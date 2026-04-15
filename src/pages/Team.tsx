@@ -1,10 +1,19 @@
 import { useState, useEffect, useCallback } from "react";
+import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { useInvoke } from "../hooks/useInvoke";
 import { useViewportWidth } from "../hooks/useViewportWidth";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import Avatar from "../components/ui/Avatar";
+import DepartmentCard from "../components/team/DepartmentCard";
+import DirectoryPanel, {
+  type DirectoryEntry,
+} from "../components/team/DirectoryPanel";
 import EmployeeSummaryPanel from "../components/team/EmployeeSummaryPanel";
+import ValidationBar, {
+  type ValidationIssue,
+} from "../components/team/ValidationBar";
+import type { DirectoryMode } from "../components/team/types";
 import type {
   DepartmentView,
   Employee,
@@ -18,6 +27,15 @@ import type {
 
 type RoleField = "headPersonId" | "teamLeadPersonId";
 type AssignmentRole = "member" | RoleField;
+
+type DepartmentHealthSummary = {
+  id: string;
+  name: string;
+  memberCount: number;
+  totalHours: number;
+  quotaTotal: number;
+  headName: string | null;
+};
 
 function ProgressBar({ current, total }: { current: number; total: number }) {
   const pct = total > 0 ? Math.min((current / total) * 100, 100) : 0;
@@ -160,25 +178,6 @@ function assignPersonToRole(
   );
 }
 
-function roleBadge(label: string, color: string) {
-  return (
-    <span
-      style={{
-        fontFamily: "'Orbitron', sans-serif",
-        fontSize: 8,
-        fontWeight: 600,
-        color,
-        border: `1px solid ${color}`,
-        padding: "1px 6px",
-        borderRadius: 2,
-        letterSpacing: "1px",
-      }}
-    >
-      {label}
-    </span>
-  );
-}
-
 function personMatchesSearch(person: OrgPersonView, query: string): boolean {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) return true;
@@ -203,6 +202,40 @@ function departmentAccent(name: string): string {
     default:
       return "var(--lcars-peach)";
   }
+}
+
+function summarizeDepartmentHealth(
+  departments: DepartmentView[]
+): DepartmentHealthSummary[] {
+  const byName = new Map<string, DepartmentHealthSummary>();
+
+  for (const department of departments) {
+    const key = department.name.trim().toLowerCase();
+    const current = byName.get(key);
+
+    if (!current) {
+      byName.set(key, {
+        id: department.id,
+        name: department.name,
+        memberCount: department.memberCount,
+        totalHours: department.totalHours,
+        quotaTotal: department.quotaTotal,
+        headName: department.headName,
+      });
+      continue;
+    }
+
+    current.memberCount += department.memberCount;
+    current.totalHours += department.totalHours;
+    current.quotaTotal += department.quotaTotal;
+    if (!current.headName && department.headName) {
+      current.headName = department.headName;
+    }
+  }
+
+  return [...byName.values()].sort((left, right) =>
+    left.name.localeCompare(right.name)
+  );
 }
 
 function encodeAssignmentValue(
@@ -262,7 +295,8 @@ function assignmentRoleLabel(role: AssignmentRole): string {
 
 function describeAssignment(
   departments: OrgDepartmentMappingView[],
-  personId: string
+  personId: string,
+  departmentLabelsById?: Map<string, string>
 ): string {
   const assignment = parseAssignmentValue(
     currentAssignmentValue(departments, personId)
@@ -277,62 +311,9 @@ function describeAssignment(
     return "UNASSIGNED";
   }
 
-  return `${department.name.toUpperCase()} • ${assignmentRoleLabel(assignment.role)}`;
-}
-
-type CrewCardProps = {
-  person: OrgPersonView;
-  subtitle: string;
-  badges?: React.ReactNode;
-  accent: string;
-  compact?: boolean;
-  controls?: React.ReactNode;
-  onRemove?: () => void;
-};
-
-function CrewCard({
-  person,
-  subtitle,
-  badges,
-  accent,
-  compact = false,
-  controls,
-  onRemove,
-}: CrewCardProps) {
-  return (
-    <div
-      style={{
-        ...styles.crewCard,
-        ...(compact ? styles.crewCardCompact : null),
-        borderLeft: `3px solid ${accent}`,
-        opacity: person.active ? 1 : 0.68,
-      }}
-    >
-      <Avatar name={person.name} size={compact ? 22 : 28} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={styles.crewCardTitleRow}>
-          <span style={styles.crewCardName}>{person.name}</span>
-          {badges}
-          {!person.active && roleBadge("INACTIVE", "var(--lcars-yellow)")}
-        </div>
-        <div style={styles.crewCardMeta}>{subtitle}</div>
-      </div>
-      {(controls || onRemove) ? (
-        <div style={controls ? styles.crewCardActions : styles.crewCardActionsTight}>
-          {controls}
-          {onRemove ? (
-            <button
-              onClick={onRemove}
-              style={styles.cardRemoveButton}
-              aria-label={`Remove ${person.name}`}
-            >
-              ×
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
+  const departmentLabel =
+    departmentLabelsById?.get(department.id) ?? department.name.toUpperCase();
+  return `${departmentLabel} • ${assignmentRoleLabel(assignment.role)}`;
 }
 
 function Team() {
@@ -354,6 +335,7 @@ function Team() {
   const [cacheUpdatedAt, setCacheUpdatedAt] = useState<string | null>(null);
   const [teamActionMessage, setTeamActionMessage] = useState<string | null>(null);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState("");
+  const [directoryMode, setDirectoryMode] = useState<DirectoryMode>("unassigned");
   const [employeeSummary, setEmployeeSummary] =
     useState<EmployeeSummaryView | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -590,6 +572,12 @@ function Team() {
 
   async function handleSaveOrgChart() {
     if (!orgChart) return;
+    if (duplicateDepartmentCount > 0 || openRoleCount > 0) {
+      setOrgMessage(
+        "Error: Resolve duplicate department names and missing leadership roles before saving."
+      );
+      return;
+    }
     setOrgSaving(true);
     setOrgMessage(null);
     try {
@@ -683,10 +671,122 @@ function Team() {
   );
   const hasDraftChanges = liveDraftSignature !== currentDraftSignature;
   const assignedCount = people.length - unassignedPeople.length;
+  const directoryPeople =
+    directoryMode === "unassigned" ? visibleUnassignedPeople : visibleDirectoryPeople;
+
+  const autoFillLeadershipRoles = () => {
+    setDraftDepartments((current) =>
+      normalizeDraftDepartments(
+        current.map((department) => {
+          if (department.name.toLowerCase() === "organization") {
+            return department;
+          }
+
+          const candidateIds = dedupe(department.memberPersonIds).filter(
+            (personId) => peopleById.get(personId)?.active
+          );
+
+          if (candidateIds.length === 0) {
+            return department;
+          }
+
+          let headPersonId = department.headPersonId;
+          let teamLeadPersonId = department.teamLeadPersonId;
+
+          if (!headPersonId) {
+            headPersonId = candidateIds[0];
+          }
+
+          if (!teamLeadPersonId) {
+            teamLeadPersonId =
+              candidateIds.find((personId) => personId !== headPersonId) ??
+              candidateIds[0];
+          }
+
+          return {
+            ...department,
+            headPersonId,
+            teamLeadPersonId,
+            memberPersonIds: dedupe([
+              ...department.memberPersonIds,
+              ...(headPersonId ? [headPersonId] : []),
+              ...(teamLeadPersonId ? [teamLeadPersonId] : []),
+            ]),
+          };
+        })
+      )
+    );
+    setTeamActionMessage(
+      "AUTO-FILLED MISSING LEADERSHIP ROLES USING ACTIVE DEPARTMENT MEMBERS."
+    );
+  };
+
+  const unassignInactiveCrew = () => {
+    setDraftDepartments((current) =>
+      normalizeDraftDepartments(
+        current.map((department) => ({
+          ...department,
+          memberPersonIds: department.memberPersonIds.filter(
+            (personId) => peopleById.get(personId)?.active
+          ),
+          headPersonId:
+            department.headPersonId && peopleById.get(department.headPersonId)?.active
+              ? department.headPersonId
+              : null,
+          teamLeadPersonId:
+            department.teamLeadPersonId &&
+            peopleById.get(department.teamLeadPersonId)?.active
+              ? department.teamLeadPersonId
+              : null,
+        }))
+      )
+    );
+    setTeamActionMessage("UNASSIGNED INACTIVE CREW FROM ROLE AND MEMBER MAPPINGS.");
+  };
+
+  const departmentNameGroups = new Map<string, number>();
+  for (const department of draftDepartments) {
+    const key = department.name.trim().toLowerCase();
+    departmentNameGroups.set(key, (departmentNameGroups.get(key) ?? 0) + 1);
+  }
+  const duplicateDepartmentCount = [...departmentNameGroups.values()].filter(
+    (count) => count > 1
+  ).length;
+  const inactiveAssignedCount = people.filter(
+    (person) =>
+      assignedDepartmentByPerson.has(person.personId) && !person.active
+  ).length;
+  const openRoleCount = draftDepartments.reduce((count, department) => {
+    if (department.name.toLowerCase() === "organization") {
+      return count;
+    }
+    const missingHead = department.headPersonId ? 0 : 1;
+    const missingLead = department.teamLeadPersonId ? 0 : 1;
+    return count + missingHead + missingLead;
+  }, 0);
+  const departmentHealthSummaries = summarizeDepartmentHealth(departments);
 
   const orderedDepartments = departmentOrder
     .map((departmentId) => departmentById.get(departmentId))
     .filter((department): department is OrgDepartmentMappingView => Boolean(department));
+  const departmentNameTotals = new Map<string, number>();
+  for (const department of orderedDepartments) {
+    const key = department.name.trim().toLowerCase();
+    departmentNameTotals.set(key, (departmentNameTotals.get(key) ?? 0) + 1);
+  }
+  const departmentNameOrdinal = new Map<string, number>();
+  const departmentDisplayNames = new Map<string, string>();
+  for (const department of orderedDepartments) {
+    const key = department.name.trim().toLowerCase();
+    const ordinal = (departmentNameOrdinal.get(key) ?? 0) + 1;
+    departmentNameOrdinal.set(key, ordinal);
+    const total = departmentNameTotals.get(key) ?? 1;
+    const suffix = total > 1 ? ` ${ordinal}` : "";
+    departmentDisplayNames.set(
+      department.id,
+      `${department.name.toUpperCase()}${suffix}`
+    );
+  }
   const assignablePeople = [...people].sort(
     (left, right) =>
       Number(right.active) - Number(left.active) ||
@@ -695,29 +795,101 @@ function Team() {
   const rosterAssignmentOptions = orderedDepartments.flatMap((department) => [
     {
       value: encodeAssignmentValue(department.id, "member"),
-      label: `${department.name.toUpperCase()} • MEMBER`,
+      label: `${departmentDisplayNames.get(department.id) ?? department.name.toUpperCase()} • MEMBER`,
     },
     {
       value: encodeAssignmentValue(department.id, "headPersonId"),
-      label: `${department.name.toUpperCase()} • HEAD`,
+      label: `${departmentDisplayNames.get(department.id) ?? department.name.toUpperCase()} • HEAD`,
     },
     {
       value: encodeAssignmentValue(department.id, "teamLeadPersonId"),
-      label: `${department.name.toUpperCase()} • TEAM LEAD`,
+      label: `${departmentDisplayNames.get(department.id) ?? department.name.toUpperCase()} • TEAM LEAD`,
     },
   ]);
+  const directoryEntries: DirectoryEntry[] = directoryPeople.map((person) => {
+    const assignedDepartmentId = assignedDepartmentByPerson.get(person.personId);
+    const assignedDepartment = assignedDepartmentId
+      ? departmentById.get(assignedDepartmentId)
+      : null;
+    return {
+      person,
+      accent: assignedDepartment
+        ? departmentAccent(assignedDepartment.name)
+        : "var(--lcars-yellow)",
+      assignmentSummary: describeAssignment(
+        draftDepartments,
+        person.personId,
+        departmentDisplayNames
+      ),
+      assignmentValue: currentAssignmentValue(draftDepartments, person.personId),
+    };
+  });
+
+  const validationIssues: ValidationIssue[] = [];
+  if (duplicateDepartmentCount > 0) {
+    validationIssues.push({
+      id: "duplicate-department-names",
+      title: "DUPLICATE DEPARTMENT NAMES",
+      detail:
+        "MULTIPLE DEPARTMENTS SHARE THE SAME NAME. DISAMBIGUATE IN HULY OR RESET THIS DRAFT BEFORE SAVING.",
+      blocking: true,
+      actionLabel: "RESET DRAFT",
+      onAction: handleResetOrgChart,
+    });
+  }
+  if (openRoleCount > 0) {
+    validationIssues.push({
+      id: "missing-leadership-roles",
+      title: "MISSING REQUIRED LEADERSHIP ROLES",
+      detail:
+        "EACH DEPARTMENT NEEDS A HEAD AND TEAM LEAD (EXCEPT ORGANIZATION). AUTO-FILL CAN ASSIGN FROM ACTIVE MEMBERS.",
+      blocking: true,
+      actionLabel: "AUTO-FILL ROLES",
+      onAction: autoFillLeadershipRoles,
+    });
+  }
+  if (inactiveAssignedCount > 0) {
+    validationIssues.push({
+      id: "inactive-assigned",
+      title: "INACTIVE CREW STILL ASSIGNED",
+      detail:
+        "INACTIVE PEOPLE ARE MAPPED TO A ROLE OR MEMBER SLOT. REMOVE THEM TO AVOID STALE ASSIGNMENTS.",
+      blocking: false,
+      actionLabel: "UNASSIGN INACTIVE",
+      onAction: unassignInactiveCrew,
+    });
+  }
+  const canSaveOrgChart =
+    hasDraftChanges &&
+    !orgSaving &&
+    validationIssues.every((issue) => !issue.blocking);
+
+  const validationStats = [
+    {
+      label: "DUPLICATE DEPARTMENTS",
+      value: duplicateDepartmentCount,
+      color:
+        duplicateDepartmentCount > 0 ? "var(--lcars-yellow)" : "var(--lcars-green)",
+    },
+    {
+      label: "INACTIVE ASSIGNED",
+      value: inactiveAssignedCount,
+      color:
+        inactiveAssignedCount > 0 ? "var(--lcars-yellow)" : "var(--lcars-green)",
+    },
+    {
+      label: "OPEN LEADERSHIP ROLES",
+      value: openRoleCount,
+      color: openRoleCount > 0 ? "var(--lcars-orange)" : "var(--lcars-green)",
+    },
+  ];
+
   const orgWorkspaceStyle = {
     ...styles.orgWorkspace,
     gridTemplateColumns: isCompactLayout
       ? "1fr"
       : (styles.orgWorkspace.gridTemplateColumns as string),
     gap: isNarrowLayout ? 14 : (styles.orgWorkspace.gap as number),
-  };
-  const teamRailStyle = {
-    ...styles.teamRail,
-    position: isCompactLayout ? "static" : styles.teamRail.position,
-    top: isCompactLayout ? undefined : styles.teamRail.top,
-    padding: isMobileLayout ? "12px" : styles.teamRail.padding,
   };
   const orgButtonRowStyle = {
     ...styles.buttonRow,
@@ -735,27 +907,6 @@ function Team() {
       : isNarrowLayout
         ? "repeat(auto-fit, minmax(240px, 1fr))"
         : (styles.bentoGrid.gridTemplateColumns as string),
-  };
-  const roleGridStyle = {
-    ...styles.roleGrid,
-    gridTemplateColumns: isMobileLayout
-      ? "1fr"
-      : (styles.roleGrid.gridTemplateColumns as string),
-  };
-  const memberGridStyle = {
-    ...styles.memberGrid,
-    gridTemplateColumns: isMobileLayout
-      ? "1fr"
-      : (styles.memberGrid.gridTemplateColumns as string),
-  };
-  const directoryListStyle = {
-    ...styles.leftRailList,
-    maxHeight: isCompactLayout ? 280 : styles.leftRailList.maxHeight,
-  };
-  const cardSelectStyle = {
-    ...styles.cardSelect,
-    minWidth: isNarrowLayout ? 0 : styles.cardSelect.minWidth,
-    maxWidth: isNarrowLayout ? "100%" : styles.cardSelect.maxWidth,
   };
   const departmentGridStyle = {
     ...styles.departmentGrid,
@@ -793,585 +944,370 @@ function Team() {
         <div style={styles.actionBanner}>{teamActionMessage}</div>
       ) : null}
 
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
-        <h2 style={styles.sectionTitle}>ORG CHART MAPPING</h2>
-        <div style={styles.sectionDivider} />
+      <div style={styles.subrouteNav}>
+        <NavLink
+          to="/team/mapping"
+          end
+          style={({ isActive }) => ({
+            ...styles.subrouteLink,
+            ...(isActive ? styles.subrouteLinkActive : null),
+          })}
+        >
+          MAPPING
+        </NavLink>
+        <NavLink
+          to="/team/capacity"
+          end
+          style={({ isActive }) => ({
+            ...styles.subrouteLink,
+            ...(isActive ? styles.subrouteLinkActive : null),
+          })}
+        >
+          CAPACITY
+        </NavLink>
+        <NavLink
+          to="/team/crew"
+          end
+          style={({ isActive }) => ({
+            ...styles.subrouteLink,
+            ...(isActive ? styles.subrouteLinkActive : null),
+          })}
+        >
+          CREW PROFILE
+        </NavLink>
+      </div>
 
-        {!orgChart ? (
-          <p style={styles.emptyText}>
-            {orgMessage
-              ? orgMessage.toUpperCase()
-              : "HULY ORG CHART DATA IS NOT AVAILABLE"}
-          </p>
-        ) : (
-          <>
-            <div style={styles.orgTopBar}>
-              <div style={styles.orgStatGrid}>
-                <div style={styles.orgStatCard}>
-                  <div style={styles.orgStatValue}>{draftDepartments.length}</div>
-                  <div style={styles.orgStatLabel}>DEPARTMENTS</div>
-                </div>
-                <div style={styles.orgStatCard}>
-                  <div style={styles.orgStatValue}>{assignedCount}</div>
-                  <div style={styles.orgStatLabel}>ASSIGNED CREW</div>
-                </div>
-                <div style={styles.orgStatCard}>
-                  <div style={styles.orgStatValue}>{unassignedPeople.length}</div>
-                  <div style={styles.orgStatLabel}>UNASSIGNED</div>
-                </div>
-              </div>
+      <Routes>
+        <Route index element={<Navigate to="mapping" replace />} />
+        <Route
+          path="mapping"
+          element={
+            <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
+              <h2 style={styles.sectionTitle}>ORG CHART MAPPING</h2>
+              <div style={styles.sectionDivider} />
 
-              <div style={orgButtonRowStyle}>
-                <button
-                  onClick={handleSaveOrgChart}
-                  disabled={orgSaving || !hasDraftChanges}
-                  style={{
-                    ...styles.primaryButton,
-                    opacity: orgSaving || !hasDraftChanges ? 0.5 : 1,
-                  }}
-                >
-                  {orgSaving ? "SAVING..." : "SAVE ORG CHART"}
-                </button>
-                <button
-                  onClick={handleResetOrgChart}
-                  disabled={!hasDraftChanges || orgSaving}
-                  style={{
-                    ...styles.ghostButton,
-                    opacity: !hasDraftChanges || orgSaving ? 0.5 : 1,
-                  }}
-                >
-                  RESET DRAFT
-                </button>
-                {orgMessage && (
-                  <span
-                    style={{
-                      ...styles.label,
-                      color: orgMessage.startsWith("Error")
-                        ? "var(--lcars-red)"
-                        : "var(--lcars-green)",
-                    }}
-                  >
-                    {orgMessage.toUpperCase()}
-                  </span>
+              {!orgChart ? (
+                <p style={styles.emptyText}>
+                  {orgMessage
+                    ? orgMessage.toUpperCase()
+                    : "HULY ORG CHART DATA IS NOT AVAILABLE"}
+                </p>
+              ) : (
+                <>
+                  <div style={styles.orgTopBar}>
+                    <div style={styles.orgStatGrid}>
+                      <div style={styles.orgStatCard}>
+                        <div style={styles.orgStatValue}>{draftDepartments.length}</div>
+                        <div style={styles.orgStatLabel}>DEPARTMENTS</div>
+                      </div>
+                      <div style={styles.orgStatCard}>
+                        <div style={styles.orgStatValue}>{assignedCount}</div>
+                        <div style={styles.orgStatLabel}>ASSIGNED CREW</div>
+                      </div>
+                      <div style={styles.orgStatCard}>
+                        <div style={styles.orgStatValue}>{unassignedPeople.length}</div>
+                        <div style={styles.orgStatLabel}>UNASSIGNED</div>
+                      </div>
+                    </div>
+
+                    <div style={orgButtonRowStyle}>
+                      <button
+                        onClick={handleSaveOrgChart}
+                        disabled={!canSaveOrgChart}
+                        style={{
+                          ...styles.primaryButton,
+                          opacity: canSaveOrgChart ? 1 : 0.5,
+                        }}
+                      >
+                        {orgSaving ? "SAVING..." : "SAVE ORG CHART"}
+                      </button>
+                      <button
+                        onClick={handleResetOrgChart}
+                        disabled={!hasDraftChanges || orgSaving}
+                        style={{
+                          ...styles.ghostButton,
+                          opacity: !hasDraftChanges || orgSaving ? 0.5 : 1,
+                        }}
+                      >
+                        RESET DRAFT
+                      </button>
+                      {orgMessage && (
+                        <span
+                          style={{
+                            ...styles.label,
+                            color: orgMessage.startsWith("Error")
+                              ? "var(--lcars-red)"
+                              : "var(--lcars-green)",
+                          }}
+                        >
+                          {orgMessage.toUpperCase()}
+                        </span>
+                      )}
+                    </div>
+
+                    <div style={styles.helperText}>
+                      USE THE ASSIGN DROPDOWNS TO PLACE PEOPLE INTO A DEPARTMENT ROLE.
+                      THE ROSTER CONTROL CAN SET MEMBER, HEAD, OR TEAM LEAD, AND EACH
+                      DEPARTMENT CARD HAS DIRECT ROLE PICKERS FOR QUICK ADJUSTMENTS.
+                    </div>
+                  </div>
+
+                  <div style={orgWorkspaceStyle}>
+                    <DirectoryPanel
+                      searchValue={peopleSearch}
+                      onSearchChange={setPeopleSearch}
+                      mode={directoryMode}
+                      onModeChange={setDirectoryMode}
+                      unassignedCount={visibleUnassignedPeople.length}
+                      visibleCount={visibleDirectoryPeople.length}
+                      showingCount={directoryEntries.length}
+                      totalCount={people.length}
+                      entries={directoryEntries}
+                      assignmentOptions={rosterAssignmentOptions}
+                      onAssignmentChange={applyAssignmentSelection}
+                      validationBar={
+                        <ValidationBar
+                          stats={validationStats}
+                          issues={validationIssues}
+                          footer={
+                            validationIssues.some((issue) => issue.blocking) ? (
+                              <div style={styles.saveGateHint}>
+                                RESOLVE BLOCKING ISSUES BEFORE SAVING.
+                              </div>
+                            ) : null
+                          }
+                        />
+                      }
+                    />
+
+                    <div style={orgCanvasStyle}>
+                      <div style={bentoGridStyle}>
+                        {orderedDepartments.map((department) => (
+                          <DepartmentCard
+                            key={department.id}
+                            department={department}
+                            displayName={
+                              departmentDisplayNames.get(department.id) ??
+                              department.name.toUpperCase()
+                            }
+                            accent={departmentAccent(department.name)}
+                            assignablePeople={assignablePeople}
+                            peopleById={peopleById}
+                            isCompactLayout={isCompactLayout}
+                            onUpdateRole={updateRole}
+                            onRemoveRoleOccupant={removeRoleOccupant}
+                            onRemoveDepartmentMember={removeDepartmentMember}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          }
+        />
+
+        <Route
+          path="capacity"
+          element={
+            <>
+              <div style={{ ...styles.card, borderLeftColor: "var(--lcars-peach)" }}>
+                <h2 style={styles.sectionTitle}>DEPARTMENT STRUCTURE</h2>
+                <div style={styles.sectionDivider} />
+                {departmentHealthSummaries.length === 0 ? (
+                  <p style={styles.emptyText}>NO DEPARTMENT DATA AVAILABLE</p>
+                ) : (
+                  <div style={departmentGridStyle}>
+                    {departmentHealthSummaries.map((dept) => (
+                      <div
+                        key={dept.id}
+                        style={{
+                          ...lcarsPageStyles.subtleCard,
+                          borderLeftColor: "var(--lcars-peach)",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "flex-start",
+                            marginBottom: 12,
+                          }}
+                        >
+                          <div>
+                            <div
+                              style={{
+                                fontFamily: "'Orbitron', sans-serif",
+                                fontSize: 12,
+                                fontWeight: 600,
+                                color: "var(--lcars-orange)",
+                                letterSpacing: "1px",
+                              }}
+                            >
+                              {dept.name.toUpperCase()}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: "var(--lcars-lavender)",
+                                marginTop: 2,
+                              }}
+                            >
+                              {dept.headName
+                                ? `HEAD: ${dept.headName.toUpperCase()}`
+                                : "NO HEAD ASSIGNED"}
+                            </div>
+                          </div>
+                          <div
+                            style={{
+                              fontFamily: "'JetBrains Mono', monospace",
+                              fontSize: 11,
+                              color: "var(--lcars-lavender)",
+                              background: "rgba(153, 153, 204, 0.1)",
+                              padding: "2px 8px",
+                              borderRadius: "0 10px 10px 0",
+                            }}
+                          >
+                            {dept.memberCount} CREW
+                          </div>
+                        </div>
+                        <ProgressBar current={dept.totalHours} total={dept.quotaTotal} />
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
 
-              <div style={styles.helperText}>
-                USE THE ASSIGN DROPDOWNS TO PLACE PEOPLE INTO A DEPARTMENT ROLE.
-                THE ROSTER CONTROL CAN SET MEMBER, HEAD, OR TEAM LEAD, AND EACH
-                DEPARTMENT CARD HAS DIRECT ROLE PICKERS FOR QUICK ADJUSTMENTS.
+              <div style={{ ...styles.card, borderLeftColor: "var(--lcars-tan)" }}>
+                <h2 style={styles.sectionTitle}>MONTHLY HOURS & REMOTE VISIBILITY</h2>
+                <div style={styles.sectionDivider} />
+                {monthlyHours.length === 0 ? (
+                  <p style={styles.emptyText}>
+                    NO MONTHLY HOURS DATA. SYNC CLOCKIFY + HULY FIRST.
+                  </p>
+                ) : (
+                  <div style={styles.tableScrollWrap}>
+                    <table style={monthlyHoursTableStyle}>
+                      <thead>
+                        <tr>
+                          <th style={styles.th}>CREW MEMBER</th>
+                          <th style={styles.th}>ACTUAL HOURS</th>
+                          <th style={styles.th}>EXPECTED HOURS</th>
+                          <th style={styles.th}>STATUS</th>
+                          <th style={styles.th}>REMOTE</th>
+                          <th style={styles.th}>TIMEZONE</th>
+                          <th style={styles.th}>LEAVE</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {monthlyHours.map((row) => {
+                          const statusColor =
+                            row.status === "under"
+                              ? "var(--lcars-red)"
+                              : row.status === "over"
+                                ? "var(--lcars-yellow)"
+                                : "var(--lcars-green)";
+                          const statusLabel =
+                            row.status === "under"
+                              ? "UNDER (<120H)"
+                              : row.status === "over"
+                                ? "OVER (>180H)"
+                                : "NORMAL";
+                          return (
+                            <tr key={row.employeeName}>
+                              <td style={styles.td}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                  <Avatar name={row.employeeName} size={22} />
+                                  <span style={{ color: "var(--lcars-tan)" }}>{row.employeeName}</span>
+                                  {row.onLeave && (
+                                    <span
+                                      style={{
+                                        fontFamily: "'Orbitron', sans-serif",
+                                        fontSize: 8,
+                                        fontWeight: 600,
+                                        color: "var(--lcars-yellow)",
+                                        border: "1px solid var(--lcars-yellow)",
+                                        padding: "1px 6px",
+                                        borderRadius: 2,
+                                        letterSpacing: "1px",
+                                      }}
+                                    >
+                                      ON LEAVE
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td style={styles.tdMono}>{row.actualHours.toFixed(1)}h</td>
+                              <td style={styles.tdMono}>{row.expectedHours.toFixed(1)}h</td>
+                              <td style={{ ...styles.td, color: statusColor, fontWeight: 600, fontSize: 11 }}>
+                                {statusLabel}
+                              </td>
+                              <td style={styles.td}>
+                                {row.isRemote ? (
+                                  <span
+                                    style={{
+                                      fontFamily: "'Orbitron', sans-serif",
+                                      fontSize: 8,
+                                      fontWeight: 600,
+                                      color: "var(--lcars-cyan)",
+                                      border: "1px solid var(--lcars-cyan)",
+                                      padding: "1px 6px",
+                                      borderRadius: 2,
+                                      letterSpacing: "1px",
+                                    }}
+                                  >
+                                    REMOTE
+                                  </span>
+                                ) : (
+                                  <span style={{ color: "var(--text-quaternary)", fontSize: 11 }}>ONSITE</span>
+                                )}
+                              </td>
+                              <td style={styles.tdMono}>{row.timezone ?? "--"}</td>
+                              <td style={styles.td}>
+                                {row.onLeave ? (
+                                  <span style={{ color: "var(--lcars-yellow)", fontWeight: 600, fontSize: 11 }}>YES</span>
+                                ) : (
+                                  <span style={{ color: "var(--text-quaternary)", fontSize: 11 }}>NO</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
-            </div>
+            </>
+          }
+        />
 
-            <div style={orgWorkspaceStyle}>
-              <aside style={teamRailStyle}>
-                <div style={styles.teamRailHeader}>
-                  <div style={styles.teamRailTitle}>CREW DIRECTORY</div>
-                  <div style={styles.teamRailMeta}>
-                    {visibleDirectoryPeople.length} VISIBLE • {people.length} TOTAL
-                  </div>
-                </div>
-
-                <div style={styles.field}>
-                  <label style={styles.label}>SEARCH TEAM</label>
-                  <input
-                    value={peopleSearch}
-                    onChange={(event) => setPeopleSearch(event.target.value)}
-                    placeholder="SEARCH NAME OR EMAIL"
-                    style={styles.input}
-                  />
-                </div>
-
-                <div style={styles.unassignedPanel}>
-                  <div style={styles.dropZoneLabelRow}>
-                    <span style={styles.orgDepartmentTitle}>UNASSIGNED TRAY</span>
-                    <span style={styles.orgDepartmentMeta}>
-                      {visibleUnassignedPeople.length} READY
-                    </span>
-                  </div>
-                  {visibleUnassignedPeople.length === 0 ? (
-                    <div style={styles.helperText}>
-                      EVERY VISIBLE PERSON IS CURRENTLY MAPPED TO A DEPARTMENT.
-                    </div>
-                  ) : (
-                    <div style={directoryListStyle}>
-                      {visibleUnassignedPeople.map((person) => {
-                        const assignmentValue = currentAssignmentValue(
-                          draftDepartments,
-                          person.personId
-                        );
-
-                        return (
-                          <CrewCard
-                            key={`unassigned-${person.personId}`}
-                            person={person}
-                            subtitle={person.email || "NO EMAIL"}
-                            accent="var(--lcars-yellow)"
-                            compact
-                            controls={
-                              <select
-                                value={assignmentValue}
-                                onChange={(event) =>
-                                  applyAssignmentSelection(
-                                    person.personId,
-                                    event.target.value
-                                  )
-                                }
-                                style={cardSelectStyle}
-                                aria-label={`Assign ${person.name}`}
-                              >
-                                <option value="unassigned">UNASSIGNED</option>
-                                {rosterAssignmentOptions.map((option) => (
-                                  <option key={option.value} value={option.value}>
-                                    {option.label}
-                                  </option>
-                                ))}
-                              </select>
-                            }
-                          />
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                <div style={styles.teamRailHeader}>
-                  <div style={styles.teamRailTitle}>FULL ROSTER</div>
-                  <div style={styles.teamRailMeta}>DIRECT ROLE ASSIGNMENT</div>
-                </div>
-
-                <div style={directoryListStyle}>
-                  {visibleDirectoryPeople.map((person) => {
-                    const assignmentValue = currentAssignmentValue(
-                      draftDepartments,
-                      person.personId
-                    );
-                    const assignedDepartmentId = assignedDepartmentByPerson.get(
-                      person.personId
-                    );
-                    const assignedDepartment = assignedDepartmentId
-                      ? departmentById.get(assignedDepartmentId)
-                      : null;
-                    const assignmentSummary = describeAssignment(
-                      draftDepartments,
-                      person.personId
-                    );
-                    const subtitle = person.email
-                      ? `${person.email} • ${assignmentSummary}`
-                      : `NO EMAIL • ${assignmentSummary}`;
-
-                    return (
-                      <CrewCard
-                        key={person.personId}
-                        person={person}
-                        subtitle={subtitle}
-                        accent={
-                          assignedDepartment
-                            ? departmentAccent(assignedDepartment.name)
-                            : "var(--lcars-yellow)"
-                        }
-                        controls={
-                          <select
-                            value={assignmentValue}
-                            onChange={(event) =>
-                              applyAssignmentSelection(
-                                person.personId,
-                                event.target.value
-                              )
-                            }
-                            style={cardSelectStyle}
-                            aria-label={`Assign ${person.name}`}
-                          >
-                            <option value="unassigned">UNASSIGNED</option>
-                            {rosterAssignmentOptions.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        }
-                      />
-                    );
-                  })}
-                </div>
-              </aside>
-
-              <div style={orgCanvasStyle}>
-                <div style={bentoGridStyle}>
-                  {orderedDepartments.map((department) => {
-                    const accent = departmentAccent(department.name);
-                    const memberOnlyPeople = department.memberPersonIds
-                      .filter(
-                        (personId) =>
-                          personId !== department.headPersonId &&
-                          personId !== department.teamLeadPersonId
-                      )
-                      .map((personId) => peopleById.get(personId))
-                      .filter((person): person is OrgPersonView => Boolean(person));
-                    const headPerson = department.headPersonId
-                      ? peopleById.get(department.headPersonId) ?? null
-                      : null;
-                    const leadPerson = department.teamLeadPersonId
-                      ? peopleById.get(department.teamLeadPersonId) ?? null
-                      : null;
-                    const isLegacyDepartment =
-                      department.name.toLowerCase() === "organization";
-                    const spansWide =
-                      isLegacyDepartment || department.memberPersonIds.length >= 4;
-
-                    return (
-                      <section
-                        key={department.id}
-                        style={{
-                          ...styles.bentoCard,
-                          ...(spansWide && !isCompactLayout ? styles.bentoCardWide : null),
-                          borderTop: `3px solid ${accent}`,
-                        }}
-                      >
-                        <div style={styles.bentoHeader}>
-                          <div>
-                            <div style={styles.orgDepartmentTitle}>
-                              {department.name.toUpperCase()}
-                            </div>
-                            <div style={styles.orgDepartmentMeta}>
-                              {department.memberPersonIds.length} MEMBERS
-                              {isLegacyDepartment ? " • LEGACY CATCH-ALL" : ""}
-                            </div>
-                          </div>
-                          <div style={styles.bentoHeaderMeta}>
-                            <span style={styles.bentoMetaPill}>ROLE CONTROLS</span>
-                          </div>
-                        </div>
-
-                        <div style={roleGridStyle}>
-                          <div style={styles.rolePanel}>
-                            <div style={styles.dropZoneLabelRow}>
-                              <span style={styles.label}>HEAD</span>
-                              <button
-                                onClick={() =>
-                                  removeRoleOccupant(department.id, "headPersonId")
-                                }
-                                disabled={!headPerson}
-                                style={{
-                                  ...styles.roleActionButton,
-                                  opacity: headPerson ? 1 : 0.35,
-                                }}
-                              >
-                                CLEAR
-                              </button>
-                            </div>
-                            <select
-                              value={department.headPersonId ?? ""}
-                              onChange={(event) =>
-                                updateRole(
-                                  department.id,
-                                  "headPersonId",
-                                  event.target.value || null
-                                )
-                              }
-                              style={styles.roleSelect}
-                              aria-label={`${department.name} head`}
-                            >
-                              <option value="">UNASSIGNED</option>
-                              {assignablePeople.map((person) => (
-                                <option
-                                  key={`head-${department.id}-${person.personId}`}
-                                  value={person.personId}
-                                >
-                                  {person.name}
-                                  {person.active ? "" : " • INACTIVE"}
-                                </option>
-                              ))}
-                            </select>
-                            {headPerson ? (
-                              <CrewCard
-                                person={headPerson}
-                                subtitle={headPerson.email || "NO EMAIL"}
-                                badges={roleBadge("HEAD", accent)}
-                                accent={accent}
-                                compact
-                              />
-                            ) : (
-                              <div style={styles.dropPlaceholder}>
-                                SELECT A CREW MEMBER ABOVE
-                              </div>
-                            )}
-                          </div>
-
-                          <div style={styles.rolePanel}>
-                            <div style={styles.dropZoneLabelRow}>
-                              <span style={styles.label}>TEAM LEAD</span>
-                              <button
-                                onClick={() =>
-                                  removeRoleOccupant(
-                                    department.id,
-                                    "teamLeadPersonId"
-                                  )
-                                }
-                                disabled={!leadPerson}
-                                style={{
-                                  ...styles.roleActionButton,
-                                  opacity: leadPerson ? 1 : 0.35,
-                                }}
-                              >
-                                CLEAR
-                              </button>
-                            </div>
-                            <select
-                              value={department.teamLeadPersonId ?? ""}
-                              onChange={(event) =>
-                                updateRole(
-                                  department.id,
-                                  "teamLeadPersonId",
-                                  event.target.value || null
-                                )
-                              }
-                              style={styles.roleSelect}
-                              aria-label={`${department.name} team lead`}
-                            >
-                              <option value="">UNASSIGNED</option>
-                              {assignablePeople.map((person) => (
-                                <option
-                                  key={`lead-${department.id}-${person.personId}`}
-                                  value={person.personId}
-                                >
-                                  {person.name}
-                                  {person.active ? "" : " • INACTIVE"}
-                                </option>
-                              ))}
-                            </select>
-                            {leadPerson ? (
-                              <CrewCard
-                                person={leadPerson}
-                                subtitle={leadPerson.email || "NO EMAIL"}
-                                badges={roleBadge("TEAM LEAD", accent)}
-                                accent={accent}
-                                compact
-                              />
-                            ) : (
-                              <div style={styles.dropPlaceholder}>
-                                SELECT A CREW MEMBER ABOVE
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        <div style={styles.memberPanel}>
-                          <div style={styles.dropZoneLabelRow}>
-                            <span style={styles.label}>MEMBERS</span>
-                            <span style={styles.orgDepartmentMeta}>
-                              {memberOnlyPeople.length} ASSIGNED
-                            </span>
-                          </div>
-                          {memberOnlyPeople.length === 0 ? (
-                            <div style={styles.dropPlaceholder}>
-                              USE THE ROSTER ASSIGN CONTROL TO ADD MEMBERS HERE.
-                            </div>
-                          ) : (
-                            <div style={memberGridStyle}>
-                              {memberOnlyPeople.map((person) => (
-                                <CrewCard
-                                  key={`${department.id}-${person.personId}`}
-                                  person={person}
-                                  subtitle={person.email || "NO EMAIL"}
-                                  accent={accent}
-                                  compact
-                                  onRemove={() =>
-                                    removeDepartmentMember(
-                                      department.id,
-                                      person.personId
-                                    )
-                                  }
-                                />
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </section>
-                    );
-                  })}
-                </div>
+        <Route
+          path="crew"
+          element={
+            <>
+              <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
+                <h2 style={styles.sectionTitle}>CREW PROFILE</h2>
+                <div style={styles.sectionDivider} />
+                <p style={styles.helperText}>
+                  FOCUSED VIEW FOR STANDUPS, LEAVE, WORK HOURS, MESSAGE ACTIVITY, AND
+                  INDIVIDUAL SCHEDULE SIGNALS.
+                </p>
               </div>
-            </div>
-          </>
-        )}
-      </div>
-
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-peach)" }}>
-        <h2 style={styles.sectionTitle}>DEPARTMENT STRUCTURE</h2>
-        <div style={styles.sectionDivider} />
-        {departments.length === 0 ? (
-          <p style={styles.emptyText}>NO DEPARTMENT DATA AVAILABLE</p>
-        ) : (
-          <div style={departmentGridStyle}>
-            {departments.map((dept) => (
-              <div
-                key={dept.id}
-                style={{
-                  ...lcarsPageStyles.subtleCard,
-                  borderLeftColor: "var(--lcars-peach)",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "flex-start",
-                    marginBottom: 12,
-                  }}
-                >
-                  <div>
-                    <div
-                      style={{
-                        fontFamily: "'Orbitron', sans-serif",
-                        fontSize: 12,
-                        fontWeight: 600,
-                        color: "var(--lcars-orange)",
-                        letterSpacing: "1px",
-                      }}
-                    >
-                      {dept.name.toUpperCase()}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: "var(--lcars-lavender)",
-                        marginTop: 2,
-                      }}
-                    >
-                      {dept.headName
-                        ? `HEAD: ${dept.headName.toUpperCase()}`
-                        : "NO HEAD ASSIGNED"}
-                    </div>
-                  </div>
-                  <div
-                    style={{
-                      fontFamily: "'JetBrains Mono', monospace",
-                      fontSize: 11,
-                      color: "var(--lcars-lavender)",
-                      background: "rgba(153, 153, 204, 0.1)",
-                      padding: "2px 8px",
-                      borderRadius: "0 10px 10px 0",
-                    }}
-                  >
-                    {dept.memberCount} CREW
-                  </div>
-                </div>
-                <ProgressBar current={dept.totalHours} total={dept.quotaTotal} />
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Monthly Hours & Remote Visibility (#9) */}
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-tan)" }}>
-        <h2 style={styles.sectionTitle}>MONTHLY HOURS & REMOTE VISIBILITY</h2>
-        <div style={styles.sectionDivider} />
-        {monthlyHours.length === 0 ? (
-          <p style={styles.emptyText}>NO MONTHLY HOURS DATA. SYNC CLOCKIFY + HULY FIRST.</p>
-        ) : (
-          <div style={styles.tableScrollWrap}>
-            <table style={monthlyHoursTableStyle}>
-            <thead>
-              <tr>
-                <th style={styles.th}>CREW MEMBER</th>
-                <th style={styles.th}>ACTUAL HOURS</th>
-                <th style={styles.th}>EXPECTED HOURS</th>
-                <th style={styles.th}>STATUS</th>
-                <th style={styles.th}>REMOTE</th>
-                <th style={styles.th}>TIMEZONE</th>
-                <th style={styles.th}>LEAVE</th>
-              </tr>
-            </thead>
-            <tbody>
-              {monthlyHours.map((row) => {
-                const statusColor =
-                  row.status === "under"
-                    ? "var(--lcars-red)"
-                    : row.status === "over"
-                      ? "var(--lcars-yellow)"
-                      : "var(--lcars-green)";
-                const statusLabel =
-                  row.status === "under"
-                    ? "UNDER (<120H)"
-                    : row.status === "over"
-                      ? "OVER (>180H)"
-                      : "NORMAL";
-                return (
-                  <tr key={row.employeeName}>
-                    <td style={styles.td}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <Avatar name={row.employeeName} size={22} />
-                        <span style={{ color: "var(--lcars-tan)" }}>{row.employeeName}</span>
-                        {row.onLeave && (
-                          <span
-                            style={{
-                              fontFamily: "'Orbitron', sans-serif",
-                              fontSize: 8,
-                              fontWeight: 600,
-                              color: "var(--lcars-yellow)",
-                              border: "1px solid var(--lcars-yellow)",
-                              padding: "1px 6px",
-                              borderRadius: 2,
-                              letterSpacing: "1px",
-                            }}
-                          >
-                            ON LEAVE
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td style={styles.tdMono}>{row.actualHours.toFixed(1)}h</td>
-                    <td style={styles.tdMono}>{row.expectedHours.toFixed(1)}h</td>
-                    <td style={{ ...styles.td, color: statusColor, fontWeight: 600, fontSize: 11 }}>
-                      {statusLabel}
-                    </td>
-                    <td style={styles.td}>
-                      {row.isRemote ? (
-                        <span
-                          style={{
-                            fontFamily: "'Orbitron', sans-serif",
-                            fontSize: 8,
-                            fontWeight: 600,
-                            color: "var(--lcars-cyan)",
-                            border: "1px solid var(--lcars-cyan)",
-                            padding: "1px 6px",
-                            borderRadius: 2,
-                            letterSpacing: "1px",
-                          }}
-                        >
-                          REMOTE
-                        </span>
-                      ) : (
-                        <span style={{ color: "var(--text-quaternary)", fontSize: 11 }}>ONSITE</span>
-                      )}
-                    </td>
-                    <td style={styles.tdMono}>{row.timezone ?? "--"}</td>
-                    <td style={styles.td}>
-                      {row.onLeave ? (
-                        <span style={{ color: "var(--lcars-yellow)", fontWeight: 600, fontSize: 11 }}>YES</span>
-                      ) : (
-                        <span style={{ color: "var(--text-quaternary)", fontSize: 11 }}>NO</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <EmployeeSummaryPanel
-        employees={activeEmployees}
-        selectedEmployeeId={selectedEmployeeId}
-        onSelectEmployee={setSelectedEmployeeId}
-        summary={employeeSummary}
-        loading={summaryLoading}
-        error={summaryError}
-      />
+              <EmployeeSummaryPanel
+                employees={activeEmployees}
+                selectedEmployeeId={selectedEmployeeId}
+                onSelectEmployee={setSelectedEmployeeId}
+                summary={employeeSummary}
+                loading={summaryLoading}
+                error={summaryError}
+              />
+            </>
+          }
+        />
+        <Route path="*" element={<Navigate to="mapping" replace />} />
+      </Routes>
     </div>
   );
 }
@@ -1422,6 +1358,43 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     lineHeight: 1.5,
     borderRadius: "0 16px 16px 0",
+  },
+  subrouteNav: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap" as const,
+    marginBottom: 16,
+  },
+  subrouteLink: {
+    border: "1px solid rgba(153, 153, 204, 0.22)",
+    color: "var(--lcars-lavender)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    letterSpacing: "1px",
+    textDecoration: "none",
+    padding: "8px 12px",
+    borderRadius: "0 12px 12px 0",
+    background: "rgba(153, 153, 204, 0.08)",
+  },
+  subrouteLinkActive: {
+    borderColor: "var(--lcars-cyan)",
+    color: "var(--lcars-cyan)",
+    background: "rgba(0, 204, 255, 0.12)",
+    boxShadow: "inset 0 0 0 1px rgba(0, 204, 255, 0.14)",
+  },
+  saveGateHint: {
+    borderLeft: "3px solid var(--lcars-red)",
+    background: "rgba(46, 20, 20, 0.45)",
+    borderTop: "1px solid rgba(255, 77, 109, 0.28)",
+    borderRight: "1px solid rgba(255, 77, 109, 0.28)",
+    borderBottom: "1px solid rgba(255, 77, 109, 0.28)",
+    borderRadius: "0 12px 12px 0",
+    color: "var(--lcars-red)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    letterSpacing: "1px",
+    textTransform: "uppercase" as const,
+    padding: "8px 10px",
   },
   card: lcarsPageStyles.card,
   sectionTitle: lcarsPageStyles.sectionTitle,
@@ -1586,7 +1559,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   orgWorkspace: {
     display: "grid",
-    gridTemplateColumns: "280px minmax(0, 1fr)",
+    gridTemplateColumns: "320px minmax(0, 1fr)",
     gap: 18,
     alignItems: "start",
   },
@@ -1623,15 +1596,57 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column" as const,
     gap: 8,
-    maxHeight: 360,
+    maxHeight: 420,
     overflowY: "auto" as const,
     paddingRight: 4,
   },
-  unassignedPanel: {
-    background: "rgba(18, 18, 34, 0.88)",
-    border: "1px dashed rgba(255, 204, 0, 0.35)",
-    padding: 12,
-    borderRadius: "0 16px 16px 0",
+  directoryModeRow: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 8,
+  },
+  directoryModeButton: {
+    background: "rgba(153, 153, 204, 0.08)",
+    border: "1px solid rgba(153, 153, 204, 0.22)",
+    color: "var(--lcars-lavender)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    letterSpacing: "1px",
+    padding: "8px 10px",
+    textAlign: "center" as const,
+    cursor: "pointer",
+  },
+  directoryModeButtonActive: {
+    borderColor: "var(--lcars-cyan)",
+    color: "var(--lcars-cyan)",
+    background: "rgba(0, 204, 255, 0.12)",
+    boxShadow: "inset 0 0 0 1px rgba(0, 204, 255, 0.14)",
+  },
+  validationStrip: {
+    display: "grid",
+    gridTemplateColumns: "1fr",
+    gap: 6,
+    padding: "10px 12px",
+    border: "1px solid rgba(153, 153, 204, 0.18)",
+    borderRadius: "0 14px 14px 0",
+    background: "rgba(12, 12, 26, 0.78)",
+  },
+  validationItem: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 8,
+  },
+  validationLabel: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    letterSpacing: "1.1px",
+    color: "var(--lcars-lavender)",
+  },
+  validationValue: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    fontWeight: 600,
   },
   orgCanvas: {
     minWidth: 0,
@@ -1721,16 +1736,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11,
     padding: "8px 10px",
   },
-  cardSelect: {
-    ...lcarsPageStyles.input,
-    minWidth: 148,
-    width: "100%",
-    maxWidth: 220,
-    height: 34,
-    padding: "6px 8px",
-    marginBottom: 0,
-    fontSize: 10,
-  },
   roleActionButton: {
     background: "transparent",
     border: "none",
@@ -1811,6 +1816,66 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1,
     cursor: "pointer",
     padding: 0,
+  },
+  directoryCrewCard: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 8,
+    background: "rgba(26, 26, 46, 0.92)",
+    padding: "10px 12px",
+    minWidth: 0,
+    borderRadius: "0 14px 14px 0",
+    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+  },
+  directoryIdentityRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    minWidth: 0,
+  },
+  directoryIdentityText: {
+    minWidth: 0,
+    flex: 1,
+  },
+  directoryCrewName: {
+    color: "var(--lcars-tan)",
+    fontSize: 13,
+    fontWeight: 600,
+    letterSpacing: "0.2px",
+    whiteSpace: "nowrap" as const,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  directoryCrewMeta: {
+    color: "var(--lcars-lavender)",
+    fontSize: 10,
+    letterSpacing: "0.4px",
+    marginTop: 2,
+    whiteSpace: "nowrap" as const,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  directoryAssignmentRow: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr)",
+    gap: 6,
+  },
+  directoryAssignmentPill: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    letterSpacing: "1px",
+    textTransform: "uppercase" as const,
+    padding: "3px 8px",
+    border: "1px solid",
+    width: "fit-content",
+  },
+  directorySelect: {
+    ...lcarsPageStyles.input,
+    width: "100%",
+    height: 34,
+    padding: "6px 8px",
+    marginBottom: 0,
+    fontSize: 10,
   },
   departmentGrid: {
     display: "grid",

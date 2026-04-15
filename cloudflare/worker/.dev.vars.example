@@ -1,5 +1,7 @@
 TF_CLOCKIFY_API_TOKEN_GLOBAL=
 TF_HULY_USER_TOKEN_GLOBAL=
 TF_SLACK_BOT_TOKEN_GLOBAL=
+TF_GITHUB_TOKEN_GLOBAL=
+TF_INTEGRATION_CONFIG_JSON={"github":{"repos":[{"repo":"Sheshiyer/parkarea-aleph","displayName":"ParkArea Phase 2 - Germany Launch","clientName":"ParkArea","defaultMilestoneNumber":1,"enabled":true}]},"huly":{"mirrorMode":"read_only","mirrorEnabled":true},"slack":{},"clockify":{}}
 TF_CREDENTIAL_ENVELOPE_KEY=
 TF_WEBHOOK_HMAC_SECRET=

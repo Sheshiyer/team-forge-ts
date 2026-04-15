@@ -413,7 +413,21 @@ function Activity() {
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                   {item.detail && (
-                    <span style={styles.detailText}>{item.detail}</span>
+                    item.sourceUrl ? (
+                      <a
+                        href={item.sourceUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ ...styles.detailText, textDecoration: "none" }}
+                      >
+                        {item.detail}
+                      </a>
+                    ) : (
+                      <span style={styles.detailText}>{item.detail}</span>
+                    )
+                  )}
+                  {item.status && (
+                    <span style={styles.statusText}>{item.status.toUpperCase()}</span>
                   )}
                   <span style={styles.timeText}>{timeAgo(item.occurredAt)}</span>
                 </div>
@@ -427,7 +441,13 @@ function Activity() {
 }
 
 function SourceBadge({ source }: { source: string }) {
-  const isClockify = source.toLowerCase() === "clockify";
+  const normalized = source.toLowerCase();
+  const color =
+    normalized === "github"
+      ? "var(--lcars-cyan)"
+      : normalized === "clockify"
+        ? "var(--lcars-orange)"
+        : "var(--lcars-peach)";
   return (
     <span
       style={{
@@ -438,12 +458,12 @@ function SourceBadge({ source }: { source: string }) {
         fontWeight: 600,
         fontFamily: "'Orbitron', sans-serif",
         letterSpacing: "1px",
-        border: `1px solid ${isClockify ? "var(--lcars-orange)" : "var(--lcars-peach)"}`,
-        color: isClockify ? "var(--lcars-orange)" : "var(--lcars-peach)",
+        border: `1px solid ${color}`,
+        color,
         textTransform: "uppercase" as const,
       }}
     >
-      {isClockify ? "CLOCKIFY" : "HULY"}
+      {source}
     </span>
   );
 }
@@ -472,6 +492,13 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--lcars-lavender)",
     fontSize: 13,
     flex: 1,
+  },
+  statusText: {
+    color: "var(--lcars-cyan)",
+    fontSize: 10,
+    fontFamily: "'Orbitron', sans-serif",
+    letterSpacing: "1px",
+    marginLeft: 12,
   },
   timeText: {
     fontFamily: "'JetBrains Mono', monospace",

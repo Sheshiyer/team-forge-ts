@@ -12,6 +12,9 @@ use crate::clockify::sync::ClockifySyncEngine;
 use crate::clockify::types::{ClockifyUser, ClockifyWorkspace};
 use crate::db::models::*;
 use crate::db::queries;
+use crate::github::client::GithubClient;
+use crate::github::sync::GithubSyncEngine;
+use crate::github::types::github_project_id;
 use crate::huly::client::HulyClient;
 use crate::huly::sync::HulySyncEngine;
 use crate::huly::types::{
@@ -21,6 +24,7 @@ use crate::huly::types::{
     HulyWorkspaceNormalizationSnapshot,
 };
 use crate::slack::client::SlackClient;
+use crate::slack::sync::SlackSyncEngine;
 use crate::slack::types::{SlackConversation, SlackMessage, SlackUser};
 use crate::sync::scheduler::SyncScheduler;
 use crate::{DbPool, SchedulerState};
@@ -687,6 +691,41 @@ pub async fn save_setting(db: State<'_, DbPool>, key: String, value: String) -> 
     Ok(())
 }
 
+#[tauri::command]
+pub async fn sync_github_plans(db: State<'_, DbPool>) -> Result<Vec<GithubSyncReport>, String> {
+    let pool = &db.0;
+    run_github_sync_from_settings(pool).await
+}
+
+async fn seed_configured_github_repos(pool: &sqlx::SqlitePool) -> Result<(), String> {
+    let Some(repos) = queries::get_setting(pool, "github_repos")
+        .await
+        .map_err(|e| format!("read github repos: {e}"))?
+    else {
+        return Ok(());
+    };
+    let now = Utc::now().to_rfc3339();
+
+    for repo in parse_multi_value_setting(&repos) {
+        let config = GithubRepoConfig {
+            repo: repo.clone(),
+            display_name: repo,
+            client_name: None,
+            default_milestone_number: None,
+            huly_project_id: None,
+            clockify_project_id: None,
+            enabled: true,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        };
+        queries::upsert_github_repo_config(pool, &config)
+            .await
+            .map_err(|e| format!("upsert github repo config: {e}"))?;
+    }
+
+    Ok(())
+}
+
 // ─── Dashboard commands ─────────────────────────────────────────
 
 #[tauri::command]
@@ -966,6 +1005,257 @@ pub async fn get_projects_catalog(
     Ok(rows)
 }
 
+#[derive(sqlx::FromRow)]
+struct ClockifyProjectHoursRow {
+    project_id: Option<String>,
+    total_seconds: f64,
+    billable_seconds: f64,
+    member_count: i64,
+}
+
+fn month_bounds() -> (String, String) {
+    let now = Local::now();
+    let start =
+        NaiveDate::from_ymd_opt(now.year(), now.month(), 1).unwrap_or_else(|| now.date_naive());
+    let end = if now.month() == 12 {
+        NaiveDate::from_ymd_opt(now.year() + 1, 1, 1).unwrap()
+    } else {
+        NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1).unwrap()
+    };
+    (start.to_string(), end.to_string())
+}
+
+fn normalize_project_match(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
+fn project_hours_from_row(row: &ClockifyProjectHoursRow) -> (f64, f64, u32, f64) {
+    let total_hours = row.total_seconds / 3600.0;
+    let billable_hours = row.billable_seconds / 3600.0;
+    let utilization = if total_hours > 0.0 {
+        billable_hours / total_hours
+    } else {
+        0.0
+    };
+    (
+        total_hours,
+        billable_hours,
+        row.member_count.max(0) as u32,
+        utilization,
+    )
+}
+
+#[tauri::command]
+pub async fn get_execution_projects(
+    db: State<'_, DbPool>,
+) -> Result<Vec<ExecutionProjectView>, String> {
+    let pool = &db.0;
+
+    let (start, end) = month_bounds();
+    let clockify_rows: Vec<ClockifyProjectHoursRow> = sqlx::query_as(
+        "SELECT
+            te.project_id AS project_id,
+            COALESCE(SUM(te.duration_seconds), 0) AS total_seconds,
+            COALESCE(SUM(CASE WHEN te.is_billable = 1 THEN te.duration_seconds ELSE 0 END), 0) AS billable_seconds,
+            COUNT(DISTINCT te.employee_id) AS member_count
+         FROM time_entries te
+         JOIN employees e ON e.id = te.employee_id
+         WHERE e.is_active = 1 AND te.start_time >= ?1 AND te.start_time < ?2
+         GROUP BY te.project_id",
+    )
+    .bind(&start)
+    .bind(&end)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("load clockify project hours: {e}"))?;
+
+    let all_clockify_projects = queries::get_projects(pool)
+        .await
+        .map_err(|e| format!("load clockify projects: {e}"))?;
+    let clockify_by_id: HashMap<String, &ClockifyProjectHoursRow> = clockify_rows
+        .iter()
+        .filter_map(|row| row.project_id.as_ref().map(|id| (id.clone(), row)))
+        .collect();
+    let clockify_by_normalized_name: HashMap<String, String> = all_clockify_projects
+        .iter()
+        .map(|project| (normalize_project_match(&project.name), project.id.clone()))
+        .collect();
+
+    #[derive(sqlx::FromRow)]
+    struct GithubProjectRow {
+        repo: String,
+        display_name: String,
+        default_milestone_number: Option<i64>,
+        huly_project_id: Option<String>,
+        clockify_project_id: Option<String>,
+        milestone_title: Option<String>,
+        milestone_state: Option<String>,
+        total_issues: i64,
+        open_issues: i64,
+        closed_issues: i64,
+        latest_activity: Option<String>,
+    }
+
+    let github_rows: Vec<GithubProjectRow> = sqlx::query_as(
+        "SELECT
+            c.repo,
+            c.display_name,
+            c.default_milestone_number,
+            c.huly_project_id,
+            c.clockify_project_id,
+            m.title AS milestone_title,
+            m.state AS milestone_state,
+            COUNT(i.number) AS total_issues,
+            COALESCE(SUM(CASE WHEN LOWER(i.state) = 'open' THEN 1 ELSE 0 END), 0) AS open_issues,
+            COALESCE(SUM(CASE WHEN LOWER(i.state) = 'closed' THEN 1 ELSE 0 END), 0) AS closed_issues,
+            MAX(i.updated_at) AS latest_activity
+         FROM github_repo_configs c
+         LEFT JOIN github_milestones m
+           ON m.repo = c.repo AND m.number = c.default_milestone_number
+         LEFT JOIN github_issues i
+           ON i.repo = c.repo AND (
+             (c.default_milestone_number IS NOT NULL AND i.milestone_number = c.default_milestone_number)
+             OR (c.default_milestone_number IS NULL AND i.milestone_number IS NULL)
+           )
+         WHERE c.enabled = 1
+         GROUP BY c.repo, c.display_name, c.default_milestone_number, c.huly_project_id,
+                  c.clockify_project_id, m.title, m.state
+         ORDER BY latest_activity DESC, c.display_name ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("load github execution projects: {e}"))?;
+
+    let mut rows = Vec::new();
+    let mut used_clockify_ids = HashSet::new();
+
+    for row in github_rows {
+        let milestone_number = row.default_milestone_number.unwrap_or(0);
+        let project_id = github_project_id(&row.repo, milestone_number);
+        let title = row
+            .milestone_title
+            .clone()
+            .unwrap_or(row.display_name.clone());
+        let matched_clockify_id = row
+            .clockify_project_id
+            .clone()
+            .or_else(|| {
+                clockify_by_normalized_name
+                    .get(&normalize_project_match(&title))
+                    .cloned()
+            })
+            .or_else(|| {
+                clockify_by_normalized_name
+                    .get(&normalize_project_match(&row.display_name))
+                    .cloned()
+            });
+        let hours = matched_clockify_id
+            .as_ref()
+            .and_then(|id| clockify_by_id.get(id).copied());
+        if let Some(id) = matched_clockify_id.as_ref() {
+            used_clockify_ids.insert(id.clone());
+        }
+        let (total_hours, billable_hours, team_members, utilization) = hours
+            .map(project_hours_from_row)
+            .unwrap_or((0.0, 0.0, 0, 0.0));
+        let total_issues = row.total_issues.max(0) as u32;
+        let closed_issues = row.closed_issues.max(0) as u32;
+        let open_issues = row.open_issues.max(0) as u32;
+        let percent_complete = if total_issues > 0 {
+            closed_issues as f64 / total_issues as f64
+        } else {
+            0.0
+        };
+        let status = if total_issues > 0 && open_issues == 0 {
+            "done"
+        } else if row
+            .milestone_state
+            .as_deref()
+            .unwrap_or_default()
+            .eq_ignore_ascii_case("closed")
+        {
+            "done"
+        } else {
+            "active"
+        };
+
+        rows.push(ExecutionProjectView {
+            id: project_id,
+            source: "github".to_string(),
+            repo: Some(row.repo),
+            milestone: row.milestone_title,
+            title,
+            status: status.to_string(),
+            total_issues,
+            open_issues,
+            closed_issues,
+            percent_complete,
+            latest_activity: row.latest_activity,
+            huly_project_id: row.huly_project_id,
+            clockify_project_id: matched_clockify_id,
+            total_hours,
+            billable_hours,
+            team_members,
+            utilization,
+        });
+    }
+
+    for project in all_clockify_projects {
+        if project.is_archived || used_clockify_ids.contains(&project.id) {
+            continue;
+        }
+        let hours = clockify_by_id.get(&project.id).copied();
+        let (total_hours, billable_hours, team_members, utilization) = hours
+            .map(project_hours_from_row)
+            .unwrap_or((0.0, 0.0, 0, 0.0));
+        rows.push(ExecutionProjectView {
+            id: format!("clockify:{}", project.id),
+            source: "clockify".to_string(),
+            repo: None,
+            milestone: None,
+            title: project.name,
+            status: "active".to_string(),
+            total_issues: 0,
+            open_issues: 0,
+            closed_issues: 0,
+            percent_complete: 0.0,
+            latest_activity: None,
+            huly_project_id: project.huly_project_id,
+            clockify_project_id: Some(project.id),
+            total_hours,
+            billable_hours,
+            team_members,
+            utilization,
+        });
+    }
+
+    rows.sort_by(|left, right| {
+        let source_order = source_rank(&left.source).cmp(&source_rank(&right.source));
+        if source_order != std::cmp::Ordering::Equal {
+            return source_order;
+        }
+        right
+            .latest_activity
+            .cmp(&left.latest_activity)
+            .then_with(|| right.total_hours.total_cmp(&left.total_hours))
+            .then_with(|| left.title.cmp(&right.title))
+    });
+
+    Ok(rows)
+}
+
+fn source_rank(source: &str) -> u8 {
+    match source {
+        "github" => 0,
+        "clockify" => 1,
+        _ => 2,
+    }
+}
+
 // ─── Timesheet ──────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1017,40 +1307,141 @@ pub async fn get_activity_feed(
 ) -> Result<Vec<ActivityItem>, String> {
     let pool = &db.0;
 
-    // Union time entries and huly issue activities, join employee names
-    let items: Vec<ActivityItem> = sqlx::query_as::<_, ActivityItem>(
-        "SELECT * FROM (
-            SELECT
-                'clockify' AS source,
-                e.name AS employee_name,
-                'logged time' AS action,
-                te.description AS detail,
-                te.start_time AS occurred_at
-            FROM time_entries te
-            JOIN employees e ON te.employee_id = e.id
-            WHERE e.is_active = 1
-
-            UNION ALL
-
-            SELECT
-                'huly' AS source,
-                e.name AS employee_name,
-                h.action AS action,
-                COALESCE(h.issue_identifier || ': ' || h.issue_title, h.issue_title) AS detail,
-                h.occurred_at AS occurred_at
-            FROM huly_issue_activity h
-            JOIN employees e ON h.employee_id = e.id
-            WHERE e.is_active = 1
-        )
-        ORDER BY occurred_at DESC
-        LIMIT ?1",
+    let rows: Vec<OpsActivityRow> = sqlx::query_as(
+        "SELECT
+            o.source,
+            o.event_type,
+            o.entity_type,
+            o.entity_id,
+            o.actor_employee_id,
+            e.name AS employee_name,
+            o.occurred_at,
+            o.payload_json
+         FROM ops_events o
+         LEFT JOIN employees e ON e.id = o.actor_employee_id
+         ORDER BY o.occurred_at DESC
+         LIMIT ?1",
     )
     .bind(limit)
     .fetch_all(pool)
     .await
     .map_err(|e| format!("db error: {e}"))?;
 
-    Ok(items)
+    Ok(rows.into_iter().map(activity_from_ops_row).collect())
+}
+
+#[tauri::command]
+pub async fn get_project_activity(
+    db: State<'_, DbPool>,
+    project_id: String,
+    limit: u32,
+) -> Result<Vec<ActivityItem>, String> {
+    let pool = &db.0;
+    let rows: Vec<OpsActivityRow> = sqlx::query_as(
+        "SELECT
+            o.source,
+            o.event_type,
+            o.entity_type,
+            o.entity_id,
+            o.actor_employee_id,
+            e.name AS employee_name,
+            o.occurred_at,
+            o.payload_json
+         FROM ops_events o
+         LEFT JOIN employees e ON e.id = o.actor_employee_id
+         WHERE json_extract(o.payload_json, '$.project_id') = ?1
+         ORDER BY o.occurred_at DESC
+         LIMIT ?2",
+    )
+    .bind(&project_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("db error: {e}"))?;
+
+    Ok(rows.into_iter().map(activity_from_ops_row).collect())
+}
+
+#[derive(sqlx::FromRow)]
+struct OpsActivityRow {
+    source: String,
+    event_type: String,
+    entity_type: String,
+    entity_id: String,
+    actor_employee_id: Option<String>,
+    employee_name: Option<String>,
+    occurred_at: String,
+    payload_json: String,
+}
+
+fn activity_from_ops_row(row: OpsActivityRow) -> ActivityItem {
+    let payload = serde_json::from_str::<Value>(&row.payload_json).unwrap_or(Value::Null);
+    let employee_name = row
+        .employee_name
+        .or_else(|| row.actor_employee_id.clone())
+        .unwrap_or_else(|| match row.source.as_str() {
+            "github" => "GitHub".to_string(),
+            "huly" => "Huly".to_string(),
+            "clockify" => "Clockify".to_string(),
+            _ => "System".to_string(),
+        });
+    let action = match row.event_type.as_str() {
+        "clockify.time_entry.logged" => "logged time".to_string(),
+        "github.issue.opened" => "opened issue".to_string(),
+        "github.issue.updated" => "updated issue".to_string(),
+        "github.issue.closed" => "closed issue".to_string(),
+        "github.issue.reopened" => "reopened issue".to_string(),
+        "github.issue.labels_changed" => "changed issue labels".to_string(),
+        "github.issue.assignees_changed" => "changed issue assignees".to_string(),
+        "huly.issue.modified" => "mirrored issue".to_string(),
+        other => other.rsplit('.').next().unwrap_or(other).replace('_', " "),
+    };
+    let title = payload
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            payload
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            payload
+                .get("identifier")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    let number = payload.get("number").and_then(Value::as_i64);
+    let detail = match (number, title) {
+        (Some(number), Some(title)) if row.source == "github" => {
+            Some(format!("#{number}: {title}"))
+        }
+        (_, Some(title)) => Some(title),
+        _ => Some(row.entity_id.clone()),
+    };
+
+    ActivityItem {
+        source: row.source,
+        employee_name,
+        action,
+        detail,
+        occurred_at: row.occurred_at,
+        project_id: payload
+            .get("project_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        source_url: payload
+            .get("url")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        entity_type: Some(row.entity_type),
+        status: payload
+            .get("state")
+            .or_else(|| payload.get("status"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    }
 }
 
 // ─── Presence status ────────────────────────────────────────────
@@ -4620,9 +5011,7 @@ pub async fn get_employee_summary(
 
 // ─── Naming convention (#13) ──────────────────────────────────
 
-use crate::huly::naming::{
-    compute_compliance_stats, parse_task_name, NamingComplianceStats, ParsedTaskName,
-};
+use crate::huly::naming::{compute_compliance_stats, parse_task_name, NamingComplianceStats};
 
 #[tauri::command]
 pub async fn get_naming_compliance(db: State<'_, DbPool>) -> Result<NamingComplianceStats, String> {
@@ -4929,12 +5318,17 @@ pub struct ClientView {
     pub name: String,
     pub tier: String,
     pub industry: Option<String>,
-    pub monthly_value: f64,
+    pub month_billable_hours: f64,
     pub active_projects: u32,
+    pub planning_source: String,
+    pub github_projects: u32,
+    pub github_open_issues: u32,
+    pub github_total_issues: u32,
     pub primary_contact: Option<String>,
     pub contract_status: String,
     pub contract_end_date: Option<String>,
     pub days_remaining: Option<i32>,
+    pub latest_activity_at: Option<String>,
     pub tech_stack: Vec<String>,
     pub drive_link: Option<String>,
     pub chrome_profile: Option<String>,
@@ -4956,6 +5350,11 @@ pub struct ClientLinkedProjectView {
     pub id: String,
     pub name: String,
     pub status: String,
+    pub source: String,
+    pub repo: Option<String>,
+    pub open_issues: u32,
+    pub total_issues: u32,
+    pub source_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -5019,12 +5418,55 @@ fn parse_datetime_flexible(value: &str) -> Option<chrono::DateTime<Utc>> {
         .ok()
 }
 
-fn infer_client_tier(monthly_value: f64, active_projects: u32) -> String {
-    if monthly_value >= 20_000.0 {
+fn most_recent_datetime(left: Option<String>, right: Option<String>) -> Option<String> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (Some(left), Some(right)) => {
+            let left_parsed = parse_datetime_flexible(&left);
+            let right_parsed = parse_datetime_flexible(&right);
+            match (left_parsed, right_parsed) {
+                (Some(left_dt), Some(right_dt)) if right_dt > left_dt => Some(right),
+                (Some(_), Some(_)) => Some(left),
+                _ if right > left => Some(right),
+                _ => Some(left),
+            }
+        }
+    }
+}
+
+fn merge_planning_source(existing: &str, incoming: &str) -> String {
+    if existing == incoming {
+        return existing.to_string();
+    }
+    if existing.contains(incoming) {
+        return existing.to_string();
+    }
+    if incoming.contains(existing) {
+        return incoming.to_string();
+    }
+    format!("{existing}+{incoming}")
+}
+
+fn push_unique_tag(tags: &mut Vec<String>, tag: &str) {
+    if !tags.iter().any(|item| item.eq_ignore_ascii_case(tag)) {
+        tags.push(tag.to_string());
+    }
+}
+
+fn github_milestone_url(repo: &str, milestone_number: Option<i64>) -> String {
+    match milestone_number {
+        Some(number) if number > 0 => format!("https://github.com/{repo}/milestone/{number}"),
+        _ => format!("https://github.com/{repo}"),
+    }
+}
+
+fn infer_client_tier(month_billable_hours: f64, active_projects: u32) -> String {
+    if month_billable_hours >= 200.0 {
         "Tier 1".to_string()
-    } else if monthly_value >= 10_000.0 {
+    } else if month_billable_hours >= 100.0 {
         "Tier 2".to_string()
-    } else if monthly_value >= 5_000.0 {
+    } else if month_billable_hours >= 50.0 {
         "Tier 3".to_string()
     } else if active_projects >= 3 {
         "Tier 4".to_string()
@@ -5177,27 +5619,6 @@ async fn get_client_setting_value(
     Ok(legacy_value)
 }
 
-async fn load_client_hourly_rate(pool: &sqlx::SqlitePool) -> Result<f64, String> {
-    for key in [
-        "client_default_hourly_rate",
-        "default_hourly_rate",
-        "billing_hourly_rate",
-    ] {
-        if let Some(value) = queries::get_setting(pool, key)
-            .await
-            .map_err(|e| format!("read {key}: {e}"))?
-        {
-            if let Ok(rate) = value.trim().parse::<f64>() {
-                if rate.is_finite() && rate > 0.0 {
-                    return Ok(rate);
-                }
-            }
-        }
-    }
-
-    Ok(100.0)
-}
-
 async fn load_clients(pool: &sqlx::SqlitePool) -> Result<Vec<ClientView>, String> {
     #[derive(sqlx::FromRow)]
     struct ClientAggregateRow {
@@ -5215,6 +5636,16 @@ async fn load_clients(pool: &sqlx::SqlitePool) -> Result<Vec<ClientView>, String
         month_seconds: i64,
     }
 
+    #[derive(sqlx::FromRow)]
+    struct GithubClientAggregateRow {
+        client_name: String,
+        github_projects: i64,
+        open_issues: i64,
+        total_issues: i64,
+        latest_activity_at: Option<String>,
+        project_names_csv: Option<String>,
+    }
+
     let now = Local::now();
     let month_start = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
         .unwrap()
@@ -5227,8 +5658,6 @@ async fn load_clients(pool: &sqlx::SqlitePool) -> Result<Vec<ClientView>, String
     }
     .format("%Y-%m-%d")
     .to_string();
-
-    let hourly_rate = load_client_hourly_rate(pool).await?;
 
     let rows: Vec<ClientAggregateRow> = sqlx::query_as::<_, ClientAggregateRow>(
         "SELECT
@@ -5297,8 +5726,8 @@ async fn load_clients(pool: &sqlx::SqlitePool) -> Result<Vec<ClientView>, String
         let client_slug = slugify_client_name(&client_name);
         let project_names = parse_csv_values(row.project_names_csv);
         let active_projects = row.active_projects.max(0) as u32;
-        let monthly_value = ((row.month_billable_seconds as f64) / 3600.0 * hourly_rate).round();
-        let tier = infer_client_tier(monthly_value, active_projects);
+        let month_billable_hours = row.month_billable_seconds as f64 / 3600.0;
+        let tier = infer_client_tier(month_billable_hours, active_projects);
         let industry = infer_client_industry(&client_name, &project_names);
         let tech_stack = infer_client_tech_stack(&project_names);
         let (contract_status, contract_end_date, days_remaining) =
@@ -5309,23 +5738,124 @@ async fn load_clients(pool: &sqlx::SqlitePool) -> Result<Vec<ClientView>, String
             name: client_name.clone(),
             tier,
             industry,
-            monthly_value,
+            month_billable_hours,
             active_projects,
+            planning_source: "clockify".to_string(),
+            github_projects: 0,
+            github_open_issues: 0,
+            github_total_issues: 0,
             primary_contact: primary_contact_by_client.get(&client_name).cloned(),
             contract_status,
             contract_end_date,
             days_remaining,
+            latest_activity_at: row.last_activity_at,
             tech_stack,
             drive_link: get_client_setting_value(pool, &client_slug, "drive_link").await?,
             chrome_profile: get_client_setting_value(pool, &client_slug, "chrome_profile").await?,
         });
     }
 
+    let github_rows: Vec<GithubClientAggregateRow> = sqlx::query_as::<_, GithubClientAggregateRow>(
+        "SELECT
+            TRIM(c.client_name) AS client_name,
+            COUNT(DISTINCT c.repo || ':' || COALESCE(c.default_milestone_number, 0)) AS github_projects,
+            COALESCE(SUM(CASE WHEN LOWER(i.state) = 'open' THEN 1 ELSE 0 END), 0) AS open_issues,
+            COUNT(i.number) AS total_issues,
+            MAX(COALESCE(i.updated_at, m.updated_at, c.updated_at)) AS latest_activity_at,
+            GROUP_CONCAT(DISTINCT COALESCE(m.title, c.display_name)) AS project_names_csv
+         FROM github_repo_configs c
+         LEFT JOIN github_milestones m
+           ON m.repo = c.repo AND m.number = c.default_milestone_number
+         LEFT JOIN github_issues i
+           ON i.repo = c.repo AND (
+             (c.default_milestone_number IS NOT NULL AND i.milestone_number = c.default_milestone_number)
+             OR (c.default_milestone_number IS NULL AND i.milestone_number IS NULL)
+           )
+         WHERE c.enabled = 1
+           AND c.client_name IS NOT NULL
+           AND TRIM(c.client_name) <> ''
+         GROUP BY TRIM(c.client_name)",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("query github clients: {e}"))?;
+
+    let mut client_index_by_name: HashMap<String, usize> = clients
+        .iter()
+        .enumerate()
+        .map(|(index, client)| (client.name.to_lowercase(), index))
+        .collect();
+
+    for row in github_rows {
+        let client_name = row.client_name.trim().to_string();
+        if client_name.is_empty() {
+            continue;
+        }
+        let project_names = parse_csv_values(row.project_names_csv);
+        let github_projects = row.github_projects.max(0) as u32;
+        let open_issues = row.open_issues.max(0) as u32;
+        let total_issues = row.total_issues.max(0) as u32;
+
+        if let Some(index) = client_index_by_name
+            .get(&client_name.to_lowercase())
+            .copied()
+        {
+            let client = &mut clients[index];
+            client.planning_source = merge_planning_source(&client.planning_source, "github");
+            client.github_projects = client.github_projects.saturating_add(github_projects);
+            client.github_open_issues = client.github_open_issues.saturating_add(open_issues);
+            client.github_total_issues = client.github_total_issues.saturating_add(total_issues);
+            client.active_projects = client.active_projects.max(client.github_projects);
+            client.latest_activity_at =
+                most_recent_datetime(client.latest_activity_at.clone(), row.latest_activity_at);
+            let (contract_status, contract_end_date, days_remaining) =
+                infer_contract_health(client.latest_activity_at.as_deref());
+            client.contract_status = contract_status;
+            client.contract_end_date = contract_end_date;
+            client.days_remaining = days_remaining;
+            push_unique_tag(&mut client.tech_stack, "GitHub Plans");
+            if client.industry.is_none() {
+                client.industry = infer_client_industry(&client.name, &project_names);
+            }
+        } else {
+            let client_slug = slugify_client_name(&client_name);
+            let mut tech_stack = infer_client_tech_stack(&project_names);
+            push_unique_tag(&mut tech_stack, "GitHub Plans");
+            let active_projects = github_projects;
+            let (contract_status, contract_end_date, days_remaining) =
+                infer_contract_health(row.latest_activity_at.as_deref());
+            let client = ClientView {
+                id: format!("client-{client_slug}"),
+                name: client_name.clone(),
+                tier: infer_client_tier(0.0, active_projects),
+                industry: infer_client_industry(&client_name, &project_names),
+                month_billable_hours: 0.0,
+                active_projects,
+                planning_source: "github".to_string(),
+                github_projects,
+                github_open_issues: open_issues,
+                github_total_issues: total_issues,
+                primary_contact: None,
+                contract_status,
+                contract_end_date,
+                days_remaining,
+                latest_activity_at: row.latest_activity_at,
+                tech_stack,
+                drive_link: get_client_setting_value(pool, &client_slug, "drive_link").await?,
+                chrome_profile: get_client_setting_value(pool, &client_slug, "chrome_profile")
+                    .await?,
+            };
+            client_index_by_name.insert(client.name.to_lowercase(), clients.len());
+            clients.push(client);
+        }
+    }
+
     clients.sort_by(|left, right| {
         right
-            .monthly_value
-            .partial_cmp(&left.monthly_value)
+            .month_billable_hours
+            .partial_cmp(&left.month_billable_hours)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then(right.active_projects.cmp(&left.active_projects))
             .then(left.name.cmp(&right.name))
     });
 
@@ -5357,6 +5887,17 @@ pub async fn get_client_detail(
         last_activity_at: Option<String>,
     }
 
+    #[derive(sqlx::FromRow)]
+    struct GithubLinkedProjectRow {
+        repo: String,
+        display_name: String,
+        default_milestone_number: Option<i64>,
+        milestone_title: Option<String>,
+        milestone_state: Option<String>,
+        open_issues: i64,
+        total_issues: i64,
+    }
+
     let linked_project_rows: Vec<LinkedProjectRow> = sqlx::query_as::<_, LinkedProjectRow>(
         "SELECT
             p.id AS id,
@@ -5375,14 +5916,78 @@ pub async fn get_client_detail(
     .await
     .map_err(|e| format!("query linked projects: {e}"))?;
 
-    let linked_projects = linked_project_rows
+    let mut linked_projects: Vec<ClientLinkedProjectView> = linked_project_rows
         .into_iter()
         .map(|project| ClientLinkedProjectView {
             id: project.id,
             name: project.name,
             status: infer_project_status(project.is_archived, project.last_activity_at.as_deref()),
+            source: "clockify".to_string(),
+            repo: None,
+            open_issues: 0,
+            total_issues: 0,
+            source_url: None,
         })
         .collect();
+
+    let github_linked_rows: Vec<GithubLinkedProjectRow> = sqlx::query_as(
+        "SELECT
+            c.repo,
+            c.display_name,
+            c.default_milestone_number,
+            m.title AS milestone_title,
+            m.state AS milestone_state,
+            COALESCE(SUM(CASE WHEN LOWER(i.state) = 'open' THEN 1 ELSE 0 END), 0) AS open_issues,
+            COUNT(i.number) AS total_issues
+         FROM github_repo_configs c
+         LEFT JOIN github_milestones m
+           ON m.repo = c.repo AND m.number = c.default_milestone_number
+         LEFT JOIN github_issues i
+           ON i.repo = c.repo AND (
+             (c.default_milestone_number IS NOT NULL AND i.milestone_number = c.default_milestone_number)
+             OR (c.default_milestone_number IS NULL AND i.milestone_number IS NULL)
+           )
+         WHERE c.enabled = 1
+           AND c.client_name IS NOT NULL
+           AND LOWER(TRIM(c.client_name)) = LOWER(TRIM(?1))
+         GROUP BY c.repo, c.display_name, c.default_milestone_number, m.title, m.state
+         ORDER BY COALESCE(m.title, c.display_name) COLLATE NOCASE",
+    )
+    .bind(&client.name)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("query client github projects: {e}"))?;
+
+    for project in github_linked_rows {
+        let milestone_number = project.default_milestone_number.unwrap_or(0);
+        let open_issues = project.open_issues.max(0) as u32;
+        let total_issues = project.total_issues.max(0) as u32;
+        let status = if total_issues > 0 && open_issues == 0 {
+            "done".to_string()
+        } else if project
+            .milestone_state
+            .as_deref()
+            .unwrap_or_default()
+            .eq_ignore_ascii_case("closed")
+        {
+            "done".to_string()
+        } else {
+            "active".to_string()
+        };
+        linked_projects.push(ClientLinkedProjectView {
+            id: github_project_id(&project.repo, milestone_number),
+            name: project.milestone_title.unwrap_or(project.display_name),
+            status,
+            source: "github".to_string(),
+            repo: Some(project.repo.clone()),
+            open_issues,
+            total_issues,
+            source_url: Some(github_milestone_url(
+                &project.repo,
+                project.default_milestone_number,
+            )),
+        });
+    }
 
     let mut resources = Vec::new();
     if let Some(link) = &client.drive_link {
@@ -5431,7 +6036,11 @@ pub async fn get_client_detail(
             e.name AS employee_name,
             'logged time' AS action,
             COALESCE(te.description, p.name) AS detail,
-            te.start_time AS occurred_at
+            te.start_time AS occurred_at,
+            te.project_id AS project_id,
+            NULL AS source_url,
+            'clockify_time_entry' AS entity_type,
+            NULL AS status
          FROM time_entries te
          JOIN projects p ON p.id = te.project_id
          JOIN employees e ON e.id = te.employee_id
@@ -5452,7 +6061,11 @@ pub async fn get_client_detail(
             e.name AS employee_name,
             h.action AS action,
             COALESCE(h.issue_identifier || ': ' || h.issue_title, h.issue_title, h.huly_issue_id) AS detail,
-            h.occurred_at AS occurred_at
+            h.occurred_at AS occurred_at,
+            NULL AS project_id,
+            NULL AS source_url,
+            'huly_issue' AS entity_type,
+            h.new_status AS status
          FROM huly_issue_activity h
          JOIN employees e ON e.id = h.employee_id
          WHERE e.is_active = 1
@@ -5474,7 +6087,11 @@ pub async fn get_client_detail(
             e.name AS employee_name,
             h.action AS action,
             h.doc_title AS detail,
-            h.occurred_at AS occurred_at
+            h.occurred_at AS occurred_at,
+            NULL AS project_id,
+            NULL AS source_url,
+            'huly_document' AS entity_type,
+            NULL AS status
          FROM huly_document_activity h
          JOIN employees e ON e.id = h.employee_id
          WHERE e.is_active = 1
@@ -5487,8 +6104,43 @@ pub async fn get_client_detail(
     .await
     .map_err(|e| format!("query client document activity: {e}"))?;
 
+    let github_activity: Vec<ActivityItem> = sqlx::query_as::<_, ActivityItem>(
+        "SELECT
+            'github' AS source,
+            'GitHub' AS employee_name,
+            CASE o.event_type
+                WHEN 'github.issue.opened' THEN 'opened issue'
+                WHEN 'github.issue.updated' THEN 'updated issue'
+                WHEN 'github.issue.closed' THEN 'closed issue'
+                WHEN 'github.issue.reopened' THEN 'reopened issue'
+                WHEN 'github.issue.labels_changed' THEN 'changed issue labels'
+                WHEN 'github.issue.assignees_changed' THEN 'changed issue assignees'
+                ELSE REPLACE(o.event_type, 'github.issue.', '')
+            END AS action,
+            '#' || json_extract(o.payload_json, '$.number') || ': ' || json_extract(o.payload_json, '$.title') AS detail,
+            o.occurred_at AS occurred_at,
+            json_extract(o.payload_json, '$.project_id') AS project_id,
+            json_extract(o.payload_json, '$.url') AS source_url,
+            o.entity_type AS entity_type,
+            json_extract(o.payload_json, '$.state') AS status
+         FROM ops_events o
+         JOIN github_repo_configs c
+           ON c.repo = json_extract(o.payload_json, '$.repo')
+         WHERE o.source = 'github'
+           AND c.enabled = 1
+           AND c.client_name IS NOT NULL
+           AND LOWER(TRIM(c.client_name)) = LOWER(TRIM(?1))
+         ORDER BY o.occurred_at DESC
+         LIMIT 12",
+    )
+    .bind(&client.name)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("query client github activity: {e}"))?;
+
     recent_activity.extend(issue_activity);
     recent_activity.extend(doc_activity);
+    recent_activity.extend(github_activity);
     recent_activity.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
     recent_activity.truncate(20);
 
@@ -7433,6 +8085,56 @@ struct CloudCredentials {
     clockify: Option<CloudCredential>,
     huly: Option<CloudCredential>,
     slack: Option<CloudCredential>,
+    github: Option<CloudCredential>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CloudIntegrationConfig {
+    clockify: Option<CloudClockifyIntegration>,
+    huly: Option<CloudHulyIntegration>,
+    slack: Option<CloudSlackIntegration>,
+    github: Option<CloudGithubIntegration>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CloudClockifyIntegration {
+    workspace_id: Option<String>,
+    ignored_emails: Option<Vec<String>>,
+    ignored_employee_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CloudHulyIntegration {
+    mirror_mode: Option<String>,
+    mirror_enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CloudSlackIntegration {
+    channel_filters: Option<Vec<String>>,
+    backfill_days: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CloudGithubIntegration {
+    repos: Option<Vec<CloudGithubRepoConfig>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CloudGithubRepoConfig {
+    repo: String,
+    display_name: Option<String>,
+    client_name: Option<String>,
+    default_milestone_number: Option<i64>,
+    huly_project_id: Option<String>,
+    clockify_project_id: Option<String>,
+    enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -7444,6 +8146,7 @@ struct CloudCredentialResponse {
 #[derive(Debug, Clone, Deserialize)]
 struct CloudCredentialData {
     credentials: CloudCredentials,
+    integrations: Option<CloudIntegrationConfig>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -7454,9 +8157,79 @@ pub struct CredentialSyncResult {
     pub errors: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudIntegrationSyncResult {
+    pub cloud: CredentialSyncResult,
+    pub clockify: Option<String>,
+    pub huly: Option<String>,
+    pub slack: Option<String>,
+    pub github: Vec<GithubSyncReport>,
+    pub errors: Vec<String>,
+}
+
 #[tauri::command]
 pub async fn sync_cloud_credentials(db: State<'_, DbPool>) -> Result<CredentialSyncResult, String> {
+    sync_cloud_credentials_for_pool(&db.0).await
+}
+
+#[tauri::command]
+pub async fn sync_cloud_integrations(
+    db: State<'_, DbPool>,
+) -> Result<CloudIntegrationSyncResult, String> {
     let pool = &db.0;
+    let cloud = sync_cloud_credentials_for_pool(pool).await?;
+    let mut errors = Vec::new();
+
+    let clockify = match run_clockify_full_sync_from_settings(pool).await {
+        Ok(value) => value,
+        Err(error) => {
+            errors.push(format!("clockify: {error}"));
+            None
+        }
+    };
+
+    let huly = match run_huly_full_sync_from_settings(pool).await {
+        Ok(value) => value,
+        Err(error) => {
+            errors.push(format!("huly: {error}"));
+            None
+        }
+    };
+
+    let slack = match run_slack_delta_sync_from_settings(pool).await {
+        Ok(value) => value,
+        Err(error) => {
+            errors.push(format!("slack: {error}"));
+            None
+        }
+    };
+
+    let github = match run_github_sync_from_settings(pool).await {
+        Ok(value) => value,
+        Err(error) => {
+            errors.push(format!("github: {error}"));
+            Vec::new()
+        }
+    };
+
+    if let Err(error) = queries::refresh_agent_feed_projection(pool).await {
+        errors.push(format!("agent_feed: {error}"));
+    }
+
+    Ok(CloudIntegrationSyncResult {
+        cloud,
+        clockify,
+        huly,
+        slack,
+        github,
+        errors,
+    })
+}
+
+async fn sync_cloud_credentials_for_pool(
+    pool: &sqlx::SqlitePool,
+) -> Result<CredentialSyncResult, String> {
     let base_url = queries::get_setting(pool, "cloud_credentials_base_url")
         .await
         .map_err(|e| format!("read cloud_credentials_base_url: {e}"))?
@@ -7500,10 +8273,8 @@ pub async fn sync_cloud_credentials(db: State<'_, DbPool>) -> Result<CredentialS
         return Err("cloud returned ok=false".to_string());
     }
 
-    let creds = body
-        .data
-        .ok_or("no credential data in response")?
-        .credentials;
+    let data = body.data.ok_or("no credential data in response")?;
+    let creds = data.credentials;
 
     let mut synced = Vec::new();
     let mut skipped = Vec::new();
@@ -7513,6 +8284,7 @@ pub async fn sync_cloud_credentials(db: State<'_, DbPool>) -> Result<CredentialS
         ("clockify_api_key", creds.clockify.as_ref()),
         ("huly_token", creds.huly.as_ref()),
         ("slack_bot_token", creds.slack.as_ref()),
+        ("github_token", creds.github.as_ref()),
     ];
 
     for (key, cred) in pairs {
@@ -7531,11 +8303,312 @@ pub async fn sync_cloud_credentials(db: State<'_, DbPool>) -> Result<CredentialS
         }
     }
 
+    apply_cloud_integration_config(
+        pool,
+        data.integrations,
+        &mut synced,
+        &mut skipped,
+        &mut errors,
+    )
+    .await;
+
     Ok(CredentialSyncResult {
         synced,
         skipped,
         errors,
     })
+}
+
+fn clean_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|item| {
+        let trimmed = item.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn clean_string_list(values: Option<Vec<String>>) -> Option<String> {
+    let joined = values
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| clean_optional_string(Some(item)))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    if joined.is_empty() {
+        None
+    } else {
+        Some(joined)
+    }
+}
+
+async fn set_cloud_setting_if_present(
+    pool: &sqlx::SqlitePool,
+    key: &str,
+    value: Option<String>,
+    synced: &mut Vec<String>,
+    skipped: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    let Some(value) = clean_optional_string(value) else {
+        skipped.push(key.to_string());
+        return;
+    };
+
+    if let Err(error) = queries::set_setting(pool, key, &value).await {
+        errors.push(format!("{key}: {error}"));
+    } else {
+        synced.push(key.to_string());
+    }
+}
+
+async fn apply_cloud_integration_config(
+    pool: &sqlx::SqlitePool,
+    integrations: Option<CloudIntegrationConfig>,
+    synced: &mut Vec<String>,
+    skipped: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    let Some(integrations) = integrations else {
+        skipped.push("integration_config".to_string());
+        return;
+    };
+
+    if let Some(clockify) = integrations.clockify {
+        set_cloud_setting_if_present(
+            pool,
+            "clockify_workspace_id",
+            clockify.workspace_id,
+            synced,
+            skipped,
+            errors,
+        )
+        .await;
+        set_cloud_setting_if_present(
+            pool,
+            "clockify_ignored_emails",
+            clean_string_list(clockify.ignored_emails),
+            synced,
+            skipped,
+            errors,
+        )
+        .await;
+        set_cloud_setting_if_present(
+            pool,
+            "clockify_ignored_employee_ids",
+            clean_string_list(clockify.ignored_employee_ids),
+            synced,
+            skipped,
+            errors,
+        )
+        .await;
+    } else {
+        skipped.push("integration_config.clockify".to_string());
+    }
+
+    if let Some(huly) = integrations.huly {
+        set_cloud_setting_if_present(
+            pool,
+            "huly_mirror_mode",
+            huly.mirror_mode,
+            synced,
+            skipped,
+            errors,
+        )
+        .await;
+        if let Some(enabled) = huly.mirror_enabled {
+            if let Err(error) = queries::set_setting(
+                pool,
+                "huly_mirror_enabled",
+                if enabled { "true" } else { "false" },
+            )
+            .await
+            {
+                errors.push(format!("huly_mirror_enabled: {error}"));
+            } else {
+                synced.push("huly_mirror_enabled".to_string());
+            }
+        } else {
+            skipped.push("huly_mirror_enabled".to_string());
+        }
+    } else {
+        skipped.push("integration_config.huly".to_string());
+    }
+
+    if let Some(slack) = integrations.slack {
+        set_cloud_setting_if_present(
+            pool,
+            "slack_channel_filters",
+            clean_string_list(slack.channel_filters),
+            synced,
+            skipped,
+            errors,
+        )
+        .await;
+        set_cloud_setting_if_present(
+            pool,
+            "slack_sync_backfill_days",
+            slack
+                .backfill_days
+                .filter(|days| *days > 0)
+                .map(|days| days.to_string()),
+            synced,
+            skipped,
+            errors,
+        )
+        .await;
+    } else {
+        skipped.push("integration_config.slack".to_string());
+    }
+
+    if let Some(github) = integrations.github {
+        let repos = github.repos.unwrap_or_default();
+        if repos.is_empty() {
+            skipped.push("github_repo_configs".to_string());
+        } else {
+            if let Err(error) = sqlx::query(
+                "UPDATE github_repo_configs SET enabled = 0, updated_at = datetime('now')",
+            )
+            .execute(pool)
+            .await
+            {
+                errors.push(format!("github_repo_configs.disable_old: {error}"));
+            }
+
+            let now = Utc::now().to_rfc3339();
+            let mut configured_repos = Vec::new();
+            for cloud_repo in repos {
+                let repo = cloud_repo.repo.trim().to_string();
+                if repo.is_empty() || !repo.contains('/') {
+                    errors.push(format!(
+                        "github_repo_configs: invalid repo '{}'",
+                        cloud_repo.repo
+                    ));
+                    continue;
+                }
+                configured_repos.push(repo.clone());
+                let config = GithubRepoConfig {
+                    display_name: clean_optional_string(cloud_repo.display_name)
+                        .unwrap_or_else(|| repo.clone()),
+                    client_name: clean_optional_string(cloud_repo.client_name),
+                    repo,
+                    default_milestone_number: cloud_repo.default_milestone_number,
+                    huly_project_id: clean_optional_string(cloud_repo.huly_project_id),
+                    clockify_project_id: clean_optional_string(cloud_repo.clockify_project_id),
+                    enabled: cloud_repo.enabled.unwrap_or(true),
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                };
+
+                if let Err(error) = queries::upsert_github_repo_config(pool, &config).await {
+                    errors.push(format!("github_repo_configs.{}: {error}", config.repo));
+                }
+            }
+
+            if configured_repos.is_empty() {
+                skipped.push("github_repos".to_string());
+            } else if let Err(error) =
+                queries::set_setting(pool, "github_repos", &configured_repos.join(", ")).await
+            {
+                errors.push(format!("github_repos: {error}"));
+            } else {
+                synced.push("github_repo_configs".to_string());
+                synced.push("github_repos".to_string());
+            }
+        }
+    } else {
+        skipped.push("integration_config.github".to_string());
+    }
+}
+
+async fn run_clockify_full_sync_from_settings(
+    pool: &sqlx::SqlitePool,
+) -> Result<Option<String>, String> {
+    let api_key = queries::get_setting(pool, "clockify_api_key")
+        .await
+        .map_err(|e| format!("read clockify api key: {e}"))?
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let workspace_id = queries::get_setting(pool, "clockify_workspace_id")
+        .await
+        .map_err(|e| format!("read clockify workspace: {e}"))?
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let (Some(api_key), Some(workspace_id)) = (api_key, workspace_id) else {
+        return Ok(None);
+    };
+
+    let engine = ClockifySyncEngine::new(
+        Arc::new(ClockifyClient::new(api_key)),
+        pool.clone(),
+        workspace_id,
+    );
+    let report = engine.full_sync().await?;
+    Ok(Some(format!(
+        "Sync complete: {} users, {} projects, {} time entries",
+        report.users_synced, report.projects_synced, report.time_entries_synced
+    )))
+}
+
+async fn run_huly_full_sync_from_settings(
+    pool: &sqlx::SqlitePool,
+) -> Result<Option<String>, String> {
+    let token = queries::get_setting(pool, "huly_token")
+        .await
+        .map_err(|e| format!("read huly token: {e}"))?
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let Some(token) = token else {
+        return Ok(None);
+    };
+
+    let client = HulyClient::connect(None, &token).await?;
+    let engine = HulySyncEngine::new(Arc::new(client), pool.clone());
+    let report = engine.full_sync().await?;
+    Ok(Some(format!(
+        "Huly sync complete: {} issue activities, {} presence updates, {} cached Team records",
+        report.issues_synced, report.presence_updated, report.team_cache_items
+    )))
+}
+
+async fn run_slack_delta_sync_from_settings(
+    pool: &sqlx::SqlitePool,
+) -> Result<Option<String>, String> {
+    let token = queries::get_setting(pool, "slack_bot_token")
+        .await
+        .map_err(|e| format!("read slack token: {e}"))?
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let Some(token) = token else {
+        return Ok(None);
+    };
+
+    let engine = SlackSyncEngine::new(Arc::new(SlackClient::new(token)), pool.clone());
+    engine.sync_message_deltas().await?;
+    Ok(Some("Slack delta sync complete".to_string()))
+}
+
+async fn run_github_sync_from_settings(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<GithubSyncReport>, String> {
+    seed_configured_github_repos(pool).await?;
+
+    let Some(token) = queries::get_setting(pool, "github_token")
+        .await
+        .map_err(|e| format!("read github token: {e}"))?
+        .or_else(|| std::env::var("GITHUB_TOKEN").ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(Vec::new());
+    };
+
+    let engine = GithubSyncEngine::new(GithubClient::new(token), pool.clone());
+    engine.sync_all().await
 }
 
 #[cfg(test)]

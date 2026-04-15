@@ -1,6 +1,7 @@
 mod clockify;
 mod commands;
 mod db;
+mod github;
 mod huly;
 mod ops;
 mod slack;
@@ -109,6 +110,8 @@ pub fn run() {
             commands::get_time_entries_view,
             commands::get_project_breakdown,
             commands::get_projects_catalog,
+            commands::get_execution_projects,
+            commands::get_project_activity,
             commands::get_activity_feed,
             commands::get_presence_status,
             commands::get_employees,
@@ -123,6 +126,7 @@ pub fn run() {
             commands::test_huly_connection,
             commands::test_slack_connection,
             commands::trigger_huly_sync,
+            commands::sync_github_plans,
             commands::preview_huly_workspace_normalization,
             commands::apply_huly_workspace_normalization,
             commands::get_milestones,
@@ -159,6 +163,7 @@ pub fn run() {
             commands::get_onboarding_flows,
             commands::get_planner_capacity,
             commands::sync_cloud_credentials,
+            commands::sync_cloud_integrations,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

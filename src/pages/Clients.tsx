@@ -33,6 +33,10 @@ const METRIC_COLORS = [
   "var(--lcars-red)",
 ];
 
+function formatHours(hours: number): string {
+  return `${hours.toFixed(1)}H`;
+}
+
 function MetricCard({
   label,
   value,
@@ -139,6 +143,27 @@ function TechTag({ label }: { label: string }) {
   );
 }
 
+function SourcePill({ source }: { source: string }) {
+  const hasGithub = source.toLowerCase().includes("github");
+  const color = hasGithub ? "var(--lcars-cyan)" : "var(--lcars-orange)";
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "2px 8px",
+        borderRadius: 2,
+        border: `1px solid ${color}`,
+        color,
+        fontSize: 9,
+        fontFamily: "'Orbitron', sans-serif",
+        letterSpacing: "1px",
+      }}
+    >
+      {source.toUpperCase()}
+    </span>
+  );
+}
+
 // ── ClientCard ────────────────────────────────────────────────
 
 function ClientCard({
@@ -173,19 +198,24 @@ function ClientCard({
             <div style={styles.clientIndustry}>{client.industry.toUpperCase()}</div>
           )}
         </div>
-        <TierBadge tier={client.tier} />
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <SourcePill source={client.planningSource} />
+          <TierBadge tier={client.tier} />
+        </div>
       </div>
 
       <div style={styles.clientMetricsRow}>
         <div>
-          <div style={styles.clientMetricLabel}>MONTHLY VALUE</div>
-          <div style={styles.clientMetricValue}>
-            ${client.monthlyValue.toLocaleString()}
-          </div>
+          <div style={styles.clientMetricLabel}>BILLABLE HOURS (MONTH)</div>
+          <div style={styles.clientMetricValue}>{formatHours(client.monthBillableHours)}</div>
         </div>
         <div>
           <div style={styles.clientMetricLabel}>ACTIVE PROJECTS</div>
           <div style={styles.clientMetricValue}>{client.activeProjects}</div>
+        </div>
+        <div>
+          <div style={styles.clientMetricLabel}>GITHUB OPEN</div>
+          <div style={styles.clientMetricValue}>{client.githubOpenIssues}</div>
         </div>
       </div>
 
@@ -245,6 +275,7 @@ function DetailPanel({
             <div style={styles.detailTitle}>{client.name.toUpperCase()}</div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
               <TierBadge tier={client.tier} />
+              <SourcePill source={client.planningSource} />
               {client.industry && (
                 <span style={styles.clientIndustry}>{client.industry.toUpperCase()}</span>
               )}
@@ -262,14 +293,18 @@ function DetailPanel({
           <div style={styles.detailSectionTitle}>CLIENT INFO</div>
           <div style={styles.detailGrid}>
             <div>
-              <div style={styles.detailLabel}>MONTHLY VALUE</div>
-              <div style={styles.detailValueMono}>
-                ${client.monthlyValue.toLocaleString()}
-              </div>
+              <div style={styles.detailLabel}>BILLABLE HOURS (MONTH)</div>
+              <div style={styles.detailValueMono}>{formatHours(client.monthBillableHours)}</div>
             </div>
             <div>
               <div style={styles.detailLabel}>ACTIVE PROJECTS</div>
               <div style={styles.detailValueMono}>{client.activeProjects}</div>
+            </div>
+            <div>
+              <div style={styles.detailLabel}>GITHUB ISSUES</div>
+              <div style={styles.detailValueMono}>
+                {client.githubOpenIssues}/{client.githubTotalIssues} OPEN
+              </div>
             </div>
             <div>
               <div style={styles.detailLabel}>PRIMARY CONTACT</div>
@@ -341,9 +376,27 @@ function DetailPanel({
                     borderLeft: `3px solid ${accent}`,
                   }}
                 >
-                  <span style={{ color: "var(--lcars-tan)", fontSize: 12 }}>
-                    {p.name}
-                  </span>
+                  <div>
+                    {p.sourceUrl ? (
+                      <a
+                        href={p.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ ...styles.detailLink, color: "var(--lcars-tan)" }}
+                      >
+                        {p.name}
+                      </a>
+                    ) : (
+                      <span style={{ color: "var(--lcars-tan)", fontSize: 12 }}>
+                        {p.name}
+                      </span>
+                    )}
+                    <div style={styles.projectMeta}>
+                      {p.source.toUpperCase()}
+                      {p.repo ? ` · ${p.repo}` : ""}
+                      {p.totalIssues > 0 ? ` · ${p.openIssues}/${p.totalIssues} OPEN` : ""}
+                    </div>
+                  </div>
                   <span
                     style={{
                       color: "var(--lcars-lavender)",
@@ -564,7 +617,10 @@ function Clients() {
   const activeClients = clients.filter(
     (c) => c.contractStatus.toLowerCase() !== "expired",
   );
-  const monthlyRevenue = clients.reduce((sum, c) => sum + c.monthlyValue, 0);
+  const monthBillableHours = clients.reduce(
+    (sum, c) => sum + c.monthBillableHours,
+    0,
+  );
   const projectsInFlight = clients.reduce(
     (sum, c) => sum + c.activeProjects,
     0,
@@ -599,13 +655,13 @@ function Clients() {
       {/* Metric Cards Row */}
       <div style={styles.metricsRow}>
         <MetricCard
-          label="TOTAL ACTIVE CLIENTS"
+          label="ACTIVE CLIENTS"
           value={String(activeClients.length)}
           colorIndex={0}
         />
         <MetricCard
-          label="MONTHLY REVENUE"
-          value={`$${monthlyRevenue.toLocaleString()}`}
+          label="BILLABLE HOURS (MONTH)"
+          value={formatHours(monthBillableHours)}
           colorIndex={1}
         />
         <MetricCard
@@ -758,7 +814,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   clientMetricsRow: {
     display: "grid",
-    gridTemplateColumns: "1fr 1fr",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
     gap: 12,
     marginBottom: 10,
   },
@@ -865,6 +921,13 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "'Orbitron', sans-serif",
     letterSpacing: "1px",
     textDecoration: "none",
+  },
+  projectMeta: {
+    marginTop: 3,
+    color: "var(--text-quaternary)",
+    fontSize: 9,
+    fontFamily: "'JetBrains Mono', monospace",
+    letterSpacing: "0.3px",
   },
 };
 

@@ -7,13 +7,59 @@ function mask(token: string): string {
   return token.slice(0, 4) + "****" + token.slice(-4);
 }
 
+interface GitHubRepoIntegration {
+  repo: string;
+  displayName?: string;
+  clientName?: string;
+  defaultMilestoneNumber?: number;
+  hulyProjectId?: string;
+  clockifyProjectId?: string;
+  enabled?: boolean;
+}
+
+interface IntegrationConfig {
+  clockify?: {
+    workspaceId?: string;
+    ignoredEmails?: string[];
+    ignoredEmployeeIds?: string[];
+  };
+  huly?: {
+    mirrorMode?: "read_only" | "disabled";
+    mirrorEnabled?: boolean;
+  };
+  slack?: {
+    channelFilters?: string[];
+    backfillDays?: number;
+  };
+  github?: {
+    repos?: GitHubRepoIntegration[];
+  };
+}
+
+function parseIntegrationConfig(raw: string | undefined): IntegrationConfig {
+  if (!raw?.trim()) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as IntegrationConfig;
+    if (parsed && typeof parsed === "object") {
+      return parsed;
+    }
+  } catch {
+    // Keep credentials available even when optional integration config is malformed.
+  }
+
+  return {};
+}
+
 /**
  * GET /v1/credentials
  *
- * Returns the shared integration credentials stored in Cloudflare secrets.
+ * Returns shared integration credentials and non-secret integration config.
  * The desktop app calls this on launch to hydrate local settings so every
- * team member gets the same Clockify / Huly / Slack tokens without manual
- * entry in Settings.
+ * team member gets the same Clockify / Huly / Slack / GitHub setup without
+ * page-local display constraints or manual per-machine mapping.
  *
  * Query params:
  *   ?audience=<string>  — must match TF_ACCESS_AUDIENCE (default "teamforge-desktop")
@@ -79,5 +125,18 @@ export async function handleGetCredentials(
     credentials.slack = { available: false };
   }
 
-  return jsonOk({ credentials });
+  if (env.TF_GITHUB_TOKEN_GLOBAL) {
+    credentials.github = {
+      available: true,
+      token: env.TF_GITHUB_TOKEN_GLOBAL,
+      masked: mask(env.TF_GITHUB_TOKEN_GLOBAL),
+    };
+  } else {
+    credentials.github = { available: false };
+  }
+
+  return jsonOk({
+    credentials,
+    integrations: parseIntegrationConfig(env.TF_INTEGRATION_CONFIG_JSON),
+  });
 }

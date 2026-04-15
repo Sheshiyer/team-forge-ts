@@ -178,7 +178,7 @@ function RoleDashboard({ role }: { role: DashboardRole }) {
             { title: "MY PLANNER THIS WEEK", color: "var(--lcars-cyan)", content: "VISUAL CALENDAR" },
             { title: "RELATED KNOWLEDGE", color: "var(--lcars-lavender)", content: "ARTICLES LINKED TO CURRENT TASKS" },
             { title: "CODE REVIEWS NEEDED", color: "var(--lcars-peach)", content: "PRS AWAITING REVIEW" },
-            { title: "LEARNING PATH PROGRESS", color: "var(--lcars-green)", content: "TRAINING COMPLETION" },
+            { title: "PROCESS READINESS", color: "var(--lcars-green)", content: "SOP & DOC COVERAGE" },
           ];
 
   return (

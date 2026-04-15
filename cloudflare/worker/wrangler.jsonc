@@ -11,7 +11,8 @@
     "TF_ENV": "development",
     "TF_API_BASE_URL": "http://127.0.0.1:8787",
     "TF_DEFAULT_OTA_CHANNEL": "stable",
-    "TF_ACCESS_AUDIENCE": "teamforge-desktop"
+    "TF_ACCESS_AUDIENCE": "teamforge-desktop",
+    "TF_INTEGRATION_CONFIG_JSON": "{\"github\":{\"repos\":[{\"repo\":\"Sheshiyer/parkarea-aleph\",\"displayName\":\"ParkArea Phase 2 - Germany Launch\",\"clientName\":\"ParkArea\",\"defaultMilestoneNumber\":1,\"enabled\":true}]},\"huly\":{\"mirrorMode\":\"read_only\",\"mirrorEnabled\":true},\"slack\":{},\"clockify\":{}}"
   },
   "d1_databases": [
     {

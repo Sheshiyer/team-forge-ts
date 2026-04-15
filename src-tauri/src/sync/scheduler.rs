@@ -7,6 +7,8 @@ use tokio::task::JoinHandle;
 use crate::clockify::client::ClockifyClient;
 use crate::clockify::sync::ClockifySyncEngine;
 use crate::db::queries;
+use crate::github::client::GithubClient;
+use crate::github::sync::GithubSyncEngine;
 use crate::huly::client::HulyClient;
 use crate::huly::sync::HulySyncEngine;
 use crate::slack::client::SlackClient;
@@ -47,13 +49,24 @@ impl SyncScheduler {
             .flatten()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
+        let github_token = queries::get_setting(&pool, "github_token")
+            .await
+            .ok()
+            .flatten()
+            .or_else(|| std::env::var("GITHUB_TOKEN").ok())
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
 
         let clockify_config = match (clockify_api_key, clockify_workspace_id) {
             (Some(api_key), Some(workspace_id)) => Some((api_key, workspace_id)),
             _ => None,
         };
 
-        if clockify_config.is_none() && huly_token.is_none() && slack_bot_token.is_none() {
+        if clockify_config.is_none()
+            && huly_token.is_none()
+            && slack_bot_token.is_none()
+            && github_token.is_none()
+        {
             return None;
         }
 
@@ -221,6 +234,24 @@ impl SyncScheduler {
                     let engine = SlackSyncEngine::new(client.clone(), pool.clone());
                     if let Err(e) = engine.sync_message_deltas().await {
                         eprintln!("[scheduler] slack delta sync error: {e}");
+                    }
+                }
+            }));
+        }
+
+        if let Some(token) = github_token {
+            let pool = pool.clone();
+            let mut rx = cancel_rx.clone();
+            handles.push(tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(600)) => {}
+                        _ = rx.changed() => { break; }
+                    }
+                    let engine =
+                        GithubSyncEngine::new(GithubClient::new(token.clone()), pool.clone());
+                    if let Err(e) = engine.sync_all().await {
+                        eprintln!("[scheduler] github plans sync error: {e}");
                     }
                 }
             }));

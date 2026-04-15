@@ -54,6 +54,57 @@ pub struct Project {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
+pub struct GithubRepoConfig {
+    pub repo: String,
+    pub display_name: String,
+    pub client_name: Option<String>,
+    pub default_milestone_number: Option<i64>,
+    pub huly_project_id: Option<String>,
+    pub clockify_project_id: Option<String>,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubMilestoneCache {
+    pub repo: String,
+    pub number: i64,
+    pub title: String,
+    pub description: Option<String>,
+    pub state: String,
+    pub due_on: Option<String>,
+    pub url: Option<String>,
+    pub open_issues: i64,
+    pub closed_issues: i64,
+    pub updated_at: Option<String>,
+    pub synced_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubIssueCache {
+    pub repo: String,
+    pub number: i64,
+    pub node_id: Option<String>,
+    pub title: String,
+    pub body_excerpt: Option<String>,
+    pub state: String,
+    pub url: String,
+    pub milestone_number: Option<i64>,
+    pub assignee_logins_json: String,
+    pub labels_json: String,
+    pub priority: Option<String>,
+    pub track: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub closed_at: Option<String>,
+    pub synced_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
 pub struct TimeEntry {
     pub id: String,
     pub employee_id: String,
@@ -253,6 +304,28 @@ pub struct ProjectStats {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExecutionProjectView {
+    pub id: String,
+    pub source: String,
+    pub repo: Option<String>,
+    pub milestone: Option<String>,
+    pub title: String,
+    pub status: String,
+    pub total_issues: u32,
+    pub open_issues: u32,
+    pub closed_issues: u32,
+    pub percent_complete: f64,
+    pub latest_activity: Option<String>,
+    pub huly_project_id: Option<String>,
+    pub clockify_project_id: Option<String>,
+    pub total_hours: f64,
+    pub billable_hours: f64,
+    pub team_members: u32,
+    pub utilization: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectCatalogItem {
     pub id: String,
     pub name: String,
@@ -288,6 +361,23 @@ pub struct ActivityItem {
     pub action: String,
     pub detail: Option<String>,
     pub occurred_at: String,
+    pub project_id: Option<String>,
+    pub source_url: Option<String>,
+    pub entity_type: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubSyncReport {
+    pub repo: String,
+    pub project_id: String,
+    pub milestones_synced: u32,
+    pub issues_synced: u32,
+    pub ops_events_upserted: u32,
+    pub total_issues: u32,
+    pub open_issues: u32,
+    pub closed_issues: u32,
 }
 
 // ─── New Huly integration view structs ──────────────────────────

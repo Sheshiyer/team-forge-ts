@@ -44,6 +44,26 @@ export interface ProjectCatalogItem {
   isArchived: boolean;
 }
 
+export interface ExecutionProjectView {
+  id: string;
+  source: string;
+  repo: string | null;
+  milestone: string | null;
+  title: string;
+  status: string;
+  totalIssues: number;
+  openIssues: number;
+  closedIssues: number;
+  percentComplete: number;
+  latestActivity: string | null;
+  hulyProjectId: string | null;
+  clockifyProjectId: string | null;
+  totalHours: number;
+  billableHours: number;
+  teamMembers: number;
+  utilization: number;
+}
+
 export interface PresenceStatus {
   employeeName: string;
   clockifyTimerActive: boolean;
@@ -59,6 +79,21 @@ export interface ActivityItem {
   action: string;
   detail: string | null;
   occurredAt: string;
+  projectId: string | null;
+  sourceUrl: string | null;
+  entityType: string | null;
+  status: string | null;
+}
+
+export interface GitHubSyncReport {
+  repo: string;
+  projectId: string;
+  milestonesSynced: number;
+  issuesSynced: number;
+  opsEventsUpserted: number;
+  totalIssues: number;
+  openIssues: number;
+  closedIssues: number;
 }
 
 export interface TimeEntry {
@@ -316,12 +351,17 @@ export interface ClientView {
   name: string;
   tier: string;
   industry: string | null;
-  monthlyValue: number;
+  monthBillableHours: number;
   activeProjects: number;
+  planningSource: string;
+  githubProjects: number;
+  githubOpenIssues: number;
+  githubTotalIssues: number;
   primaryContact: string | null;
   contractStatus: string;
   contractEndDate: string | null;
   daysRemaining: number | null;
+  latestActivityAt: string | null;
   techStack: string[];
   driveLink: string | null;
   chromeProfile: string | null;
@@ -329,7 +369,16 @@ export interface ClientView {
 
 export interface ClientDetailView {
   client: ClientView;
-  linkedProjects: { id: string; name: string; status: string }[];
+  linkedProjects: {
+    id: string;
+    name: string;
+    status: string;
+    source: string;
+    repo: string | null;
+    openIssues: number;
+    totalIssues: number;
+    sourceUrl: string | null;
+  }[];
   linkedDevices: { id: string; name: string; platform: string }[];
   resources: { name: string; type: string; url: string | null }[];
   recentActivity: ActivityItem[];
@@ -477,6 +526,15 @@ export interface PlannerSlotView {
 export interface CredentialSyncResult {
   synced: string[];
   skipped: string[];
+  errors: string[];
+}
+
+export interface CloudIntegrationSyncResult {
+  cloud: CredentialSyncResult;
+  clockify: string | null;
+  huly: string | null;
+  slack: string | null;
+  github: GitHubSyncReport[];
   errors: string[];
 }
 

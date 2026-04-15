@@ -18,7 +18,6 @@ import Settings from "./pages/Settings";
 import Clients from "./pages/Clients";
 import Devices from "./pages/Devices";
 import Knowledge from "./pages/Knowledge";
-import Training from "./pages/Training";
 import Onboarding from "./pages/Onboarding";
 import Planner from "./pages/Planner";
 import Avatar from "./components/ui/Avatar";
@@ -56,7 +55,6 @@ const navSections = [
       { path: "/clients", label: "Clients" },
       { path: "/devices", label: "Devices" },
       { path: "/knowledge", label: "Knowledge" },
-      { path: "/training", label: "Training" },
       { path: "/onboarding", label: "Onboarding" },
       { path: "/planner", label: "Planner" },
     ],
@@ -451,14 +449,13 @@ function App() {
             <Route path="/projects" element={<Projects />} />
             <Route path="/sprints" element={<Sprints />} />
         <Route path="/insights" element={<Insights />} />
-        <Route path="/team" element={<Team />} />
+        <Route path="/team/*" element={<Team />} />
         <Route path="/calendar" element={<Calendar />} />
         <Route path="/comms" element={<Comms />} />
             <Route path="/boards" element={<Boards />} />
             <Route path="/clients" element={<Clients />} />
             <Route path="/devices" element={<Devices />} />
             <Route path="/knowledge" element={<Knowledge />} />
-            <Route path="/training" element={<Training />} />
             <Route path="/onboarding" element={<Onboarding />} />
             <Route path="/planner" element={<Planner />} />
             <Route path="/activity" element={<Activity />} />

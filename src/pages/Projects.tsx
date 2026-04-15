@@ -3,42 +3,56 @@ import { useInvoke } from "../hooks/useInvoke";
 import { exportCsv } from "../lib/export";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 import { SkeletonCard, SkeletonTable } from "../components/ui/Skeleton";
-import type { ProjectCatalogItem, ProjectStats } from "../lib/types";
+import type { ExecutionProjectView } from "../lib/types";
 
 function Projects() {
   const api = useInvoke();
-  const [projects, setProjects] = useState<ProjectStats[]>([]);
-  const [syncedProjectCount, setSyncedProjectCount] = useState(0);
+  const [projects, setProjects] = useState<ExecutionProjectView[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<boolean> => {
     try {
-      const now = new Date();
-      const start = new Date(now.getFullYear(), now.getMonth(), 1)
-        .toISOString()
-        .split("T")[0];
-      const end = new Date(now.getFullYear(), now.getMonth() + 1, 1)
-        .toISOString()
-        .split("T")[0];
-      const [catalog, breakdown] = await Promise.all([
-        api.getProjectsCatalog(),
-        api.getProjectBreakdown(start, end),
-      ]);
-      setProjects(mergeProjectRows(catalog, breakdown));
-      setSyncedProjectCount(catalog.filter((project) => !project.isArchived).length);
-    } catch {
-      // ignore
-    } finally {
+      setProjects(await api.getExecutionProjects());
+      setHasLoadedOnce(true);
       setLoading(false);
+      return true;
+    } catch {
+      if (hasLoadedOnce) {
+        setLoading(false);
+      } else {
+        setLoading(true);
+      }
+      return false;
     }
-  }, [api]);
+  }, [api, hasLoadedOnce]);
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const run = async () => {
+      if (cancelled) return;
+      const ok = await load();
+      if (cancelled) return;
+      timer = setTimeout(run, ok ? 60_000 : 2_000);
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
   }, [load]);
 
   const totalHours = projects.reduce((sum, p) => sum + p.totalHours, 0);
-  const projectsWithHours = projects.filter((project) => project.totalHours > 0).length;
+  const githubProjects = projects.filter((project) => project.source === "github");
+  const openIssues = githubProjects.reduce((sum, project) => sum + project.openIssues, 0);
+  const totalIssues = githubProjects.reduce((sum, project) => sum + project.totalIssues, 0);
+  const completedIssues = githubProjects.reduce((sum, project) => sum + project.closedIssues, 0);
   const avgUtilization =
     projects.length > 0
       ? projects.reduce((sum, p) => sum + p.utilization, 0) / projects.length
@@ -47,17 +61,31 @@ function Projects() {
   const handleExport = () => {
     const headers = [
       "Project",
+      "Source",
+      "Repo",
+      "Milestone",
+      "Status",
+      "Total Issues",
+      "Open Issues",
+      "Closed Issues",
       "Total Hours",
       "Billable Hours",
       "Team Members",
-      "Utilization %",
+      "Progress %",
     ];
     const rows = projects.map((p) => [
-      p.projectName,
+      p.title,
+      p.source,
+      p.repo ?? "",
+      p.milestone ?? "",
+      p.status,
+      String(p.totalIssues),
+      String(p.openIssues),
+      String(p.closedIssues),
       p.totalHours.toFixed(2),
       p.billableHours.toFixed(2),
       String(p.teamMembers),
-      (p.utilization * 100).toFixed(1),
+      (p.percentComplete * 100).toFixed(1),
     ]);
     exportCsv("projects.csv", headers, rows);
   };
@@ -99,10 +127,17 @@ function Projects() {
             </div>
           </div>
           <div style={{ ...styles.summaryCard, borderLeftColor: "var(--lcars-lavender)" }}>
-            <div style={styles.summaryLabel}>SYNCED PROJECTS</div>
-            <div style={styles.summaryValue}>{syncedProjectCount}</div>
+            <div style={styles.summaryLabel}>GITHUB PROJECTS</div>
+            <div style={styles.summaryValue}>{githubProjects.length}</div>
             <div style={styles.summaryHint}>
-              {projectsWithHours} WITH TRACKED HOURS THIS MONTH
+              {completedIssues}/{totalIssues} ISSUES CLOSED
+            </div>
+          </div>
+          <div style={{ ...styles.summaryCard, borderLeftColor: "var(--lcars-peach)" }}>
+            <div style={styles.summaryLabel}>OPEN ISSUES</div>
+            <div style={styles.summaryValue}>{openIssues}</div>
+            <div style={styles.summaryHint}>
+              GITHUB IS THE PLAN SOURCE
             </div>
           </div>
         </div>
@@ -114,22 +149,24 @@ function Projects() {
           <SkeletonTable rows={5} cols={5} />
         ) : projects.length === 0 ? (
           <p style={styles.emptyText}>
-            NO SYNCED PROJECTS FOUND. RUN CLOCKIFY SYNC IN SETTINGS.
+            NO EXECUTION PROJECTS FOUND. SYNC GITHUB PLANS IN SETTINGS.
           </p>
         ) : (
           <table style={styles.table}>
             <thead>
               <tr>
                 <th style={styles.th}>PROJECT</th>
-                <th style={styles.th}>TOTAL HOURS</th>
-                <th style={styles.th}>BILLABLE HOURS</th>
+                <th style={styles.th}>SOURCE</th>
+                <th style={styles.th}>ISSUES</th>
+                <th style={styles.th}>OPEN</th>
+                <th style={styles.th}>HOURS</th>
                 <th style={styles.th}>CREW</th>
-                <th style={{ ...styles.th, minWidth: 180 }}>UTILIZATION</th>
+                <th style={{ ...styles.th, minWidth: 180 }}>PROGRESS</th>
               </tr>
             </thead>
             <tbody>
               {projects.map((p) => (
-                <tr key={p.projectId ?? p.projectName}>
+                <tr key={p.id}>
                   <td
                     style={{
                       ...styles.td,
@@ -137,10 +174,17 @@ function Projects() {
                       color: "var(--lcars-orange)",
                     }}
                   >
-                    {p.projectName}
+                    <div>{p.title}</div>
+                    {p.repo && (
+                      <div style={styles.projectSubtext}>
+                        {p.repo}{p.milestone ? ` · ${p.milestone}` : ""}
+                      </div>
+                    )}
                   </td>
+                  <td style={styles.td}><SourceBadge source={p.source} /></td>
+                  <td style={styles.tdMono}>{p.totalIssues}</td>
+                  <td style={styles.tdMono}>{p.openIssues}</td>
                   <td style={styles.tdMono}>{p.totalHours.toFixed(1)}h</td>
-                  <td style={styles.tdMono}>{p.billableHours.toFixed(1)}h</td>
                   <td style={styles.tdMono}>{p.teamMembers}</td>
                   <td style={styles.td}>
                     <div
@@ -154,9 +198,9 @@ function Projects() {
                         <div
                           style={{
                             ...styles.barFill,
-                            width: `${Math.min(p.utilization * 100, 100)}%`,
-                            backgroundColor: utilizationColor(p.utilization),
-                            boxShadow: `0 0 6px ${utilizationColor(p.utilization)}44`,
+                            width: `${Math.min(p.percentComplete * 100, 100)}%`,
+                            backgroundColor: progressColor(p),
+                            boxShadow: `0 0 6px ${progressColor(p)}44`,
                           }}
                         />
                       </div>
@@ -168,7 +212,7 @@ function Projects() {
                           minWidth: 40,
                         }}
                       >
-                        {(p.utilization * 100).toFixed(0)}%
+                        {(p.percentComplete * 100).toFixed(0)}%
                       </span>
                     </div>
                   </td>
@@ -182,51 +226,25 @@ function Projects() {
   );
 }
 
-function mergeProjectRows(
-  catalog: ProjectCatalogItem[],
-  breakdown: ProjectStats[]
-): ProjectStats[] {
-  const statsById = new Map(
-    breakdown
-      .filter((row) => row.projectId)
-      .map((row) => [row.projectId as string, row])
+function SourceBadge({ source }: { source: string }) {
+  const isGitHub = source === "github";
+  return (
+    <span
+      style={{
+        ...styles.sourceBadge,
+        borderColor: isGitHub ? "var(--lcars-cyan)" : "var(--lcars-orange)",
+        color: isGitHub ? "var(--lcars-cyan)" : "var(--lcars-orange)",
+      }}
+    >
+      {source.toUpperCase()}
+    </span>
   );
-
-  const merged: ProjectStats[] = catalog
-    .filter((project) => !project.isArchived)
-    .map((project) => {
-      const stats = statsById.get(project.id);
-      return (
-        stats ?? {
-          projectId: project.id,
-          projectName: project.name,
-          totalHours: 0,
-          billableHours: 0,
-          teamMembers: 0,
-          utilization: 0,
-        }
-      );
-    });
-
-  for (const row of breakdown) {
-    if (row.projectId === null && !merged.some((item) => item.projectName === row.projectName)) {
-      merged.push(row);
-    }
-  }
-
-  merged.sort((left, right) => {
-    if (right.totalHours !== left.totalHours) {
-      return right.totalHours - left.totalHours;
-    }
-    return left.projectName.localeCompare(right.projectName);
-  });
-
-  return merged;
 }
 
-function utilizationColor(rate: number): string {
-  if (rate >= 0.8) return "var(--lcars-green)";
-  if (rate >= 0.5) return "var(--lcars-yellow)";
+function progressColor(project: ExecutionProjectView): string {
+  if (project.totalIssues === 0) return "var(--lcars-orange)";
+  if (project.openIssues === 0) return "var(--lcars-green)";
+  if (project.percentComplete >= 0.5) return "var(--lcars-yellow)";
   return "var(--lcars-red)";
 }
 
@@ -244,7 +262,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   summaryRow: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
     gap: 16,
     marginBottom: 20,
   },
@@ -270,6 +288,23 @@ const styles: Record<string, React.CSSProperties> = {
   th: lcarsPageStyles.th,
   td: lcarsPageStyles.td,
   tdMono: lcarsPageStyles.tdMono,
+  projectSubtext: {
+    marginTop: 4,
+    color: "var(--text-quaternary)",
+    fontSize: 10,
+    fontFamily: "'JetBrains Mono', monospace",
+    textTransform: "none",
+  },
+  sourceBadge: {
+    display: "inline-block",
+    padding: "2px 8px",
+    borderRadius: 2,
+    fontSize: 9,
+    fontWeight: 600,
+    fontFamily: "'Orbitron', sans-serif",
+    letterSpacing: "1px",
+    border: "1px solid var(--lcars-orange)",
+  },
   barTrack: {
     flex: 1,
     height: 6,

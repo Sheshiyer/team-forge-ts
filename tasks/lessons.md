@@ -22,3 +22,6 @@
 - When the user asks to print a credential and run a clean rebuild, do both in the same pass: return the live token value and produce a verified fresh app artifact, including fallback for updater-signing blockers.
 - Do not equate “sync succeeded” with “page will render data”: verify each page’s query shape and ensure synced entities (for example, projects) are surfaced directly, not only through derived activity tables.
 - When Tauri updater public keys are configured, tagged GitHub releases will fail to publish assets unless `TAURI_SIGNING_PRIVATE_KEY` is present or updater artifact generation is explicitly disabled in CI build args.
+- For nested sub-tabs under a splat route (for example `/team/*`), do not rely on plain relative tab links; use stable absolute targets and include both `index` and `*` fallback redirects so deep or malformed URLs cannot blank the page.
+- When upstream SDK packages are transitively broken on npm, do not stall feature delivery on dependency firefighting; pivot immediately to a REST transaction path that uses stable endpoint contracts already proven in this repo.
+- When a page can load before Tauri command state is ready, never leave it with a one-shot fetch path; add retry + partial-failure fallback so startup races cannot freeze the UI into a false zero-state.

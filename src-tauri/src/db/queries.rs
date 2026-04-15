@@ -21,6 +21,7 @@ pub async fn init_db(app_data_dir: &Path) -> Result<SqlitePool, sqlx::Error> {
         .execute(&pool)
         .await?;
     ensure_identity_map_columns(&pool).await?;
+    ensure_github_repo_config_columns(&pool).await?;
 
     Ok(pool)
 }
@@ -31,6 +32,18 @@ async fn ensure_identity_map_columns(pool: &SqlitePool) -> Result<(), sqlx::Erro
         "ALTER TABLE identity_map ADD COLUMN override_reason TEXT",
         "ALTER TABLE identity_map ADD COLUMN override_at TEXT",
     ] {
+        if let Err(error) = sqlx::query(statement).execute(pool).await {
+            let message = error.to_string().to_lowercase();
+            if !message.contains("duplicate column name") {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_github_repo_config_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    for statement in ["ALTER TABLE github_repo_configs ADD COLUMN client_name TEXT"] {
         if let Err(error) = sqlx::query(statement).execute(pool).await {
             let message = error.to_string().to_lowercase();
             if !message.contains("duplicate column name") {
@@ -412,6 +425,232 @@ pub async fn upsert_project(pool: &SqlitePool, p: &Project) -> Result<(), sqlx::
     .execute(pool)
     .await?;
     Ok(())
+}
+
+// ─── GitHub Planning Cache ───────────────────────────────────────
+
+pub async fn upsert_github_repo_config(
+    pool: &SqlitePool,
+    config: &GithubRepoConfig,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO github_repo_configs (
+            repo,
+            display_name,
+            client_name,
+            default_milestone_number,
+            huly_project_id,
+            clockify_project_id,
+            enabled,
+            created_at,
+            updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        ON CONFLICT(repo) DO UPDATE SET
+          display_name = excluded.display_name,
+          client_name = COALESCE(excluded.client_name, github_repo_configs.client_name),
+          default_milestone_number = COALESCE(excluded.default_milestone_number, github_repo_configs.default_milestone_number),
+          huly_project_id = COALESCE(excluded.huly_project_id, github_repo_configs.huly_project_id),
+          clockify_project_id = COALESCE(excluded.clockify_project_id, github_repo_configs.clockify_project_id),
+          enabled = excluded.enabled,
+          updated_at = datetime('now')",
+    )
+    .bind(&config.repo)
+    .bind(&config.display_name)
+    .bind(&config.client_name)
+    .bind(config.default_milestone_number)
+    .bind(&config.huly_project_id)
+    .bind(&config.clockify_project_id)
+    .bind(config.enabled)
+    .bind(&config.created_at)
+    .bind(&config.updated_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub async fn ensure_default_github_repo_config(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT repo FROM github_repo_configs WHERE repo = ?1")
+            .bind("Sheshiyer/parkarea-aleph")
+            .fetch_optional(pool)
+            .await?;
+    if existing.is_some() {
+        return Ok(());
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let config = GithubRepoConfig {
+        repo: "Sheshiyer/parkarea-aleph".to_string(),
+        display_name: "ParkArea Phase 2 - Germany Launch".to_string(),
+        client_name: Some("ParkArea".to_string()),
+        default_milestone_number: Some(1),
+        huly_project_id: None,
+        clockify_project_id: None,
+        enabled: true,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    upsert_github_repo_config(pool, &config).await
+}
+
+pub async fn get_enabled_github_repo_configs(
+    pool: &SqlitePool,
+) -> Result<Vec<GithubRepoConfig>, sqlx::Error> {
+    sqlx::query_as::<_, GithubRepoConfig>(
+        "SELECT * FROM github_repo_configs WHERE enabled = 1 ORDER BY display_name, repo",
+    )
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn upsert_github_milestone(
+    pool: &SqlitePool,
+    milestone: &GithubMilestoneCache,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO github_milestones (
+            repo,
+            number,
+            title,
+            description,
+            state,
+            due_on,
+            url,
+            open_issues,
+            closed_issues,
+            updated_at,
+            synced_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+        ON CONFLICT(repo, number) DO UPDATE SET
+          title = excluded.title,
+          description = excluded.description,
+          state = excluded.state,
+          due_on = excluded.due_on,
+          url = excluded.url,
+          open_issues = excluded.open_issues,
+          closed_issues = excluded.closed_issues,
+          updated_at = excluded.updated_at,
+          synced_at = excluded.synced_at",
+    )
+    .bind(&milestone.repo)
+    .bind(milestone.number)
+    .bind(&milestone.title)
+    .bind(&milestone.description)
+    .bind(&milestone.state)
+    .bind(&milestone.due_on)
+    .bind(&milestone.url)
+    .bind(milestone.open_issues)
+    .bind(milestone.closed_issues)
+    .bind(&milestone.updated_at)
+    .bind(&milestone.synced_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn upsert_github_issue(
+    pool: &SqlitePool,
+    issue: &GithubIssueCache,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO github_issues (
+            repo,
+            number,
+            node_id,
+            title,
+            body_excerpt,
+            state,
+            url,
+            milestone_number,
+            assignee_logins_json,
+            labels_json,
+            priority,
+            track,
+            created_at,
+            updated_at,
+            closed_at,
+            synced_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+        ON CONFLICT(repo, number) DO UPDATE SET
+          node_id = excluded.node_id,
+          title = excluded.title,
+          body_excerpt = excluded.body_excerpt,
+          state = excluded.state,
+          url = excluded.url,
+          milestone_number = excluded.milestone_number,
+          assignee_logins_json = excluded.assignee_logins_json,
+          labels_json = excluded.labels_json,
+          priority = excluded.priority,
+          track = excluded.track,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at,
+          closed_at = excluded.closed_at,
+          synced_at = excluded.synced_at",
+    )
+    .bind(&issue.repo)
+    .bind(issue.number)
+    .bind(&issue.node_id)
+    .bind(&issue.title)
+    .bind(&issue.body_excerpt)
+    .bind(&issue.state)
+    .bind(&issue.url)
+    .bind(issue.milestone_number)
+    .bind(&issue.assignee_logins_json)
+    .bind(&issue.labels_json)
+    .bind(&issue.priority)
+    .bind(&issue.track)
+    .bind(&issue.created_at)
+    .bind(&issue.updated_at)
+    .bind(&issue.closed_at)
+    .bind(&issue.synced_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_github_issue(
+    pool: &SqlitePool,
+    repo: &str,
+    number: i64,
+) -> Result<Option<GithubIssueCache>, sqlx::Error> {
+    sqlx::query_as::<_, GithubIssueCache>(
+        "SELECT * FROM github_issues WHERE repo = ?1 AND number = ?2",
+    )
+    .bind(repo)
+    .bind(number)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn get_github_issues_for_project(
+    pool: &SqlitePool,
+    repo: &str,
+    milestone_number: Option<i64>,
+) -> Result<Vec<GithubIssueCache>, sqlx::Error> {
+    if let Some(number) = milestone_number {
+        sqlx::query_as::<_, GithubIssueCache>(
+            "SELECT * FROM github_issues
+             WHERE repo = ?1 AND milestone_number = ?2
+             ORDER BY updated_at DESC, number DESC",
+        )
+        .bind(repo)
+        .bind(number)
+        .fetch_all(pool)
+        .await
+    } else {
+        sqlx::query_as::<_, GithubIssueCache>(
+            "SELECT * FROM github_issues
+             WHERE repo = ?1 AND milestone_number IS NULL
+             ORDER BY updated_at DESC, number DESC",
+        )
+        .bind(repo)
+        .fetch_all(pool)
+        .await
+    }
 }
 
 // ─── Presence ────────────────────────────────────────────────────
@@ -1338,6 +1577,66 @@ mod tests {
             .await
             .expect("count ops events");
         assert_eq!(count, 1);
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn github_issue_upsert_is_idempotent_and_updates_state() {
+        let dir = unique_test_dir();
+        let pool = init_db(&dir).await.expect("init db");
+
+        ensure_default_github_repo_config(&pool)
+            .await
+            .expect("seed default github config");
+
+        let mut issue = GithubIssueCache {
+            repo: "Sheshiyer/parkarea-aleph".to_string(),
+            number: 7,
+            node_id: Some("node-7".to_string()),
+            title: "Original issue".to_string(),
+            body_excerpt: Some("Original body".to_string()),
+            state: "open".to_string(),
+            url: "https://github.com/Sheshiyer/parkarea-aleph/issues/7".to_string(),
+            milestone_number: Some(1),
+            assignee_logins_json: "[]".to_string(),
+            labels_json: r#"["priority:p1","track:backend-core"]"#.to_string(),
+            priority: Some("p1".to_string()),
+            track: Some("backend-core".to_string()),
+            created_at: Some("2026-04-16T00:00:00Z".to_string()),
+            updated_at: Some("2026-04-16T00:00:00Z".to_string()),
+            closed_at: None,
+            synced_at: "2026-04-16T00:01:00Z".to_string(),
+        };
+
+        upsert_github_issue(&pool, &issue)
+            .await
+            .expect("first github issue upsert");
+        issue.title = "Updated issue".to_string();
+        issue.state = "closed".to_string();
+        issue.closed_at = Some("2026-04-16T00:02:00Z".to_string());
+        upsert_github_issue(&pool, &issue)
+            .await
+            .expect("second github issue upsert");
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM github_issues WHERE repo = ?1 AND number = ?2",
+        )
+        .bind(&issue.repo)
+        .bind(issue.number)
+        .fetch_one(&pool)
+        .await
+        .expect("count github issues");
+        assert_eq!(count, 1);
+
+        let loaded = get_github_issue(&pool, &issue.repo, issue.number)
+            .await
+            .expect("load github issue")
+            .expect("github issue exists");
+        assert_eq!(loaded.title, "Updated issue");
+        assert_eq!(loaded.state, "closed");
+        assert_eq!(loaded.closed_at.as_deref(), Some("2026-04-16T00:02:00Z"));
 
         pool.close().await;
         let _ = std::fs::remove_dir_all(dir);

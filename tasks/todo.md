@@ -2,6 +2,190 @@
 
 ## Goal
 
+Commit and push the Cloudflare-backed integration sync work with a fresh patch version.
+
+## Plan
+
+- [x] Inspect current branch, remote, and dirty worktree scope.
+- [x] Bump root app, Tauri, sidecar, and lockfile version surfaces to `0.1.14`.
+- [x] Run verification before committing.
+- [x] Stage all intended changes.
+- [x] Commit with a conventional message.
+- [x] Push `main` to `origin`.
+
+## Review
+
+- Version surfaces updated to `0.1.14`:
+  - root `package.json`
+  - sidecar `package.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/tauri.conf.json`
+  - root package entry in `src-tauri/Cargo.lock`
+- Verification passed before commit:
+  - `pnpm build`
+  - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit`
+  - `pnpm --dir sidecar build`
+  - `cargo test --manifest-path src-tauri/Cargo.toml` (`28 passed, 0 failed, 3 ignored`)
+
+## Goal
+
+Route TeamForge integration setup through the Cloudflare Worker instead of page-local display defaults:
+- `/v1/credentials` returns both shared credentials and non-secret integration config.
+- GitHub repo/milestone/client ownership is hydrated from Cloudflare into SQLite.
+- Clockify, Huly, Slack, and GitHub sync can run from one Cloudflare-backed flow.
+- Clients/Projects pages consume backend projections without hardcoded repo display constraints.
+
+## Plan
+
+- [x] Extend the Cloudflare Worker credential route to include GitHub credentials and integration config.
+- [x] Persist Cloudflare integration config into Tauri settings and GitHub repo config cache.
+- [x] Add a unified `sync_cloud_integrations` command for Cloudflare config + Clockify/Huly/Slack/GitHub sync.
+- [x] Remove UI-level ParkArea repo defaults from Settings.
+- [x] Add GitHub client ownership projection using Cloudflare-provided `clientName`.
+- [x] Verify worker typecheck, frontend build, sidecar build, and Rust tests.
+
+## Review
+
+- Cloudflare Worker:
+  - `/v1/credentials` now returns shared `clockify`, `huly`, `slack`, and `github` credentials.
+  - `/v1/credentials` also returns `integrations` from `TF_INTEGRATION_CONFIG_JSON`.
+  - `wrangler.jsonc` and `.dev.vars.example` include the first ParkArea GitHub config preset in Cloudflare config, not page code.
+- Tauri backend:
+  - `sync_cloud_credentials` now persists credentials plus integration config.
+  - added `sync_cloud_integrations` to run Cloudflare config sync, Clockify full sync, Huly full sync, Slack delta sync, GitHub plans sync, and agent feed refresh as one flow.
+  - `github_repo_configs` now supports `client_name`; existing SQLite DBs get the column via startup `ALTER TABLE`.
+  - GitHub repo defaults are no longer seeded from Projects/Settings display code.
+  - background scheduler now includes GitHub plan cache refresh when a GitHub token/config is available.
+- Clients:
+  - client ownership for GitHub projects is driven by Cloudflare-provided `clientName`.
+  - Clients can show GitHub-backed projects/issues even when there is no Clockify project yet.
+  - Linked project rows now show source, repo, and GitHub issue counts.
+- Version/install:
+  - bumped app to `0.1.13`.
+  - built and installed `/Applications/TeamForge.app`.
+  - installed bundle plist confirms `CFBundleShortVersionString = 0.1.13`.
+- Deployment:
+  - deployed Cloudflare Worker `teamforge-api` successfully.
+  - live URL: `https://teamforge-api.sheshnarayan-iyer.workers.dev`.
+  - deployed version id: `f2dc126b-ed08-4e82-ab3a-cf38e2b20f90`.
+  - sanitized live endpoint check confirmed Clockify/Huly/Slack credentials are available and GitHub repo integration config is present.
+  - live endpoint currently reports GitHub credential unavailable until `TF_GITHUB_TOKEN_GLOBAL` is set as a Cloudflare secret.
+- Verification:
+  - `pnpm build` ✅
+  - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit` ✅
+  - `pnpm --dir sidecar build` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅ (`28 passed, 0 failed, 3 ignored`)
+  - `pnpm tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'` ✅
+
+## Goal
+
+Implement GitHub-driven TeamForge Projects:
+- GitHub issues become the source of truth for project plans/activity.
+- ParkArea Phase 2 (`Sheshiyer/parkarea-aleph`, milestone `1`) appears as a TeamForge project.
+- Huly remains mirror-only.
+- Clockify remains the time source and overlays hours onto GitHub projects when matched.
+
+## Plan
+
+- [x] Add SQLite cache tables and Rust models for GitHub repos, milestones, issues, labels, and aliases.
+- [x] Add GitHub client + idempotent sync command for `Sheshiyer/parkarea-aleph`.
+- [x] Upsert GitHub issue events into `ops_events` and extend activity views.
+- [x] Add unified execution project backend command.
+- [x] Add GitHub token/repo Settings controls and manual sync button.
+- [x] Update Projects UI to show GitHub execution projects first, then Clockify-only rows.
+- [x] Update Activity UI to include GitHub events from `ops_events`.
+- [x] Refactor sidecar mirror naming/config toward reusable GitHub-to-Huly mirror.
+- [x] Bump version, build, test, create DMG, install `/Applications/TeamForge.app`.
+
+## Review
+
+- Implemented GitHub cache tables:
+  - `github_repo_configs`
+  - `github_milestones`
+  - `github_issues`
+  - `github_project_aliases`
+- Added Rust GitHub sync path:
+  - `sync_github_plans() -> Vec<GitHubSyncReport>`
+  - default repo config: `Sheshiyer/parkarea-aleph`, milestone `1`
+  - issue identity: `github:<repo>:issue:<number>`
+  - project identity: `github:<repo>:milestone:<number>`
+  - idempotent issue upsert and `ops_events` upsert
+  - explicit events for opened, updated, closed, reopened, labels changed, assignees changed
+- Added project/activity backend views:
+  - `get_execution_projects()`
+  - `get_project_activity(project_id, limit)`
+  - Activity now reads canonical `ops_events`
+- Updated frontend:
+  - Projects shows GitHub execution projects first and Clockify-only rows after.
+  - Summary cards now show GitHub project count, issue completion, and open issue count.
+  - Activity can link to GitHub source URLs and show source/status.
+  - Settings has GitHub token/repo controls plus `SYNC GITHUB PLANS`.
+- Updated Huly sidecar:
+  - `pnpm mirror:github` added.
+  - ParkArea remains default preset, but project identity is env-overridable.
+  - Existing Huly issues are updated from GitHub/cache instead of skipped.
+  - `TEAMFORGE_DB_PATH` can mirror from TeamForge's local `github_issues` cache; otherwise it falls back to GitHub API.
+- Version/install:
+  - bumped root app, Tauri, and sidecar versions to `0.1.12`
+  - installed `/Applications/TeamForge.app`
+  - DMG created at `src-tauri/target/release/bundle/dmg/TeamForge_0.1.12_aarch64.dmg`
+- Verification:
+  - `pnpm build` ✅
+  - `pnpm --dir sidecar build` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅ (`28 passed, 0 failed, 3 ignored`)
+  - `pnpm tauri build` produced app/dmg/updater artifacts but exited non-zero because `TAURI_SIGNING_PRIVATE_KEY` is not configured for updater signing.
+- Live GitHub sync status:
+  - local `github_token` was not configured
+  - existing `gh` CLI token is invalid
+  - cloud credential endpoint currently returns Clockify/Huly/Slack only, not GitHub
+  - unauthenticated GitHub API returns 404 for the private repo
+  - implementation is ready, but live issue backfill needs a GitHub token saved in Settings or returned by cloud credential sync.
+
+## Goal
+
+Fix the reported "Projects shows zero" state and ship a clearly identifiable fresh install build:
+- ensure Projects loader survives startup/backend warmup races
+- bump app version for easy visual verification
+- deliver and open a fresh `.dmg` + replace `/Applications/TeamForge.app`
+
+## Plan
+
+- [x] Verify live DB actually contains projects/time data
+- [x] Confirm loader hardening is present for partial failures + retry
+- [x] Bump app version to `0.1.11`
+- [x] Build fresh frontend + Tauri app bundle
+- [x] Produce fresh DMG and open it for installer flow
+- [x] Replace `/Applications/TeamForge.app` and launch updated app
+
+## Review
+
+- Data presence confirmed in live DB (`~/Library/Application Support/com.thoughtseed.teamforge/teamforge.db`):
+  - `projects`: `11`
+  - `time_entries`: `241`
+  - current-month entries: `31`
+- `Projects.tsx` already contains hardened loader behavior:
+  - `Promise.allSettled` instead of fail-fast `Promise.all`
+  - retries every `2s` until first successful load
+  - refreshes every `60s` after success
+  - fallback synced-project count from breakdown when catalog is unavailable
+- Version bump applied:
+  - `package.json`: `0.1.11`
+  - `src-tauri/Cargo.toml`: `0.1.11`
+  - `src-tauri/tauri.conf.json`: `0.1.11`
+- Build verification:
+  - `pnpm build` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅ (`24 passed, 0 failed, 3 ignored`)
+- Fresh artifacts:
+  - app bundle: `src-tauri/target/release/bundle/macos/TeamForge.app`
+  - dmg: `src-tauri/target/release/bundle/dmg/TeamForge_0.1.11_aarch64.dmg`
+    - generated via manual `hdiutil create` because Tauri `bundle_dmg.sh` failed in this shell context
+- Installed and launched:
+  - replaced `/Applications/TeamForge.app` with the fresh bundle
+  - opened the new DMG and launched `/Applications/TeamForge.app`
+  - app plist confirms `CFBundleShortVersionString = 0.1.11`
+
+## Goal
+
 Execute post-fix validation flow requested by user:
 - rebuild/run latest Tauri app
 - run one sync pass to backfill corrected project mapping
@@ -61,6 +245,89 @@ Deep audit page-by-page data coverage and fix missing synced data in UI:
   - `Clients`, `Devices`, `Sprint detail`, `Training tracks/status`, `Skills matrix`, `Onboarding flows`, and `Planner capacity` still return stub responses in `commands/mod.rs`.
 - Verification:
   - `pnpm build` ✅
+
+## Goal
+
+Unblock Huly engagement seeding by rewriting sidecar sync to REST-only mode that does not depend on broken `@hcengineering/tracker` package publishing.
+
+## Plan
+
+- [x] Remove broken sidecar dependencies and keep installable package surface.
+- [x] Rewrite `sidecar/src/seed-parkarea.ts` to use Huly REST endpoints (`config/selectWorkspace/find-all/tx`) with string class refs.
+- [x] Preserve idempotent upsert behavior for Project + Components + GitHub Issues.
+- [x] Update `sidecar/README.md` runbook to reflect the REST-first implementation.
+- [x] Run sidecar install + typecheck/build verification and document outcomes.
+
+## Review
+
+- Sidecar dependency surface simplified in `sidecar/package.json`:
+  - removed broken upstream chain (`@hcengineering/tracker`, `@hcengineering/core`, `@hcengineering/document`, `ws`, overrides)
+  - retained installable minimal dependency: `@hcengineering/api-client@0.7.3`
+- Rewrote `sidecar/src/seed-parkarea.ts` to REST-only Huly flow:
+  - `config.json` discovery + `selectWorkspace` JSON-RPC session negotiation
+  - typed REST helper for:
+    - `find-all` queries
+    - `tx` mutations via `core:class:TxCreateDoc`
+    - account info lookup
+  - string class refs used directly:
+    - `tracker:class:Project`
+    - `tracker:class:Component`
+    - `tracker:class:Issue`
+  - preserved idempotent upsert semantics:
+    - project by `identifier`
+    - components by `(space,label)`
+    - issues by `(space,number)`
+  - preserved GitHub mirror and component inference heuristics.
+- Updated `sidecar/README.md`:
+  - run command now documents REST-first path (`pnpm seed:parkarea`)
+  - added endpoint contract details (`config/selectWorkspace/find-all/tx`)
+  - replaced blocker section with current status: typed SDK still unstable, REST seeder is unblocked.
+- Verification:
+  - `pnpm install` in `sidecar/` ✅ (completed after enabling network)
+  - `pnpm build` in `sidecar/` ✅
+  - `pnpm seed:parkarea` ✅ startup path; exits with expected env guard:
+    - `FATAL: HULY_TOKEN is required.`
+  - Live seeded run with real credentials ✅:
+    - Workspace: `46352c1b-9c0a-4562-b204-d39e47ff0b1b`
+    - Project created: `PARKAREA` (`69dff7f96c1ce2a20e000000`)
+    - Components created: `10`
+    - GitHub issues mirrored: `21 created`, `0 existing`
+
+## Goal
+
+Fix Projects page showing zero synced projects despite existing Clockify data.
+
+## Plan
+
+- [x] Verify whether live SQLite tables (`projects`, `time_entries`) actually contain data.
+- [x] Identify frontend/backend failure path causing zero-state rendering.
+- [x] Harden `Projects.tsx` loader against early backend readiness races and partial command failures.
+- [x] Build and reinstall app bundle for immediate user verification.
+
+## Review
+
+- Confirmed live DB had non-zero project/time data:
+  - `projects`: `11`
+  - `time_entries`: `241`
+  - active employees: `6`
+  - current month entries: `31` (non-zero hours)
+- Root cause was in Projects page data loading behavior:
+  - `Promise.all` failed hard if either `getProjectsCatalog` or `getProjectBreakdown` errored once.
+  - first-load failure path (common when DB/backend state is still warming) was swallowed and permanently rendered zero-state with no retry.
+- Updated `src/pages/Projects.tsx`:
+  - switched to `Promise.allSettled` with partial fallback (catalog/breakdown independent),
+  - treat load as failed only if both requests fail,
+  - added adaptive auto-retry loop:
+    - retry every `2s` until successful,
+    - refresh every `60s` after success,
+  - preserved no-data behavior for genuine empty datasets.
+- Verification/build:
+  - `pnpm build` ✅
+  - `pnpm tauri build --no-bundle` ✅
+  - updated `TeamForge.app` bundle generated and installed to `/Applications`, then relaunched.
+  - `pnpm tauri build --no-bundle` ✅ (updated release binary)
+  - `pnpm tauri build --bundles app` produced updated `TeamForge.app` bundle (command exits non-zero after bundle because updater signing key is missing, expected in this environment).
+  - Replaced `/Applications/TeamForge.app` with the new `TeamForge.app` bundle and relaunched.
   - `cargo test --manifest-path src-tauri/Cargo.toml` ✅
 
 ## Goal
@@ -1956,3 +2223,204 @@ Execute the remaining Ops Fabric backlog items `#29` through `#39` in one contin
     - dispatch run: `new=2 skipped=0 suppressed=0 dispatched=2 errors=0`,
     - outcome rollup after lifecycle mutation shows resolved/no-change split and time-to-resolution metrics.
   - `paperclip-sync.sh sync-issues --dry-run` against local API endpoint currently fails in this shell when `http://127.0.0.1:3100` is unreachable, but dry-run enrichment path and syntax are validated.
+
+## Goal
+
+Remove Training from the TeamForge shell and refocus the Clients page on hours-based tracking (no monetary value/revenue displays).
+
+## Plan
+
+- [x] Remove Training from app navigation and route registration.
+- [x] Replace Clients monetary/value metrics with billable-hours-based metrics and labels.
+- [x] Update backend/frontend client view types to expose month billable hours directly.
+- [x] Build frontend and Tauri Rust workspace to verify no regressions.
+
+## Review
+
+- Removed Training from the shell navigation + routing surface:
+  - `src/App.tsx` no longer imports `Training`, includes the Training nav item, or registers `/training`.
+- Removed remaining Training-facing labels from adjacent UI:
+  - `src/pages/Knowledge.tsx` category filter replaced `Training` with `Playbook`.
+  - `src/pages/Overview.tsx` developer dashboard card now uses `PROCESS READINESS` / `SOP & DOC COVERAGE`.
+- Refocused Clients UI from perceived monetary value to hours:
+  - `src/pages/Clients.tsx` now shows `BILLABLE HOURS (MONTH)` in the top metrics, client cards, and detail panel.
+  - Removed `MONTHLY REVENUE`/`MONTHLY VALUE` displays and dollar formatting from Clients page.
+- Added direct hours field in shared client contracts:
+  - `src-tauri/src/commands/mod.rs` now exposes `month_billable_hours` in `ClientView`.
+  - `src/lib/types.ts` now uses `monthBillableHours` in `ClientView`.
+  - Client sorting now prioritizes `month_billable_hours` and then active projects.
+- Verification:
+  - `npm run build` ✅
+  - `npm run build` (post-label cleanup) ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅ (`24 passed`, `0 failed`, `3 ignored`)
+
+## Goal
+
+Redesign Team page layout to stabilize the Crew Directory rail, reduce mapping clutter, and preserve all current assignment/sync features.
+
+## Plan
+
+- [x] Rework Crew Directory card layout so identity text never collapses and assignment controls are structured.
+- [x] Simplify left rail information architecture (single directory flow with clear mode/filter controls).
+- [x] Add Team mapping validation signals (duplicate department names, unassigned crew, inactive assignments).
+- [x] Streamline Department Structure summary rendering to avoid noisy duplicate cards.
+- [x] Run frontend build + Tauri tests to validate no regressions.
+
+## Review
+
+- Reworked Team directory layout in `src/pages/Team.tsx`:
+  - Added a dedicated `DirectoryCrewCard` component that renders identity first and assignment controls below to prevent text collapse in narrow rails.
+  - Removed the prior side-by-side compact card/select layout that forced names and assignment text into vertical wrapping.
+- Simplified left rail flow:
+  - Replaced dual-list (`UNASSIGNED TRAY` + `FULL ROSTER`) pattern with one searchable directory list and explicit mode toggles:
+    - `UNASSIGNED (n)`
+    - `ALL CREW (n)`
+  - Preserved direct assignment capability for every listed person.
+- Added live validation counters in the left rail:
+  - duplicate department names,
+  - inactive assigned crew,
+  - open leadership roles.
+- Improved department naming clarity + summary output:
+  - Duplicate department names in mapping controls are now disambiguated with ordinal suffixes (for example `ENGINEERING 2`) in assignment option labels and department card headers.
+  - Department Structure cards now render from aggregated name-level summaries to avoid noisy duplicate rows.
+- Styling and structure adjustments:
+  - widened org workspace rail column (`320px`) and increased directory list usable height.
+  - introduced dedicated style tokens for directory mode controls, validation strip, and stacked assignment rows.
+- Verification:
+  - `npm run build` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅ (`24 passed`, `0 failed`, `3 ignored`)
+
+## Goal
+
+Split Team into focused subroutes (Mapping, Capacity, Crew Profile), extract reusable Team domain components, and enforce hard validation gates before org-chart save.
+
+## Plan
+
+- [x] Convert Team routing to `/team/*` with subroute navigation (`mapping`, `capacity`, `crew`).
+- [x] Extract reusable components: `DirectoryPanel`, `DepartmentCard`, `RolePicker`, `ValidationBar`.
+- [x] Add blocking validation gates for duplicate department names and missing required leadership roles.
+- [x] Add inline validation fix actions (reset draft, auto-fill leadership, unassign inactive).
+- [x] Run frontend build + Tauri tests to verify end-to-end stability.
+
+## Review
+
+- Routing split implemented:
+  - `src/App.tsx` now mounts Team at `/team/*`.
+  - `src/pages/Team.tsx` now provides subroute tabs and nested routes:
+    - `mapping` (org chart editing),
+    - `capacity` (department structure + monthly hours),
+    - `crew` (employee profile summary panel).
+- Team domain components extracted from monolith:
+  - `src/components/team/DirectoryPanel.tsx`
+  - `src/components/team/DepartmentCard.tsx`
+  - `src/components/team/RolePicker.tsx`
+  - `src/components/team/ValidationBar.tsx`
+  - shared mode type: `src/components/team/types.ts`
+- Hard save validation gates enforced:
+  - Save is blocked when either of these is true:
+    - duplicate department names exist,
+    - required leadership roles are missing (HEAD/TEAM LEAD, excluding `organization`).
+  - `handleSaveOrgChart` now exits early with error message if blocking conditions exist.
+- Inline fix actions added:
+  - `RESET DRAFT` for duplicate-name recovery path,
+  - `AUTO-FILL ROLES` to fill missing HEAD/TEAM LEAD from active members,
+  - `UNASSIGN INACTIVE` to clear stale inactive assignments.
+- Additional streamlining retained:
+  - Assignment option labels and department headers disambiguate duplicate names with ordinal suffixes.
+  - Department Structure continues showing aggregated name-level summaries (reduced noise).
+- Verification:
+  - `npm run build` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅ (`24 passed`, `0 failed`, `3 ignored`)
+
+## Goal
+
+Bump release metadata to the next patch version and run a fresh clean build.
+
+## Plan
+
+- [x] Bump version metadata from `0.1.9` to `0.1.10` across app and sidecar package manifests.
+- [x] Run a fresh clean frontend build on the bumped version.
+- [x] Record the build result and touched version surfaces in review notes.
+
+## Review
+
+- Bumped version metadata from `0.1.9` to `0.1.10` in:
+  - `package.json`
+  - `sidecar/package.json`
+  - `src-tauri/tauri.conf.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/Cargo.lock` (root package entry refreshed by Cargo)
+- Fresh build verification on bumped version:
+  - `pnpm build` ✅
+  - `cargo test --manifest-path src-tauri/Cargo.toml` ✅ (`24 passed`, `0 failed`, `3 ignored`)
+  - `pnpm tauri build --no-bundle` ✅ (release binary built)
+- Packaging notes:
+  - `pnpm tauri build` reaches app+dmg bundling but exits non-zero at DMG bundling (`bundle_dmg.sh`) in this environment.
+  - `pnpm tauri build --bundles app` finishes app artifacts but exits non-zero due missing updater signing key: `TAURI_SIGNING_PRIVATE_KEY`.
+
+## Goal
+
+Generate a usable latest DMG (`0.1.10`) and replace the installed `/Applications/TeamForge.app`.
+
+## Plan
+
+- [x] Create a clean DMG from the newly built `TeamForge.app`.
+- [x] Mount DMG and replace existing `/Applications/TeamForge.app` with the new build.
+- [x] Verify installed app metadata reports `0.1.10`.
+
+## Review
+
+- Created DMG successfully at:
+  - `src-tauri/target/release/bundle/dmg/TeamForge_0.1.10_aarch64.dmg`
+  - size: ~10 MB
+- Installed updated app by mounting DMG and copying app bundle into `/Applications`:
+  - source: mounted `TeamForge.app`
+  - destination: `/Applications/TeamForge.app`
+- Verified installed metadata:
+  - `CFBundleShortVersionString`: `0.1.10`
+  - `CFBundleVersion`: `0.1.10`
+- Opened the installed app (`open /Applications/TeamForge.app`) after replacement.
+
+## Goal
+
+Fix Team sub-tab navigation so Mapping/Capacity/Crew always render their content instead of blank screen states.
+
+## Plan
+
+- [x] Inspect Team subroute link and nested route matching behavior.
+- [x] Fix Team tab links to avoid broken relative navigation under `/team/*`.
+- [x] Add safe nested route redirects (`index` + wildcard fallback) for Team.
+- [x] Run frontend build to verify no route/regression issues.
+
+## Review
+
+- Updated Team sub-tab link targets in `src/pages/Team.tsx`:
+  - `MAPPING` now points to `/team/mapping`
+  - `CAPACITY` now points to `/team/capacity`
+  - `CREW PROFILE` now points to `/team/crew`
+  - each tab link now uses `end` for stable active-state behavior.
+- Updated nested routing in `src/pages/Team.tsx`:
+  - replaced `path="/"` redirect with `index` redirect to `mapping`,
+  - added wildcard fallback route (`path="*"`) redirecting to `mapping`.
+- Verification:
+  - `pnpm build` ✅
+
+## Goal
+
+Update Clients to participate in the GitHub-driven execution flow:
+- GitHub-only projects create client visibility before Clockify exists.
+- ParkArea appears in Client Directory through the default GitHub repo config.
+- Client detail shows GitHub-backed linked projects, issue counts, source URLs, and GitHub activity.
+- Clockify remains the billing/time overlay.
+
+## Plan
+
+- [ ] Extend client backend view fields with planning source and GitHub issue/project counts.
+- [ ] Merge GitHub repo+milestone aggregates into `load_clients`.
+- [ ] Add GitHub linked projects/resources/activity to `get_client_detail`.
+- [ ] Update Client UI cards/detail panel to show integrated source and issue metadata.
+- [ ] Verify with frontend build and Rust tests.
+
+## Review
+
+- Pending implementation.

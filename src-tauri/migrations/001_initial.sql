@@ -50,6 +50,68 @@ CREATE TABLE IF NOT EXISTS projects (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS github_repo_configs (
+    repo TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    client_name TEXT,
+    default_milestone_number INTEGER,
+    huly_project_id TEXT,
+    clockify_project_id TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS github_milestones (
+    repo TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    state TEXT NOT NULL,
+    due_on TEXT,
+    url TEXT,
+    open_issues INTEGER NOT NULL DEFAULT 0,
+    closed_issues INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT,
+    synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (repo, number)
+);
+
+CREATE TABLE IF NOT EXISTS github_issues (
+    repo TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    node_id TEXT,
+    title TEXT NOT NULL,
+    body_excerpt TEXT,
+    state TEXT NOT NULL,
+    url TEXT NOT NULL,
+    milestone_number INTEGER,
+    assignee_logins_json TEXT NOT NULL DEFAULT '[]',
+    labels_json TEXT NOT NULL DEFAULT '[]',
+    priority TEXT,
+    track TEXT,
+    created_at TEXT,
+    updated_at TEXT,
+    closed_at TEXT,
+    synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (repo, number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_github_issues_project
+    ON github_issues(repo, milestone_number, updated_at);
+CREATE INDEX IF NOT EXISTS idx_github_issues_state
+    ON github_issues(repo, state);
+
+CREATE TABLE IF NOT EXISTS github_project_aliases (
+    project_id TEXT PRIMARY KEY,
+    repo TEXT NOT NULL,
+    milestone_number INTEGER,
+    clockify_project_id TEXT,
+    huly_project_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS time_entries (
     id TEXT PRIMARY KEY,
     employee_id TEXT NOT NULL REFERENCES employees(id),
