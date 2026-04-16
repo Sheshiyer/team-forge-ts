@@ -2,6 +2,28 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.16 - 2026-04-16
+
+This release wires the OTA publication path end to end so a tagged macOS build can publish signed updater bundles to Cloudflare and register them with the Worker manifest service.
+
+### Changed
+
+- Added `scripts/publish-ota-release.mjs` plus a root `release:ota:publish` script to:
+  - upload the updater artifact, signature, and release notes to the `teamforge-artifacts` R2 bucket
+  - call `/internal/releases/publish` with the signed artifact metadata
+- Updated `.github/workflows/release.yml` so tagged releases now:
+  - require the Tauri updater signing key in CI
+  - build updater artifacts for both Apple Silicon and Intel macOS targets
+  - publish both OTA targets to Cloudflare after the GitHub release assets are built
+- Bumped release metadata to `0.1.16` across the frontend package, sidecar package, Tauri config, and Rust crate so the manual OTA hop can target a real new version.
+
+### Verification
+
+- `pnpm build`
+- `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit`
+- `pnpm release:ota:publish -- --dry-run --version v0.1.16 --platform darwin --arch aarch64 --artifact <tmp>/TeamForge.app.tar.gz --signature <tmp>/TeamForge.app.tar.gz.sig`
+- `cargo test --manifest-path src-tauri/Cargo.toml`
+
 ## v0.1.9 - 2026-04-12
 
 This release finalizes post-rollout version alignment so release tags and generated asset filenames match.

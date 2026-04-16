@@ -2,6 +2,48 @@
 
 ## Goal
 
+Automate OTA release publication for signed macOS updater bundles:
+- upload the Tauri updater artifact, signature, and release notes to Cloudflare R2
+- call `/internal/releases/publish` with the published artifact metadata
+- keep the user-facing OTA hop verification manual
+
+## Plan
+
+- [x] Reconfirm current release workflow gaps and OTA contract requirements.
+- [x] Add a small release publish script for Cloudflare upload + Worker publish.
+- [x] Update GitHub Actions release workflow to build signed updater artifacts and invoke the publish script.
+- [x] Bump release metadata to `0.1.16` so the manual OTA hop targets a real new version.
+- [x] Verify script/workflow behavior locally where possible and document required secrets/manual follow-up.
+
+## Review
+
+- Added `scripts/publish-ota-release.mjs` and root `pnpm release:ota:publish` for OTA publication.
+- The publish script now:
+  - uploads the updater artifact, `.sig`, and `release-notes.md` to `teamforge-artifacts`
+  - publishes the release row through `/internal/releases/publish`
+  - derives release notes from `CHANGELOG.md` when no explicit notes file is provided
+  - supports `--dry-run` for local validation without Cloudflare credentials
+- Updated `.github/workflows/release.yml` so tag builds now:
+  - require `TAURI_SIGNING_PRIVATE_KEY`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and `TF_WEBHOOK_HMAC_SECRET`
+  - build signed updater artifacts for both `aarch64-apple-darwin` and `x86_64-apple-darwin`
+  - locate the generated `TeamForge.app.tar.gz` + `.sig` pairs and publish them to Cloudflare
+- Bumped release metadata to `0.1.16` across:
+  - root `package.json`
+  - `sidecar/package.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/tauri.conf.json`
+  - root package entry in `src-tauri/Cargo.lock`
+  - `CHANGELOG.md`
+- Verification passed:
+  - `pnpm build`
+  - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit`
+  - `pnpm release:ota:publish -- --dry-run --version v0.1.16 --platform darwin --arch aarch64 --artifact <tmp>/TeamForge.app.tar.gz --signature <tmp>/TeamForge.app.tar.gz.sig`
+  - `cargo test --manifest-path src-tauri/Cargo.toml` (`31 passed, 0 failed, 3 ignored`)
+- Manual follow-up remains with the user:
+  - install/test the real `0.1.15 -> 0.1.16` OTA hop locally after pushing the tag and ensuring GitHub repo secrets/vars are set.
+
+## Goal
+
 Add a manual OTA updater flow to Settings, verify the release path against the existing Cloudflare/Tauri updater config, then bump and push the next app version.
 
 ## Plan

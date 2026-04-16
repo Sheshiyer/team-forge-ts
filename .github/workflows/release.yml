@@ -3,7 +3,7 @@ name: Build & Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 jobs:
@@ -11,6 +11,15 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: write
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      TEAMFORGE_ARTIFACT_BASE_URL: ${{ vars.TEAMFORGE_ARTIFACT_BASE_URL }}
+      TEAMFORGE_R2_BUCKET: ${{ vars.TEAMFORGE_R2_BUCKET }}
+      TF_RELEASE_PUBLISH_URL: ${{ vars.TF_RELEASE_PUBLISH_URL }}
+      TF_WEBHOOK_HMAC_SECRET: ${{ secrets.TF_WEBHOOK_HMAC_SECRET }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,13 +47,30 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
+      - name: Validate OTA release secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            TAURI_SIGNING_PRIVATE_KEY
+            CLOUDFLARE_API_TOKEN
+            CLOUDFLARE_ACCOUNT_ID
+            TF_WEBHOOK_HMAC_SECRET
+          )
+          for name in "${required[@]}"; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing required secret: ${name}"
+              exit 1
+            fi
+          done
+
       - name: Build Tauri app (Apple Silicon)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'TeamForge ${{ github.ref_name }}'
+          releaseName: "TeamForge ${{ github.ref_name }}"
           releaseBody: |
             ## TeamForge ${{ github.ref_name }}
 
@@ -56,13 +82,43 @@ jobs:
 
             ### What's New
 
-            See the [full changelog](https://github.com/Sheshiyer/team-forge-ts/commits/main) for details.
+            See the [full changelog](https://github.com/Sheshiyer/team-forge-ts/blob/main/CHANGELOG.md) for details.
 
             ---
             *Built with Tauri v2 + React + Rust*
           releaseDraft: false
           prerelease: false
-          args: --target aarch64-apple-darwin --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          args: --target aarch64-apple-darwin
+
+      - name: Locate updater bundle (Apple Silicon)
+        id: ota_aarch64
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle_dir="src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
+          artifact="$(find "$bundle_dir" -maxdepth 1 -name 'TeamForge.app.tar.gz' -print -quit)"
+          if [ -z "$artifact" ]; then
+            echo "::error::Updater artifact not found in ${bundle_dir}"
+            find "$bundle_dir" -maxdepth 2 -type f | sort || true
+            exit 1
+          fi
+          signature="${artifact}.sig"
+          if [ ! -f "$signature" ]; then
+            echo "::error::Updater signature not found: ${signature}"
+            exit 1
+          fi
+          echo "artifact=${artifact}" >> "$GITHUB_OUTPUT"
+          echo "signature=${signature}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish OTA release (Apple Silicon)
+        run: |
+          set -euo pipefail
+          pnpm release:ota:publish -- \
+            --version "${GITHUB_REF_NAME}" \
+            --platform darwin \
+            --arch aarch64 \
+            --artifact "${{ steps.ota_aarch64.outputs.artifact }}" \
+            --signature "${{ steps.ota_aarch64.outputs.signature }}"
 
       - name: Build Tauri app (Intel)
         uses: tauri-apps/tauri-action@v0
@@ -70,7 +126,37 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'TeamForge ${{ github.ref_name }}'
+          releaseName: "TeamForge ${{ github.ref_name }}"
           releaseDraft: false
           prerelease: false
-          args: --target x86_64-apple-darwin --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          args: --target x86_64-apple-darwin
+
+      - name: Locate updater bundle (Intel)
+        id: ota_x64
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle_dir="src-tauri/target/x86_64-apple-darwin/release/bundle/macos"
+          artifact="$(find "$bundle_dir" -maxdepth 1 -name 'TeamForge.app.tar.gz' -print -quit)"
+          if [ -z "$artifact" ]; then
+            echo "::error::Updater artifact not found in ${bundle_dir}"
+            find "$bundle_dir" -maxdepth 2 -type f | sort || true
+            exit 1
+          fi
+          signature="${artifact}.sig"
+          if [ ! -f "$signature" ]; then
+            echo "::error::Updater signature not found: ${signature}"
+            exit 1
+          fi
+          echo "artifact=${artifact}" >> "$GITHUB_OUTPUT"
+          echo "signature=${signature}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish OTA release (Intel)
+        run: |
+          set -euo pipefail
+          pnpm release:ota:publish -- \
+            --version "${GITHUB_REF_NAME}" \
+            --platform darwin \
+            --arch x86_64 \
+            --artifact "${{ steps.ota_x64.outputs.artifact }}" \
+            --signature "${{ steps.ota_x64.outputs.signature }}"

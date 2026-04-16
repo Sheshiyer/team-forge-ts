@@ -1,13 +1,14 @@
 {
   "name": "team-forge-ts",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "release:ota:publish": "node scripts/publish-ota-release.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
