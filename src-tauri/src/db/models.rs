@@ -105,6 +105,57 @@ pub struct GithubIssueCache {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
+pub struct GithubPullRequestCache {
+    pub repo: String,
+    pub number: i64,
+    pub node_id: Option<String>,
+    pub title: String,
+    pub state: String,
+    pub draft: bool,
+    pub url: String,
+    pub head_ref: String,
+    pub head_sha: String,
+    pub base_ref: String,
+    pub author_login: Option<String>,
+    pub labels_json: String,
+    pub assignee_logins_json: String,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub closed_at: Option<String>,
+    pub merged_at: Option<String>,
+    pub synced_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubBranchCache {
+    pub repo: String,
+    pub name: String,
+    pub commit_sha: String,
+    pub protected: bool,
+    pub synced_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubCheckRunCache {
+    pub repo: String,
+    pub check_run_id: i64,
+    pub branch_name: Option<String>,
+    pub head_sha: String,
+    pub name: String,
+    pub status: String,
+    pub conclusion: Option<String>,
+    pub url: Option<String>,
+    pub details_url: Option<String>,
+    pub app_slug: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub synced_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
 pub struct TimeEntry {
     pub id: String,
     pub employee_id: String,
@@ -314,6 +365,10 @@ pub struct ExecutionProjectView {
     pub total_issues: u32,
     pub open_issues: u32,
     pub closed_issues: u32,
+    pub total_prs: u32,
+    pub open_prs: u32,
+    pub branches: u32,
+    pub failing_checks: u32,
     pub percent_complete: f64,
     pub latest_activity: Option<String>,
     pub huly_project_id: Option<String>,
@@ -374,6 +429,9 @@ pub struct GithubSyncReport {
     pub project_id: String,
     pub milestones_synced: u32,
     pub issues_synced: u32,
+    pub pull_requests_synced: u32,
+    pub branches_synced: u32,
+    pub check_runs_synced: u32,
     pub ops_events_upserted: u32,
     pub total_issues: u32,
     pub open_issues: u32,

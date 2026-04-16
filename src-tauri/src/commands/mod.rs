@@ -14,7 +14,7 @@ use crate::db::models::*;
 use crate::db::queries;
 use crate::github::client::GithubClient;
 use crate::github::sync::GithubSyncEngine;
-use crate::github::types::github_project_id;
+use crate::github::types::{github_project_id, normalize_github_repo_input};
 use crate::huly::client::HulyClient;
 use crate::huly::sync::HulySyncEngine;
 use crate::huly::types::{
@@ -65,6 +65,16 @@ fn normalize_multi_id_value(value: &str) -> String {
     let mut seen = HashSet::new();
     parse_multi_value_setting(value)
         .into_iter()
+        .filter(|item| seen.insert(item.clone()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn normalize_github_repo_list(value: &str) -> String {
+    let mut seen = HashSet::new();
+    parse_multi_value_setting(value)
+        .into_iter()
+        .filter_map(|item| normalize_github_repo_input(&item))
         .filter(|item| seen.insert(item.clone()))
         .collect::<Vec<_>>()
         .join(", ")
@@ -676,6 +686,8 @@ pub async fn save_setting(db: State<'_, DbPool>, key: String, value: String) -> 
         }
     } else if key == "clockify_ignored_employee_ids" {
         normalize_multi_id_value(&value)
+    } else if key == "github_repos" {
+        normalize_github_repo_list(&value)
     } else {
         value
     };
@@ -706,7 +718,10 @@ async fn seed_configured_github_repos(pool: &sqlx::SqlitePool) -> Result<(), Str
     };
     let now = Utc::now().to_rfc3339();
 
-    for repo in parse_multi_value_setting(&repos) {
+    for repo in parse_multi_value_setting(&repos)
+        .into_iter()
+        .filter_map(|value| normalize_github_repo_input(&value))
+    {
         let config = GithubRepoConfig {
             repo: repo.clone(),
             display_name: repo,
@@ -1097,6 +1112,10 @@ pub async fn get_execution_projects(
         total_issues: i64,
         open_issues: i64,
         closed_issues: i64,
+        total_prs: i64,
+        open_prs: i64,
+        branches: i64,
+        failing_checks: i64,
         latest_activity: Option<String>,
     }
 
@@ -1112,6 +1131,15 @@ pub async fn get_execution_projects(
             COUNT(i.number) AS total_issues,
             COALESCE(SUM(CASE WHEN LOWER(i.state) = 'open' THEN 1 ELSE 0 END), 0) AS open_issues,
             COALESCE(SUM(CASE WHEN LOWER(i.state) = 'closed' THEN 1 ELSE 0 END), 0) AS closed_issues,
+            (SELECT COUNT(*) FROM github_pull_requests pr WHERE pr.repo = c.repo) AS total_prs,
+            (SELECT COUNT(*) FROM github_pull_requests pr WHERE pr.repo = c.repo AND LOWER(pr.state) = 'open') AS open_prs,
+            (SELECT COUNT(*) FROM github_branches b WHERE b.repo = c.repo) AS branches,
+            (
+              SELECT COUNT(*)
+              FROM github_check_runs cr
+              WHERE cr.repo = c.repo
+                AND LOWER(COALESCE(cr.conclusion, '')) IN ('failure', 'timed_out', 'cancelled', 'action_required')
+            ) AS failing_checks,
             MAX(i.updated_at) AS latest_activity
          FROM github_repo_configs c
          LEFT JOIN github_milestones m
@@ -1165,6 +1193,10 @@ pub async fn get_execution_projects(
         let total_issues = row.total_issues.max(0) as u32;
         let closed_issues = row.closed_issues.max(0) as u32;
         let open_issues = row.open_issues.max(0) as u32;
+        let total_prs = row.total_prs.max(0) as u32;
+        let open_prs = row.open_prs.max(0) as u32;
+        let branches = row.branches.max(0) as u32;
+        let failing_checks = row.failing_checks.max(0) as u32;
         let percent_complete = if total_issues > 0 {
             closed_issues as f64 / total_issues as f64
         } else {
@@ -1193,6 +1225,10 @@ pub async fn get_execution_projects(
             total_issues,
             open_issues,
             closed_issues,
+            total_prs,
+            open_prs,
+            branches,
+            failing_checks,
             percent_complete,
             latest_activity: row.latest_activity,
             huly_project_id: row.huly_project_id,
@@ -1222,6 +1258,10 @@ pub async fn get_execution_projects(
             total_issues: 0,
             open_issues: 0,
             closed_issues: 0,
+            total_prs: 0,
+            open_prs: 0,
+            branches: 0,
+            failing_checks: 0,
             percent_complete: 0.0,
             latest_activity: None,
             huly_project_id: project.huly_project_id,
@@ -1393,6 +1433,16 @@ fn activity_from_ops_row(row: OpsActivityRow) -> ActivityItem {
         "github.issue.reopened" => "reopened issue".to_string(),
         "github.issue.labels_changed" => "changed issue labels".to_string(),
         "github.issue.assignees_changed" => "changed issue assignees".to_string(),
+        "github.pull_request.opened" => "opened PR".to_string(),
+        "github.pull_request.updated" => "updated PR".to_string(),
+        "github.pull_request.closed" => "closed PR".to_string(),
+        "github.pull_request.reopened" => "reopened PR".to_string(),
+        "github.pull_request.merged" => "merged PR".to_string(),
+        "github.branch.updated" => "updated branch".to_string(),
+        "github.check_run.succeeded" => "check passed".to_string(),
+        "github.check_run.failed" => "check failed".to_string(),
+        "github.check_run.completed" => "check completed".to_string(),
+        "github.check_run.updated" => "check updated".to_string(),
         "huly.issue.modified" => "mirrored issue".to_string(),
         other => other.rsplit('.').next().unwrap_or(other).replace('_', " "),
     };
@@ -1409,6 +1459,12 @@ fn activity_from_ops_row(row: OpsActivityRow) -> ActivityItem {
         .or_else(|| {
             payload
                 .get("identifier")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            payload
+                .get("name")
                 .and_then(Value::as_str)
                 .map(str::to_string)
         });
@@ -8481,14 +8537,13 @@ async fn apply_cloud_integration_config(
             let now = Utc::now().to_rfc3339();
             let mut configured_repos = Vec::new();
             for cloud_repo in repos {
-                let repo = cloud_repo.repo.trim().to_string();
-                if repo.is_empty() || !repo.contains('/') {
+                let Some(repo) = normalize_github_repo_input(&cloud_repo.repo) else {
                     errors.push(format!(
                         "github_repo_configs: invalid repo '{}'",
                         cloud_repo.repo
                     ));
                     continue;
-                }
+                };
                 configured_repos.push(repo.clone());
                 let config = GithubRepoConfig {
                     display_name: clean_optional_string(cloud_repo.display_name)

@@ -1,8 +1,19 @@
 import { useState, useEffect, useCallback } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { useInvoke } from "../hooks/useInvoke";
 import { timeAgo } from "../lib/format";
 import { useViewportWidth } from "../hooks/useViewportWidth";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
+import {
+  checkForUpdate,
+  formatDownloadProgress,
+  isRelaunchSupported,
+  isUpdaterSupported,
+  reduceDownloadProgress,
+  relaunchForInstall,
+  type DownloadProgressState,
+  type TauriUpdateHandle,
+} from "../lib/updater";
 import type { ClockifyWorkspace, Employee, SyncState } from "../lib/types";
 
 const DEFAULT_IGNORED_EMAILS = "thoughtseedlabs@gmail.com";
@@ -36,6 +47,37 @@ function normalizeIgnoredEmployeeIds(ids: string[]): string {
 
 function normalizeSlackChannelFilters(value: string): string {
   return parseMultiValueSetting(value).join(", ");
+}
+
+function normalizeGithubRepoInput(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const afterHost = trimmed.includes("github.com/")
+    ? trimmed.slice(trimmed.indexOf("github.com/") + "github.com/".length)
+    : trimmed.startsWith("git@github.com:")
+      ? trimmed.slice("git@github.com:".length)
+      : trimmed;
+  const parts = afterHost
+    .replace(/\.git$/, "")
+    .split("/")
+    .filter(Boolean);
+  if (parts.length < 2) return null;
+  const [owner, repo] = parts;
+  const valid = /^[A-Za-z0-9_.-]+$/.test(owner) && /^[A-Za-z0-9_.-]+$/.test(repo);
+  return valid ? `${owner}/${repo}` : null;
+}
+
+function normalizeGithubRepos(value: string): string {
+  const seen = new Set<string>();
+  return parseMultiValueSetting(value)
+    .map(normalizeGithubRepoInput)
+    .filter((repo): repo is string => Boolean(repo))
+    .filter((repo) => {
+      if (seen.has(repo)) return false;
+      seen.add(repo);
+      return true;
+    })
+    .join(", ");
 }
 
 function Settings() {
@@ -81,6 +123,18 @@ function Settings() {
   const [cloudSyncMessage, setCloudSyncMessage] = useState<string | null>(null);
   const [cloudSyncing, setCloudSyncing] = useState(false);
 
+  const [currentAppVersion, setCurrentAppVersion] = useState("--");
+  const [availableUpdate, setAvailableUpdate] = useState<TauriUpdateHandle | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<
+    "idle" | "checking" | "current" | "available" | "downloading" | "installing" | "restarting" | "error"
+  >("idle");
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgressState>({
+    downloadedBytes: 0,
+    contentLength: null,
+    finished: false,
+  });
+
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [syncStates, setSyncStates] = useState<SyncState[]>([]);
@@ -106,6 +160,14 @@ function Settings() {
   const slackChannelMode = slackFilterCount > 0
     ? `${slackFilterCount} FILTER${slackFilterCount === 1 ? "" : "S"}`
     : "ALL ACCESSIBLE CHANNELS";
+  const updaterAvailable = isUpdaterSupported();
+  const relaunchAvailable = isRelaunchSupported();
+  const downloadProgressLabel = formatDownloadProgress(downloadProgress);
+  const updateActionBusy =
+    updateStatus === "checking" ||
+    updateStatus === "downloading" ||
+    updateStatus === "installing" ||
+    updateStatus === "restarting";
   const isCompactLayout = viewportWidth < 1080;
 
   const loadSettings = useCallback(async () => {
@@ -144,6 +206,26 @@ function Settings() {
     loadSyncStatus();
     loadEmployees();
   }, [loadSettings, loadSyncStatus, loadEmployees]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getVersion()
+      .then((version) => {
+        if (!cancelled) {
+          setCurrentAppVersion(version);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCurrentAppVersion("--");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleTestConnection = async () => {
     if (!apiKey.trim()) return;
@@ -329,7 +411,7 @@ function Settings() {
   const handleSaveGithub = async () => {
     setGithubMessage(null);
     try {
-      const normalizedRepos = parseMultiValueSetting(githubRepos).join(", ");
+      const normalizedRepos = normalizeGithubRepos(githubRepos);
       await api.saveSetting("github_token", githubToken.trim());
       await api.saveSetting("github_repos", normalizedRepos);
       setGithubToken(githubToken.trim());
@@ -347,8 +429,13 @@ function Settings() {
     try {
       const reports = await api.syncGitHubPlans();
       const issues = reports.reduce((sum, report) => sum + report.issuesSynced, 0);
+      const prs = reports.reduce((sum, report) => sum + report.pullRequestsSynced, 0);
+      const branches = reports.reduce((sum, report) => sum + report.branchesSynced, 0);
+      const checks = reports.reduce((sum, report) => sum + report.checkRunsSynced, 0);
       const projects = reports.length;
-      setGithubMessage(`GitHub plans synced (${projects} projects, ${issues} issues)`);
+      setGithubMessage(
+        `GitHub synced (${projects} repos, ${issues} issues, ${prs} PRs, ${branches} branches, ${checks} checks)`
+      );
       await loadSyncStatus();
     } catch (err) {
       setGithubMessage(`Error: ${String(err)}`);
@@ -404,6 +491,100 @@ function Settings() {
       setCloudSyncMessage(`Error: ${String(err)}`);
     } finally {
       setCloudSyncing(false);
+    }
+  };
+
+  const handleCheckForUpdates = async () => {
+    setUpdateMessage(null);
+    setAvailableUpdate(null);
+    setDownloadProgress({
+      downloadedBytes: 0,
+      contentLength: null,
+      finished: false,
+    });
+
+    if (!updaterAvailable) {
+      setUpdateStatus("error");
+      setUpdateMessage(
+        "Updater API unavailable. Use the packaged TeamForge app to check OTA releases."
+      );
+      return;
+    }
+
+    setUpdateStatus("checking");
+    try {
+      const update = await checkForUpdate();
+      if (!update) {
+        setUpdateStatus("current");
+        setUpdateMessage(
+          `No update available. TeamForge ${currentAppVersion} is current on the configured OTA channel.`
+        );
+        return;
+      }
+
+      setAvailableUpdate(update);
+      setUpdateStatus("available");
+      setUpdateMessage(
+        `Update ${update.version} is available${update.date ? ` (${update.date})` : ""}.`
+      );
+    } catch (err) {
+      setUpdateStatus("error");
+      setUpdateMessage(`Error: ${String(err)}`);
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    if (!availableUpdate) return;
+
+    setUpdateStatus("downloading");
+    setUpdateMessage(`Downloading TeamForge ${availableUpdate.version}...`);
+    setDownloadProgress({
+      downloadedBytes: 0,
+      contentLength: null,
+      finished: false,
+    });
+
+    try {
+      let nextProgress: DownloadProgressState = {
+        downloadedBytes: 0,
+        contentLength: null,
+        finished: false,
+      };
+
+      await availableUpdate.downloadAndInstall((event) => {
+        nextProgress = reduceDownloadProgress(nextProgress, event);
+        setDownloadProgress(nextProgress);
+
+        if (event.event === "Finished") {
+          setUpdateStatus("installing");
+          setUpdateMessage(
+            `Installing TeamForge ${availableUpdate.version}...`
+          );
+          return;
+        }
+
+        setUpdateStatus("downloading");
+        setUpdateMessage(
+          `Downloading TeamForge ${availableUpdate.version}...`
+        );
+      });
+
+      if (relaunchAvailable) {
+        setUpdateStatus("restarting");
+        setUpdateMessage(
+          `Installed TeamForge ${availableUpdate.version}. Restarting now...`
+        );
+        await relaunchForInstall();
+        return;
+      }
+
+      setUpdateStatus("available");
+      setUpdateMessage(
+        `TeamForge ${availableUpdate.version} is installed. Restart the app to finish applying the update.`
+      );
+    } catch (err) {
+      setUpdateStatus("error");
+      setUpdateMessage(`Error: ${String(err)}`);
     }
   };
 
@@ -743,12 +924,13 @@ function Settings() {
           <textarea
             value={githubRepos}
             onChange={(event) => setGithubRepos(event.target.value)}
-            placeholder="SYNCED FROM CLOUDFLARE INTEGRATION CONFIG OR ENTER owner/repo"
+            placeholder="SYNCED FROM CLOUDFLARE OR ENTER owner/repo, https://github.com/owner/repo, PR, OR ISSUE URL"
             style={{ ...styles.input, minHeight: 72, resize: "vertical" }}
           />
           <div style={styles.helperText}>
-            ONE REPO PER LINE OR COMMA. CLOUD CONFIG CAN ALSO PROVIDE DISPLAY NAME,
-            CLIENT, MILESTONE, HULY, AND CLOCKIFY ALIASES.
+            ONE REPO OR GITHUB URL PER LINE OR COMMA. TEAMFORGE NORMALIZES URLS TO
+            owner/repo AND SYNCS ISSUES, PRS, BRANCHES, AND CHECK RUNS. CLOUD CONFIG
+            CAN ALSO PROVIDE DISPLAY NAME, CLIENT, MILESTONE, HULY, AND CLOCKIFY ALIASES.
           </div>
         </div>
 
@@ -866,6 +1048,115 @@ function Settings() {
             </span>
           )}
         </div>
+      </div>
+
+      {/* App Updates */}
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-green)" }}>
+        <h2 style={styles.sectionTitle}>APP UPDATES</h2>
+        <div style={styles.sectionDivider} />
+
+        <div style={styles.summaryGrid}>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>CURRENT VERSION</span>
+            <span style={styles.summaryValue}>{currentAppVersion}</span>
+          </div>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>UPDATER</span>
+            <span
+              style={{
+                ...styles.summaryValue,
+                color: updaterAvailable
+                  ? "var(--lcars-green)"
+                  : "var(--lcars-orange)",
+              }}
+            >
+              {updaterAvailable ? "READY" : "PACKAGED APP ONLY"}
+            </span>
+          </div>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>PENDING RELEASE</span>
+            <span style={styles.summaryValue}>
+              {availableUpdate ? availableUpdate.version : "NONE"}
+            </span>
+          </div>
+        </div>
+
+        <div style={styles.field}>
+          <label style={styles.label}>OTA FLOW</label>
+          <div style={styles.helperText}>
+            TEAMFORGE CHECKS THE CLOUDFLARE OTA MANIFEST ALREADY CONFIGURED IN
+            TAURI. WHEN A NEW SIGNED RELEASE IS PUBLISHED FOR THIS TARGET, USE
+            CHECK FOR UPDATE, THEN INSTALL &amp; RESTART.
+          </div>
+        </div>
+
+        <div style={styles.buttonRow}>
+          <button
+            onClick={handleCheckForUpdates}
+            disabled={updateActionBusy || !updaterAvailable}
+            style={{
+              ...styles.primaryButton,
+              opacity: updateActionBusy || !updaterAvailable ? 0.5 : 1,
+            }}
+          >
+            {updateStatus === "checking" ? "CHECKING..." : "CHECK FOR UPDATE"}
+          </button>
+          <button
+            onClick={handleInstallUpdate}
+            disabled={updateActionBusy || !availableUpdate}
+            style={{
+              ...styles.ghostButton,
+              opacity: updateActionBusy || !availableUpdate ? 0.5 : 1,
+            }}
+          >
+            {updateStatus === "downloading"
+              ? "DOWNLOADING..."
+              : updateStatus === "installing"
+                ? "INSTALLING..."
+                : updateStatus === "restarting"
+                  ? "RESTARTING..."
+                  : "INSTALL & RESTART"}
+          </button>
+          {updateMessage && (
+            <span
+              style={{
+                ...styles.label,
+                color: updateMessage.startsWith("Error")
+                  ? "var(--lcars-red)"
+                  : "var(--lcars-green)",
+              }}
+            >
+              {updateMessage.toUpperCase()}
+            </span>
+          )}
+        </div>
+
+        {(updateStatus === "downloading" || updateStatus === "installing") && (
+          <div style={styles.statusBox}>
+            <div style={styles.statusTitle}>
+              {updateStatus === "installing"
+                ? "INSTALL PHASE"
+                : "DOWNLOAD PHASE"}
+            </div>
+            <div style={styles.statusBody}>{downloadProgressLabel}</div>
+          </div>
+        )}
+
+        {availableUpdate && (
+          <div style={styles.statusBox}>
+            <div style={styles.statusTitle}>
+              RELEASE {availableUpdate.version}
+            </div>
+            <div style={styles.statusBody}>
+              FROM {availableUpdate.currentVersion}
+              {availableUpdate.date ? ` • ${availableUpdate.date}` : ""}
+              {relaunchAvailable ? "" : " • MANUAL RESTART REQUIRED"}
+            </div>
+            {availableUpdate.body?.trim() && (
+              <pre style={styles.releaseNotes}>{availableUpdate.body.trim()}</pre>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Sync Controls */}
@@ -1156,6 +1447,39 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--lcars-tan)",
     letterSpacing: "0.75px",
     lineHeight: 1.6,
+  },
+  statusBox: {
+    ...lcarsPageStyles.subtleCard,
+    borderLeftColor: "var(--lcars-green)",
+    marginTop: 12,
+    padding: "12px 14px",
+  },
+  statusTitle: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    color: "var(--lcars-green)",
+    letterSpacing: "1.5px",
+    textTransform: "uppercase" as const,
+    marginBottom: 6,
+  },
+  statusBody: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+    color: "var(--lcars-tan)",
+    lineHeight: 1.6,
+  },
+  releaseNotes: {
+    margin: "10px 0 0",
+    padding: "12px",
+    background: "rgba(10, 10, 20, 0.7)",
+    border: "1px solid rgba(153, 153, 204, 0.16)",
+    borderRadius: "0 12px 12px 0",
+    color: "var(--lcars-tan)",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    whiteSpace: "pre-wrap" as const,
+    wordBreak: "break-word" as const,
+    lineHeight: 1.65,
   },
   table: lcarsPageStyles.table,
   th: lcarsPageStyles.th,

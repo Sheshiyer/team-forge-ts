@@ -2,6 +2,107 @@
 
 ## Goal
 
+Add a manual OTA updater flow to Settings, verify the release path against the existing Cloudflare/Tauri updater config, then bump and push the next app version.
+
+## Plan
+
+- [x] Add a small tested updater helper for download progress / status reduction.
+- [x] Wire Tauri updater + relaunch support into the packaged app and Settings UI.
+- [x] Verify build/test coverage for the updater flow and existing repo changes.
+- [x] Bump root app, sidecar, and Tauri version surfaces to the next patch release.
+- [x] Commit all current changes with a conventional commit and push the branch.
+
+## Review
+
+- Added a tested updater helper module for:
+  - Tauri updater/process runtime detection
+  - download progress reduction
+  - human-readable progress formatting
+- Added a new Settings > App Updates panel with:
+  - current version display
+  - manual "check for update"
+  - manual "install & restart"
+  - download/install state and release notes display
+- Added `tauri-plugin-process` to the desktop runtime and enabled `process:default`
+  so installed updates can relaunch the packaged app.
+- Version surfaces bumped to `0.1.15`:
+  - root `package.json`
+  - sidecar `package.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/tauri.conf.json`
+  - root package entries in `src-tauri/Cargo.lock`
+- Corrected an accidental lockfile over-bump during version replacement:
+  - restored `nodrop` to `0.1.14`
+  - re-ran Rust verification after the fix
+- Verification passed:
+  - `pnpm --dir sidecar exec tsx --test ../tests/updater.test.ts`
+  - `pnpm build`
+  - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit`
+  - `pnpm --dir sidecar build`
+  - `cargo test --manifest-path src-tauri/Cargo.toml` (`31 passed, 0 failed, 3 ignored`)
+- OTA publication is not yet end-to-end releasable from this shell:
+  - `pnpm tauri build --bundles app` generated `TeamForge.app` and `TeamForge.app.tar.gz`
+  - bundling then stopped because `TAURI_SIGNING_PRIVATE_KEY` is missing
+  - the existing Cloudflare OTA endpoint and new Settings UI are ready, but signed release publishing still requires that private key plus the artifact publish step.
+
+## Goal
+
+Fresh rebuild and reinstall TeamForge after cleaning old build artifacts.
+
+## Plan
+
+- [x] Check available Tauri build flags and project scripts.
+- [x] Clean frontend and Tauri/Cargo build outputs.
+- [x] Rebuild fresh macOS `.app` bundle.
+- [x] Replace `/Applications/TeamForge.app` with the fresh bundle.
+- [x] Verify installed app version and bundle presence.
+
+## Review
+
+- Tauri CLI has no native `--fresh` build flag in this project, so freshness was achieved by clearing `dist` and running `cargo clean`.
+- `cargo clean --manifest-path src-tauri/Cargo.toml` removed `14.1GiB` of old Cargo/Tauri build artifacts.
+- Fresh build command succeeded:
+  - `pnpm tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'`
+- Fresh bundle built at `src-tauri/target/release/bundle/macos/TeamForge.app`.
+- Replaced `/Applications/TeamForge.app` with the fresh bundle.
+- Installed app verification:
+  - version: `0.1.14`
+  - bundle executable exists
+  - installed app size: `25M`
+
+## Goal
+
+Allow TeamForge GitHub projects to be configured from GitHub URLs/repo slugs and expand sync beyond issues to PRs, branches, and check runs.
+
+## Plan
+
+- [x] Add tested GitHub repo URL/slug normalization.
+- [x] Extend SQLite schema/models for GitHub PRs, branches, and check runs.
+- [x] Extend GitHub sync to fetch/cache PRs, branches, and branch check runs.
+- [x] Surface expanded sync counts in Settings and type definitions.
+- [x] Verify frontend build, Worker typecheck, sidecar build, and Rust tests.
+
+## Review
+
+- Settings now accepts GitHub repo slugs plus GitHub HTTPS, issue, PR, and SSH URLs, normalizing them to `owner/repo` before save.
+- Backend also normalizes `github_repos` and Cloudflare integration repo entries before seeding `github_repo_configs`.
+- GitHub sync now fetches and caches:
+  - milestones
+  - issues
+  - pull requests
+  - branches
+  - branch/PR check runs
+- Added SQLite tables for `github_pull_requests`, `github_branches`, and `github_check_runs`.
+- GitHub activity now emits ops events for PR, branch, and check-run events so agent feeds/activity can consume them.
+- Projects now exposes GitHub PR, branch, and failing-check counts alongside issue counts.
+- Verification passed:
+  - `pnpm build`
+  - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit`
+  - `pnpm --dir sidecar build`
+  - `cargo test --manifest-path src-tauri/Cargo.toml` (`31 passed, 0 failed, 3 ignored`)
+
+## Goal
+
 Commit and push the Cloudflare-backed integration sync work with a fresh patch version.
 
 ## Plan

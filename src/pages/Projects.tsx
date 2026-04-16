@@ -53,6 +53,8 @@ function Projects() {
   const openIssues = githubProjects.reduce((sum, project) => sum + project.openIssues, 0);
   const totalIssues = githubProjects.reduce((sum, project) => sum + project.totalIssues, 0);
   const completedIssues = githubProjects.reduce((sum, project) => sum + project.closedIssues, 0);
+  const openPrs = githubProjects.reduce((sum, project) => sum + project.openPrs, 0);
+  const failingChecks = githubProjects.reduce((sum, project) => sum + project.failingChecks, 0);
   const avgUtilization =
     projects.length > 0
       ? projects.reduce((sum, p) => sum + p.utilization, 0) / projects.length
@@ -68,6 +70,9 @@ function Projects() {
       "Total Issues",
       "Open Issues",
       "Closed Issues",
+      "Open PRs",
+      "Branches",
+      "Failing Checks",
       "Total Hours",
       "Billable Hours",
       "Team Members",
@@ -82,6 +87,9 @@ function Projects() {
       String(p.totalIssues),
       String(p.openIssues),
       String(p.closedIssues),
+      String(p.openPrs),
+      String(p.branches),
+      String(p.failingChecks),
       p.totalHours.toFixed(2),
       p.billableHours.toFixed(2),
       String(p.teamMembers),
@@ -137,7 +145,7 @@ function Projects() {
             <div style={styles.summaryLabel}>OPEN ISSUES</div>
             <div style={styles.summaryValue}>{openIssues}</div>
             <div style={styles.summaryHint}>
-              GITHUB IS THE PLAN SOURCE
+              {openPrs} OPEN PRS · {failingChecks} FAILING CHECKS
             </div>
           </div>
         </div>
@@ -158,6 +166,8 @@ function Projects() {
                 <th style={styles.th}>PROJECT</th>
                 <th style={styles.th}>SOURCE</th>
                 <th style={styles.th}>ISSUES</th>
+                <th style={styles.th}>PRS</th>
+                <th style={styles.th}>CHECKS</th>
                 <th style={styles.th}>OPEN</th>
                 <th style={styles.th}>HOURS</th>
                 <th style={styles.th}>CREW</th>
@@ -183,6 +193,8 @@ function Projects() {
                   </td>
                   <td style={styles.td}><SourceBadge source={p.source} /></td>
                   <td style={styles.tdMono}>{p.totalIssues}</td>
+                  <td style={styles.tdMono}>{p.openPrs}/{p.totalPrs}</td>
+                  <td style={styles.tdMono}>{p.failingChecks}</td>
                   <td style={styles.tdMono}>{p.openIssues}</td>
                   <td style={styles.tdMono}>{p.totalHours.toFixed(1)}h</td>
                   <td style={styles.tdMono}>{p.teamMembers}</td>

@@ -102,6 +102,67 @@ CREATE INDEX IF NOT EXISTS idx_github_issues_project
 CREATE INDEX IF NOT EXISTS idx_github_issues_state
     ON github_issues(repo, state);
 
+CREATE TABLE IF NOT EXISTS github_pull_requests (
+    repo TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    node_id TEXT,
+    title TEXT NOT NULL,
+    state TEXT NOT NULL,
+    draft INTEGER NOT NULL DEFAULT 0,
+    url TEXT NOT NULL,
+    head_ref TEXT NOT NULL,
+    head_sha TEXT NOT NULL,
+    base_ref TEXT NOT NULL,
+    author_login TEXT,
+    labels_json TEXT NOT NULL DEFAULT '[]',
+    assignee_logins_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT,
+    updated_at TEXT,
+    closed_at TEXT,
+    merged_at TEXT,
+    synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (repo, number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_github_pull_requests_state
+    ON github_pull_requests(repo, state, updated_at);
+CREATE INDEX IF NOT EXISTS idx_github_pull_requests_head
+    ON github_pull_requests(repo, head_ref, head_sha);
+
+CREATE TABLE IF NOT EXISTS github_branches (
+    repo TEXT NOT NULL,
+    name TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    protected INTEGER NOT NULL DEFAULT 0,
+    synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (repo, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_github_branches_sha
+    ON github_branches(repo, commit_sha);
+
+CREATE TABLE IF NOT EXISTS github_check_runs (
+    repo TEXT NOT NULL,
+    check_run_id INTEGER NOT NULL,
+    branch_name TEXT,
+    head_sha TEXT NOT NULL,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    conclusion TEXT,
+    url TEXT,
+    details_url TEXT,
+    app_slug TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    synced_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (repo, check_run_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_github_check_runs_ref
+    ON github_check_runs(repo, branch_name, head_sha);
+CREATE INDEX IF NOT EXISTS idx_github_check_runs_status
+    ON github_check_runs(repo, status, conclusion, completed_at);
+
 CREATE TABLE IF NOT EXISTS github_project_aliases (
     project_id TEXT PRIMARY KEY,
     repo TEXT NOT NULL,

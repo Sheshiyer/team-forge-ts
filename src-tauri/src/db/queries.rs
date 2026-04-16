@@ -626,6 +626,167 @@ pub async fn get_github_issue(
     .await
 }
 
+pub async fn upsert_github_pull_request(
+    pool: &SqlitePool,
+    pr: &GithubPullRequestCache,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO github_pull_requests (
+            repo,
+            number,
+            node_id,
+            title,
+            state,
+            draft,
+            url,
+            head_ref,
+            head_sha,
+            base_ref,
+            author_login,
+            labels_json,
+            assignee_logins_json,
+            created_at,
+            updated_at,
+            closed_at,
+            merged_at,
+            synced_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+        ON CONFLICT(repo, number) DO UPDATE SET
+          node_id = excluded.node_id,
+          title = excluded.title,
+          state = excluded.state,
+          draft = excluded.draft,
+          url = excluded.url,
+          head_ref = excluded.head_ref,
+          head_sha = excluded.head_sha,
+          base_ref = excluded.base_ref,
+          author_login = excluded.author_login,
+          labels_json = excluded.labels_json,
+          assignee_logins_json = excluded.assignee_logins_json,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at,
+          closed_at = excluded.closed_at,
+          merged_at = excluded.merged_at,
+          synced_at = excluded.synced_at",
+    )
+    .bind(&pr.repo)
+    .bind(pr.number)
+    .bind(&pr.node_id)
+    .bind(&pr.title)
+    .bind(&pr.state)
+    .bind(pr.draft)
+    .bind(&pr.url)
+    .bind(&pr.head_ref)
+    .bind(&pr.head_sha)
+    .bind(&pr.base_ref)
+    .bind(&pr.author_login)
+    .bind(&pr.labels_json)
+    .bind(&pr.assignee_logins_json)
+    .bind(&pr.created_at)
+    .bind(&pr.updated_at)
+    .bind(&pr.closed_at)
+    .bind(&pr.merged_at)
+    .bind(&pr.synced_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_github_pull_request(
+    pool: &SqlitePool,
+    repo: &str,
+    number: i64,
+) -> Result<Option<GithubPullRequestCache>, sqlx::Error> {
+    sqlx::query_as::<_, GithubPullRequestCache>(
+        "SELECT * FROM github_pull_requests WHERE repo = ?1 AND number = ?2",
+    )
+    .bind(repo)
+    .bind(number)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn upsert_github_branch(
+    pool: &SqlitePool,
+    branch: &GithubBranchCache,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO github_branches (
+            repo,
+            name,
+            commit_sha,
+            protected,
+            synced_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5)
+        ON CONFLICT(repo, name) DO UPDATE SET
+          commit_sha = excluded.commit_sha,
+          protected = excluded.protected,
+          synced_at = excluded.synced_at",
+    )
+    .bind(&branch.repo)
+    .bind(&branch.name)
+    .bind(&branch.commit_sha)
+    .bind(branch.protected)
+    .bind(&branch.synced_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn upsert_github_check_run(
+    pool: &SqlitePool,
+    check: &GithubCheckRunCache,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO github_check_runs (
+            repo,
+            check_run_id,
+            branch_name,
+            head_sha,
+            name,
+            status,
+            conclusion,
+            url,
+            details_url,
+            app_slug,
+            started_at,
+            completed_at,
+            synced_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        ON CONFLICT(repo, check_run_id) DO UPDATE SET
+          branch_name = excluded.branch_name,
+          head_sha = excluded.head_sha,
+          name = excluded.name,
+          status = excluded.status,
+          conclusion = excluded.conclusion,
+          url = excluded.url,
+          details_url = excluded.details_url,
+          app_slug = excluded.app_slug,
+          started_at = excluded.started_at,
+          completed_at = excluded.completed_at,
+          synced_at = excluded.synced_at",
+    )
+    .bind(&check.repo)
+    .bind(check.check_run_id)
+    .bind(&check.branch_name)
+    .bind(&check.head_sha)
+    .bind(&check.name)
+    .bind(&check.status)
+    .bind(&check.conclusion)
+    .bind(&check.url)
+    .bind(&check.details_url)
+    .bind(&check.app_slug)
+    .bind(&check.started_at)
+    .bind(&check.completed_at)
+    .bind(&check.synced_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn get_github_issues_for_project(
     pool: &SqlitePool,
     repo: &str,
@@ -1921,6 +2082,95 @@ mod tests {
         assert_eq!(feed_rows.len(), 1);
         assert_eq!(feed_rows[0].sync_key, event.sync_key);
         assert_eq!(feed_rows[0].owner_hint.as_deref(), Some("Feed Owner"));
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn github_pr_branch_and_check_caches_are_idempotent() {
+        let dir = unique_test_dir();
+        let pool = init_db(&dir).await.expect("init db");
+
+        let pr = GithubPullRequestCache {
+            repo: "Sheshiyer/parkarea-aleph".to_string(),
+            number: 7,
+            node_id: Some("PR_kwDO123".to_string()),
+            title: "Add agent workflow".to_string(),
+            state: "open".to_string(),
+            draft: false,
+            url: "https://github.com/Sheshiyer/parkarea-aleph/pull/7".to_string(),
+            head_ref: "codex/agent-workflow".to_string(),
+            head_sha: "abc123".to_string(),
+            base_ref: "main".to_string(),
+            author_login: Some("octocat".to_string()),
+            labels_json: "[]".to_string(),
+            assignee_logins_json: "[]".to_string(),
+            created_at: Some("2026-04-16T00:00:00Z".to_string()),
+            updated_at: Some("2026-04-16T01:00:00Z".to_string()),
+            closed_at: None,
+            merged_at: None,
+            synced_at: "2026-04-16T02:00:00Z".to_string(),
+        };
+        upsert_github_pull_request(&pool, &pr)
+            .await
+            .expect("upsert github pr");
+        upsert_github_pull_request(&pool, &pr)
+            .await
+            .expect("upsert github pr again");
+
+        let branch = GithubBranchCache {
+            repo: pr.repo.clone(),
+            name: pr.head_ref.clone(),
+            commit_sha: pr.head_sha.clone(),
+            protected: false,
+            synced_at: pr.synced_at.clone(),
+        };
+        upsert_github_branch(&pool, &branch)
+            .await
+            .expect("upsert github branch");
+        upsert_github_branch(&pool, &branch)
+            .await
+            .expect("upsert github branch again");
+
+        let check = GithubCheckRunCache {
+            repo: pr.repo.clone(),
+            check_run_id: 42,
+            branch_name: Some(pr.head_ref.clone()),
+            head_sha: pr.head_sha.clone(),
+            name: "ci".to_string(),
+            status: "completed".to_string(),
+            conclusion: Some("success".to_string()),
+            url: Some("https://github.com/checks/42".to_string()),
+            details_url: None,
+            app_slug: Some("github-actions".to_string()),
+            started_at: Some("2026-04-16T01:00:00Z".to_string()),
+            completed_at: Some("2026-04-16T01:05:00Z".to_string()),
+            synced_at: pr.synced_at.clone(),
+        };
+        upsert_github_check_run(&pool, &check)
+            .await
+            .expect("upsert github check");
+        upsert_github_check_run(&pool, &check)
+            .await
+            .expect("upsert github check again");
+
+        let pr_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM github_pull_requests")
+            .fetch_one(&pool)
+            .await
+            .expect("count prs");
+        let branch_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM github_branches")
+            .fetch_one(&pool)
+            .await
+            .expect("count branches");
+        let check_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM github_check_runs")
+            .fetch_one(&pool)
+            .await
+            .expect("count check runs");
+
+        assert_eq!(pr_count, 1);
+        assert_eq!(branch_count, 1);
+        assert_eq!(check_count, 1);
 
         pool.close().await;
         let _ = std::fs::remove_dir_all(dir);

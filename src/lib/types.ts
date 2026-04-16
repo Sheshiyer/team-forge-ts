@@ -54,6 +54,10 @@ export interface ExecutionProjectView {
   totalIssues: number;
   openIssues: number;
   closedIssues: number;
+  totalPrs: number;
+  openPrs: number;
+  branches: number;
+  failingChecks: number;
   percentComplete: number;
   latestActivity: string | null;
   hulyProjectId: string | null;
@@ -90,6 +94,9 @@ export interface GitHubSyncReport {
   projectId: string;
   milestonesSynced: number;
   issuesSynced: number;
+  pullRequestsSynced: number;
+  branchesSynced: number;
+  checkRunsSynced: number;
   opsEventsUpserted: number;
   totalIssues: number;
   openIssues: number;
