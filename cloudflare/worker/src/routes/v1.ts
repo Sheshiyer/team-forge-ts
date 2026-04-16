@@ -4,7 +4,12 @@ import { handleGetConnections, handleTestConnection } from "./connections";
 import { handleGetCredentials } from "./credentials";
 import { handleGetNormalizationHistory, handleNormalizationApply, handleNormalizationPreview } from "./normalization";
 import { handleOtaCheck, handleOtaInstallEvent } from "./ota";
-import { handleGetProjects, handlePutProject } from "./projects";
+import {
+  handleGetProjectMappings,
+  handleGetProjects,
+  handlePutProject,
+  handlePutProjectMappings,
+} from "./projects";
 import { handleGetSyncJob, handleGetSyncRuns, handlePostSyncJob } from "./sync";
 import { handleGetTeamSnapshot, handlePostTeamRefresh } from "./team";
 
@@ -46,11 +51,11 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Project mappings — alias to projects with mapping context
   if (method === "GET" && pathname === "/v1/project-mappings") {
-    return handleGetProjects(env, url);
+    return handleGetProjectMappings(env, url);
   }
   const mappingMatch = pathname.match(/^\/v1\/project-mappings\/([^/]+)$/);
   if (method === "PUT" && mappingMatch) {
-    return handlePutProject(env, mappingMatch[1], request);
+    return handlePutProjectMappings(env, mappingMatch[1], request);
   }
 
   // Credentials (shared integration tokens)

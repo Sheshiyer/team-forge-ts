@@ -27,6 +27,7 @@ use crate::slack::client::SlackClient;
 use crate::slack::sync::SlackSyncEngine;
 use crate::slack::types::{SlackConversation, SlackMessage, SlackUser};
 use crate::sync::scheduler::SyncScheduler;
+use crate::sync::teamforge_worker;
 use crate::{DbPool, SchedulerState};
 
 const DEFAULT_CLOCKIFY_IGNORED_EMAILS: &str = "thoughtseedlabs@gmail.com";
@@ -658,6 +659,280 @@ pub async fn trigger_sync(db: State<'_, DbPool>) -> Result<String, String> {
 }
 
 // ─── Settings commands ──────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeProjectGithubRepoLinkInput {
+    pub repo: String,
+    pub display_name: Option<String>,
+    pub is_primary: Option<bool>,
+    pub sync_issues: Option<bool>,
+    pub sync_milestones: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeProjectHulyLinkInput {
+    pub huly_project_id: String,
+    pub sync_issues: Option<bool>,
+    pub sync_milestones: Option<bool>,
+    pub sync_components: Option<bool>,
+    pub sync_templates: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeProjectArtifactInput {
+    pub id: Option<String>,
+    pub artifact_type: String,
+    pub title: String,
+    pub url: String,
+    pub source: String,
+    pub external_id: Option<String>,
+    pub is_primary: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeProjectInput {
+    pub id: Option<String>,
+    pub slug: Option<String>,
+    pub name: String,
+    pub portfolio_name: Option<String>,
+    pub client_name: Option<String>,
+    pub project_type: Option<String>,
+    pub status: Option<String>,
+    pub sync_mode: Option<String>,
+    #[serde(default)]
+    pub github_repos: Vec<TeamforgeProjectGithubRepoLinkInput>,
+    #[serde(default)]
+    pub huly_links: Vec<TeamforgeProjectHulyLinkInput>,
+    #[serde(default)]
+    pub artifacts: Vec<TeamforgeProjectArtifactInput>,
+}
+
+#[tauri::command]
+pub async fn get_teamforge_projects(
+    db: State<'_, DbPool>,
+) -> Result<Vec<TeamforgeProjectGraph>, String> {
+    let pool = &db.0;
+    match teamforge_worker::fetch_teamforge_project_graphs(pool).await {
+        Ok(graphs) => {
+            queries::replace_teamforge_project_graph_projection(pool, &graphs)
+                .await
+                .map_err(|e| format!("cache TeamForge project projection: {e}"))?;
+            for graph in &graphs {
+                bridge_teamforge_graph_to_github_configs(pool, graph).await?;
+            }
+            Ok(graphs)
+        }
+        Err(remote_error) => {
+            let cached = queries::get_teamforge_project_graphs(pool)
+                .await
+                .map_err(|e| format!("load cached TeamForge projects: {e}"))?;
+            if cached.is_empty() {
+                Err(format!("load TeamForge projects from Worker: {remote_error}"))
+            } else {
+                Ok(cached)
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn save_teamforge_project(
+    db: State<'_, DbPool>,
+    input: TeamforgeProjectInput,
+) -> Result<TeamforgeProjectGraph, String> {
+    let pool = &db.0;
+    let name = input.name.trim();
+    if name.is_empty() {
+        return Err("Project name is required".to_string());
+    }
+
+    let project_id = input
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| generate_manual_id("tf-project"));
+    let slug = input
+        .slug
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| {
+            let derived = slugify_client_name(name);
+            if derived.is_empty() {
+                project_id.clone()
+            } else {
+                derived
+            }
+        });
+    let workspace_id = if input.id.is_some() {
+        None
+    } else {
+        Some(
+            teamforge_worker::resolve_teamforge_workspace_id(pool)
+                .await?
+                .ok_or_else(|| {
+                    "No TeamForge workspace id is configured or inferable; set teamforge_workspace_id before creating a new remote project."
+                        .to_string()
+                })?,
+        )
+    };
+
+    let github_links = input
+        .github_repos
+        .into_iter()
+        .map(|repo| {
+            let normalized_repo = normalize_github_repo_input(&repo.repo)
+                .ok_or_else(|| format!("Invalid GitHub repo: {}", repo.repo.trim()))?;
+            Ok(json!({
+                "repo": normalized_repo,
+                "displayName": repo
+                    .display_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty()),
+                "isPrimary": repo.is_primary.unwrap_or(false),
+                "syncIssues": repo.sync_issues.unwrap_or(true),
+                "syncMilestones": repo.sync_milestones.unwrap_or(true),
+            }))
+        })
+        .collect::<Result<Vec<Value>, String>>()?;
+
+    let huly_links = input
+        .huly_links
+        .into_iter()
+        .map(|link| {
+            let huly_project_id = link.huly_project_id.trim();
+            if huly_project_id.is_empty() {
+                return Err("Huly project id cannot be empty".to_string());
+            }
+            Ok(json!({
+                "hulyProjectId": huly_project_id,
+                "syncIssues": link.sync_issues.unwrap_or(true),
+                "syncMilestones": link.sync_milestones.unwrap_or(true),
+                "syncComponents": link.sync_components.unwrap_or(true),
+                "syncTemplates": link.sync_templates.unwrap_or(true),
+            }))
+        })
+        .collect::<Result<Vec<Value>, String>>()?;
+
+    let artifacts = input
+        .artifacts
+        .into_iter()
+        .map(|artifact| {
+            let artifact_type = artifact.artifact_type.trim();
+            let title = artifact.title.trim();
+            let url = artifact.url.trim();
+            let source = artifact.source.trim();
+            if artifact_type.is_empty() || title.is_empty() || url.is_empty() || source.is_empty() {
+                return Err("Project artifacts require type, title, url, and source".to_string());
+            }
+            Ok(json!({
+                "id": artifact
+                    .id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty()),
+                "artifactType": artifact_type,
+                "title": title,
+                "url": url,
+                "source": source,
+                "externalId": artifact
+                    .external_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty()),
+                "isPrimary": artifact.is_primary.unwrap_or(false),
+            }))
+        })
+        .collect::<Result<Vec<Value>, String>>()?;
+
+    let payload = json!({
+        "workspaceId": workspace_id,
+        "project": {
+            "name": name,
+            "slug": slug,
+            "portfolioName": input
+                .portfolio_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+            "clientName": input
+                .client_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+            "projectType": input
+                .project_type
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+            "status": input
+                .status
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("active"),
+            "syncMode": input
+                .sync_mode
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("hybrid"),
+        },
+        "githubLinks": github_links,
+        "hulyLinks": huly_links,
+        "artifacts": artifacts,
+    });
+
+    let graph = teamforge_worker::save_teamforge_project_graph(pool, &project_id, &payload).await?;
+
+    queries::replace_teamforge_project_graph(pool, &graph)
+        .await
+        .map_err(|e| format!("cache saved TeamForge project graph: {e}"))?;
+    bridge_teamforge_graph_to_github_configs(pool, &graph).await?;
+
+    Ok(graph)
+}
+
+async fn bridge_teamforge_graph_to_github_configs(
+    pool: &sqlx::SqlitePool,
+    graph: &TeamforgeProjectGraph,
+) -> Result<(), String> {
+    let now = Utc::now().to_rfc3339();
+    let primary_huly_project_id = graph
+        .huly_links
+        .first()
+        .map(|link| link.huly_project_id.clone());
+
+    for repo_link in &graph.github_repos {
+        let config = GithubRepoConfig {
+            repo: repo_link.repo.clone(),
+            display_name: repo_link
+                .display_name
+                .clone()
+                .unwrap_or_else(|| graph.project.name.clone()),
+            client_name: graph.project.client_name.clone(),
+            default_milestone_number: None,
+            huly_project_id: primary_huly_project_id.clone(),
+            clockify_project_id: None,
+            enabled: true,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+        };
+        queries::upsert_github_repo_config(pool, &config)
+            .await
+            .map_err(|e| format!("upsert linked github repo config {}: {e}", config.repo))?;
+    }
+
+    Ok(())
+}
 
 #[tauri::command]
 pub async fn get_settings(db: State<'_, DbPool>) -> Result<HashMap<String, String>, String> {

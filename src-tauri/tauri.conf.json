@@ -1,6 +1,6 @@
 {
   "productName": "TeamForge",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "identifier": "com.thoughtseed.teamforge",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -45,8 +45,8 @@
       "signingIdentity": null
     },
     "category": "public.app-category.business",
-    "shortDescription": "LCARS-themed employee tracking dashboard",
-    "longDescription": "TeamForge unifies Clockify time tracking and Huly.io project management into a single native Mac applet with a Star Trek LCARS mission control interface. Track quotas, monitor presence, analyze sprints, and manage your team from one bridge.",
+    "shortDescription": "LCARS mission control for team operations and project orchestration",
+    "longDescription": "TeamForge unifies Clockify time tracking, Huly execution workflows, and a Cloudflare-backed TeamForge project control plane into a single native Mac app. Track quotas, monitor presence, link GitHub and Huly projects, manage artifacts, and operate the portfolio from one bridge.",
     "copyright": "Copyright 2026 Thoughtseed",
     "publisher": "Thoughtseed",
     "homepage": "https://github.com/Sheshiyer/team-forge-ts",

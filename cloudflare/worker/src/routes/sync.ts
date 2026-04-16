@@ -45,7 +45,7 @@ export async function handlePostSyncJob(env: Env, request: Request): Promise<Res
     return jsonError({ code: "missing_fields", message: "workspace_id, source, and job_type are required.", retryable: false }, 400);
   }
 
-  const validSources = ["clockify", "huly", "slack"];
+  const validSources = ["clockify", "github", "huly", "slack"];
   if (!validSources.includes(body.source)) {
     return jsonError({ code: "invalid_source", message: `source must be one of: ${validSources.join(", ")}`, retryable: false }, 400);
   }
@@ -72,7 +72,7 @@ export async function handlePostSyncJob(env: Env, request: Request): Promise<Res
       await env.SYNC_QUEUE.send({
         jobId,
         workspaceId: body.workspace_id,
-        source: body.source as "clockify" | "huly" | "slack",
+        source: body.source as "clockify" | "github" | "huly" | "slack",
         jobType: body.job_type,
       });
       await execute(env.TEAMFORGE_DB, "UPDATE sync_jobs SET queue_message_id = ?, updated_at = ? WHERE id = ?", "enqueued", ts, jobId);

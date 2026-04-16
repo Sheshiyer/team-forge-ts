@@ -51,18 +51,131 @@ export default {
 };
 
 export class WorkspaceLock {
+  private readonly locks = new Map<string, { owner: string; expiresAt: number }>();
+
   constructor(
     private readonly state: DurableObjectStateLike,
     private readonly env: Env,
   ) {}
 
   async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (request.method === "POST" && url.pathname === "/acquire") {
+      return this.handleAcquire(request);
+    }
+
+    if (request.method === "POST" && url.pathname === "/release") {
+      return this.handleRelease(request);
+    }
+
+    return jsonError(
+      {
+        code: "lock_route_not_found",
+        message: `No lock route is defined for ${request.method} ${url.pathname}.`,
+        retryable: false,
+      },
+      404,
+    );
+  }
+
+  private async handleAcquire(request: Request): Promise<Response> {
+    let body: { key?: string; owner?: string; ttlMs?: number };
+    try {
+      body = await request.json();
+    } catch {
+      return jsonError(
+        {
+          code: "invalid_json",
+          message: "Lock acquire body must be valid JSON.",
+          retryable: false,
+        },
+        400,
+      );
+    }
+
+    const key = body.key?.trim();
+    const owner = body.owner?.trim();
+    if (!key || !owner) {
+      return jsonError(
+        {
+          code: "missing_fields",
+          message: "key and owner are required.",
+          retryable: false,
+        },
+        400,
+      );
+    }
+
+    const ttlMs = Math.max(1_000, Math.min(body.ttlMs ?? 30_000, 300_000));
+    const currentTime = Date.now();
+    const existing = this.locks.get(key);
+
+    if (existing && existing.expiresAt > currentTime && existing.owner !== owner) {
+      return jsonError(
+        {
+          code: "lock_conflict",
+          message: `Lock ${key} is already held by ${existing.owner}.`,
+          retryable: true,
+        },
+        409,
+      );
+    }
+
+    const expiresAt = currentTime + ttlMs;
+    this.locks.set(key, { owner, expiresAt });
+
     return jsonOk({
       lock: "workspace",
       durableObjectId: this.state.id?.toString() ?? "unknown",
       environment: this.env.TF_ENV,
-      method: request.method,
-      status: "scaffolded",
+      acquired: true,
+      key,
+      owner,
+      expiresAt: new Date(expiresAt).toISOString(),
+    });
+  }
+
+  private async handleRelease(request: Request): Promise<Response> {
+    let body: { key?: string; owner?: string };
+    try {
+      body = await request.json();
+    } catch {
+      return jsonError(
+        {
+          code: "invalid_json",
+          message: "Lock release body must be valid JSON.",
+          retryable: false,
+        },
+        400,
+      );
+    }
+
+    const key = body.key?.trim();
+    const owner = body.owner?.trim();
+    if (!key || !owner) {
+      return jsonError(
+        {
+          code: "missing_fields",
+          message: "key and owner are required.",
+          retryable: false,
+        },
+        400,
+      );
+    }
+
+    const existing = this.locks.get(key);
+    if (existing?.owner === owner) {
+      this.locks.delete(key);
+    }
+
+    return jsonOk({
+      lock: "workspace",
+      durableObjectId: this.state.id?.toString() ?? "unknown",
+      environment: this.env.TF_ENV,
+      released: existing?.owner === owner,
+      key,
+      owner,
     });
   }
 }

@@ -2,6 +2,435 @@
 
 ## Goal
 
+Cut and install a fresh TeamForge release after restoring optional PAT support:
+- bump to a new release version and push it
+- trigger the GitHub release workflow with a new tag
+- remove old local DMG/app build artifacts and caches
+- replace `/Applications/TeamForge.app` with a fresh build
+- launch the installed app via LaunchServices
+
+## Plan
+
+- [x] Inspect current version/tag/build-artifact state and confirm next release version.
+- [x] Bump version surfaces and changelog for the new release.
+- [x] Commit and push the release bump without bundling local task-log edits.
+- [x] Create and push the new Git tag, then verify GitHub Actions starts the release run.
+- [x] Delete old local DMG/app artifacts and build caches, then rebuild a fresh `.app`.
+- [x] Replace `/Applications/TeamForge.app`, launch it, and verify the installed version/process.
+
+## Review
+
+- Confirmed starting state:
+  - version surfaces were still at `0.1.16`
+  - latest tag was `v0.1.16`
+  - local bundle artifacts existed under `src-tauri/target/release/bundle/macos`
+- Bumped release metadata to `0.1.17` across:
+  - root `package.json`
+  - `sidecar/package.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/tauri.conf.json`
+  - root package entry in `src-tauri/Cargo.lock`
+  - `CHANGELOG.md`
+- Verification from the cleaned state:
+  - `rm -rf dist`
+  - `cargo clean --manifest-path src-tauri/Cargo.toml` removed `13369 files, 5.9GiB total`
+  - `pnpm build`
+  - `cargo test --manifest-path src-tauri/Cargo.toml` (`31 passed, 0 failed, 3 ignored`)
+  - `pnpm tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'`
+- Local build note:
+  - a first local `pnpm tauri build --bundles app` run produced the `.app` bundle but failed when signing updater artifacts with the local env override
+  - rerunning with `createUpdaterArtifacts:false` completed cleanly for the local install target
+- Release push:
+  - committed release bump as `678f36e` with message `chore(release): bump version metadata to 0.1.17`
+  - pushed `main` to origin
+  - created and pushed tag `v0.1.17`
+- Remote release verification:
+  - GitHub Actions started `Build & Release` run `24530151652`
+  - current state at verification time:
+    - run status: `in_progress`
+    - active step: `Build Tauri app (Apple Silicon)`
+- Local install replacement:
+  - removed old local updater tarball artifacts from `src-tauri/target/release/bundle/macos`
+  - replaced `/Applications/TeamForge.app` using `ditto`
+  - verified installed app version via `Info.plist`: `0.1.17`
+  - launched via `open /Applications/TeamForge.app`
+  - verified running process:
+    - `/Applications/TeamForge.app/Contents/MacOS/team-forge-ts`
+
+## Goal
+
+Configure the existing TeamForge OTA release secrets and variables without rotating the updater trust chain:
+- keep using the existing `~/.tauri/teamforge.key`
+- set the required GitHub Actions secrets/vars
+- set the matching Cloudflare Worker webhook secret
+- verify the repo/worker are ready for the next tagged OTA release
+
+## Plan
+
+- [x] Confirm the target GitHub repo, current CLI auth, and worker context from local project config.
+- [x] Set `TAURI_SIGNING_PRIVATE_KEY` from the existing local TeamForge updater private key.
+- [x] Confirm whether `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` is required for the existing key.
+- [x] Generate one `TF_WEBHOOK_HMAC_SECRET` value and write the same value to GitHub and the Cloudflare Worker.
+- [x] Set the full required GitHub Actions vars/secrets for the OTA publish workflow.
+- [x] Verify the resulting GitHub/Cloudflare configuration as far as CLI access allows.
+
+## Review
+
+- Confirmed target repo/auth context:
+  - GitHub repo: `Sheshiyer/team-forge-ts`
+  - Wrangler account: `Sheshnarayan.iyer@gmail.com's Account`
+  - Cloudflare account id: `9d9d23b27f32e70ae3afb6a1aa2c0f10`
+- Confirmed the existing updater key should stay in place:
+  - `~/.tauri/teamforge.key` signs successfully with an empty password.
+  - No `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secret is needed for the current key.
+- GitHub Actions secrets written:
+  - `TAURI_SIGNING_PRIVATE_KEY`
+  - `CLOUDFLARE_ACCOUNT_ID`
+  - `TF_WEBHOOK_HMAC_SECRET`
+- GitHub Actions vars written:
+  - `TEAMFORGE_R2_BUCKET=teamforge-artifacts`
+  - `TEAMFORGE_ARTIFACT_BASE_URL=https://pub-f4b7fa9646cd42c2a19b7439f1956eab.r2.dev`
+  - `TF_RELEASE_PUBLISH_URL=https://teamforge-api.sheshnarayan-iyer.workers.dev/internal/releases/publish`
+- Cloudflare Worker secret written:
+  - `TF_WEBHOOK_HMAC_SECRET`
+- Cloudflare R2 public artifact host:
+  - enabled public `r2.dev` access for `teamforge-artifacts`
+  - live base URL: `https://pub-f4b7fa9646cd42c2a19b7439f1956eab.r2.dev`
+  - root URL returns `404`, which is expected for a bucket with no root object
+- Live verification passed:
+  - Authenticated `POST` to `https://teamforge-api.sheshnarayan-iyer.workers.dev/internal/releases/publish` with `{}` returns `400 missing_fields`, which proves the new webhook secret is accepted and routing works.
+- Remaining blockers:
+  - No workflow-blocking secret/var gaps remain for the current `release.yml`.
+  - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` is intentionally unset because the existing TeamForge updater key signs successfully with an empty password.
+  - `api.teamforge.thoughtseed.space` and `artifacts.teamforge.thoughtseed.space` still fail TLS, so the repo is using `workers.dev` + `r2.dev` as the current working baseline until the production domains are fixed.
+
+## Goal
+
+Validate the replaced `CLOUDFLARE_API_TOKEN` by re-running the failed `v0.1.16`
+GitHub release workflow and confirming whether the previously failing R2 upload
+step now succeeds.
+
+## Plan
+
+- [x] Re-run the failed `Build & Release` workflow for `v0.1.16`.
+- [x] Watch the rerun through the `Publish OTA release (Apple Silicon)` step.
+- [x] If it still fails, capture the exact log delta versus the prior `403 Authentication error`.
+- [x] Summarize whether the new token fixed the release path.
+
+## Review
+
+- Re-ran GitHub Actions run `24521579799` for tag `v0.1.16` after replacing the `CLOUDFLARE_API_TOKEN` secret.
+- Verified the original failure point was cleared:
+  - `Publish OTA release (Apple Silicon)` completed successfully at `2026-04-16T18:41:13Z`.
+- Verified the full rerun completed successfully:
+  - run conclusion: `success`
+  - job: `build-macos`
+  - completed at `2026-04-16T18:47:29Z`
+- Final Intel-side verification from the successful rerun:
+  - `Build Tauri app (Intel)` completed at `2026-04-16T18:46:31Z`
+  - `Publish OTA release (Intel)` completed at `2026-04-16T18:46:42Z`
+- Conclusion:
+  - the replacement Cloudflare token fixed the prior `403 Forbidden / 10000 Authentication error`
+  - current token scopes are sufficient for the release workflow
+
+## Goal
+
+Verify whether a deleted fine-grained GitHub PAT is still required for OTA release pushes and document the restore path if needed.
+
+## Plan
+
+- [x] Inspect all GitHub workflow files for PAT-based auth usage.
+- [x] Check current GitHub Actions secrets to confirm whether a PAT secret is expected.
+- [x] Summarize whether the PAT is still needed and, if desired, the minimum scope to recreate it.
+
+## Review
+
+- Current repo workflow inventory:
+  - only `.github/workflows/release.yml` exists
+- Current workflow auth for GitHub release publication:
+  - both Tauri release steps use `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}`
+  - no custom PAT secret is referenced anywhere in `.github/workflows`
+- Current Actions secrets configured:
+  - `CLOUDFLARE_ACCOUNT_ID`
+  - `CLOUDFLARE_API_TOKEN`
+  - `TAURI_SIGNING_PRIVATE_KEY`
+  - `TF_WEBHOOK_HMAC_SECRET`
+- Conclusion:
+  - deleting the old fine-grained GitHub PAT did not break the current OTA release workflow
+  - a replacement PAT is optional unless the repo later adds automation that must bypass `GITHUB_TOKEN` limitations (for example, cross-repo writes or workflow-chaining from bot-authored pushes)
+
+## Goal
+
+Restore optional fine-grained GitHub PAT support for OTA releases without making the workflow depend on it.
+
+## Plan
+
+- [x] Update the release workflow to prefer a PAT secret when present and fall back to `secrets.GITHUB_TOKEN` otherwise.
+- [x] Keep the PAT fully optional so the current green release path remains valid.
+- [x] Document the new secret name and expected usage for future setup.
+
+## Review
+
+- Updated `.github/workflows/release.yml` so both Tauri release steps now use:
+  - `secrets.GH_RELEASE_PAT || secrets.GITHUB_TOKEN`
+- Result:
+  - current release behavior is unchanged when `GH_RELEASE_PAT` is unset
+  - if `GH_RELEASE_PAT` is restored later, the workflow will automatically prefer it for GitHub release publication
+- Restored secret contract:
+  - secret name: `GH_RELEASE_PAT`
+  - usage: optional GitHub release/auth override for Tauri release asset publication
+
+## Goal
+
+Make TeamForge the canonical project registry above GitHub and Huly so future sync can be safely bidirectional instead of repo-config driven.
+
+## Plan
+
+- [x] Add canonical TeamForge project graph tables for project identity, GitHub repo links, Huly project links, and external artifacts.
+- [x] Add tested query-layer read/write support for the TeamForge project graph.
+- [x] Expose the registry through new Tauri commands and TypeScript invoke types.
+- [x] Verify the first slice without attempting full bidirectional issue/milestone sync yet.
+
+## Review
+
+- Plan artifact created:
+  - `docs/plans/2026-04-17-teamforge-project-registry.md`
+- First-slice scope locked:
+  - backend canonical registry only
+  - explicit GitHub/Huly/artifact mappings
+  - command surface for future UI
+  - no live bidirectional propagation in this patch
+- Implemented canonical TeamForge registry storage in local SQLite:
+  - `teamforge_projects`
+  - `teamforge_project_github_repos`
+  - `teamforge_project_huly_links`
+  - `teamforge_project_artifacts`
+- Added Rust models and graph view types for:
+  - project identity
+  - linked GitHub repos
+  - linked Huly projects
+  - linked external artifacts such as PRDs/contracts/process docs
+- Added tested query-layer graph operations:
+  - `replace_teamforge_project_graph`
+  - `get_teamforge_project_graphs`
+- Added Tauri commands:
+  - `get_teamforge_projects`
+  - `save_teamforge_project`
+- Added frontend invoke/type surface for the new commands in:
+  - `src/lib/types.ts`
+  - `src/hooks/useInvoke.ts`
+
+## Goal
+
+Turn the Cloudflare-first TeamForge project-sync architecture into a concrete implementation plan that lands on the current Worker/D1/Tauri codepaths instead of staying at the concept level.
+
+## Plan
+
+- [x] Re-read the current project task history and lessons so the plan reflects the corrected ownership model.
+- [x] Inspect the current Cloudflare Worker routes, D1 schema, and desktop cloud-bridge surfaces that the next slice must extend.
+- [x] Write a concrete implementation handoff for the Cloudflare project backend slice under `docs/plans`.
+- [x] Record the resulting artifact and execution boundaries in this task log.
+
+## Review
+
+- Re-grounded the planning work in the repo’s current reality:
+  - Worker routes already exist for `/v1/projects`, `/v1/project-mappings`, and `/v1/sync/*`
+  - D1 already owns `projects`, `project_external_ids`, `sync_jobs`, and `sync_runs`
+  - the desktop app already has a Worker credential bridge and a local project-graph cache path
+- New concrete plan artifact created:
+  - `docs/plans/2026-04-17-cloudflare-project-backend-implementation.md`
+- The plan intentionally preserves the corrected architecture:
+  - Cloudflare Worker + D1 is canonical
+  - local SQLite is projection/cache only
+  - GitHub owns engineering issues
+  - Huly owns execution/admin issues
+  - milestones remain GitHub-authoritative by default
+- The implementation handoff is scoped to the next safe slice:
+  - contract updates
+  - additive D1 migration
+  - Worker repository extraction
+  - route expansion without changing public URLs
+  - sync/lock scaffolding
+  - desktop Worker-first read/write bridge with local cache fallback for reads
+- The plan explicitly keeps these out of scope for the slice:
+  - live issue writeback
+  - live milestone writeback
+  - conflict inbox UI
+  - generic sync engine overreach
+- Important bridge behavior:
+  - saving a TeamForge project now also upserts linked GitHub repos into `github_repo_configs`
+  - this keeps the existing GitHub sync engine aware of TeamForge-linked repos without rewriting sync orchestration yet
+- Verification passed:
+  - `cargo test --manifest-path src-tauri/Cargo.toml teamforge_project_graph`
+  - `cargo test --manifest-path src-tauri/Cargo.toml`
+  - `pnpm build`
+- Remaining out of scope for this patch:
+  - no TeamForge project registry editor UI yet
+  - no sync journal / retry queue / conflict resolver yet
+  - no live bidirectional propagation of issues/milestones/components/templates yet
+
+## Goal
+
+Revise the canonical TeamForge architecture so the backend lives in Cloudflare instead of local desktop SQLite.
+
+## Plan
+
+- [x] Reconfirm current Cloudflare Worker/D1 project storage capabilities and existing `/v1/projects` route.
+- [x] Capture the architecture correction in project lessons/tasks.
+- [x] Summarize the revised target model: Cloudflare as source of truth, desktop as cache/client.
+
+## Review
+
+- Existing Cloudflare backend already has a strong starting point:
+  - D1 tables for `organizations`, `workspaces`, `projects`, and `project_external_ids`
+  - Worker route at `cloudflare/worker/src/routes/projects.ts`
+  - environment bindings for D1, queues, and durable-object locks in `cloudflare/worker/src/lib/env.ts`
+- Architecture correction:
+  - the canonical TeamForge project registry should move to Cloudflare Worker + D1
+  - the local Tauri SQLite layer should become cache/offline projection, not the source of truth
+- Consequence for next implementation slice:
+  - the local-first project graph added in this patch is useful as a shape/prototype, but it should not be treated as the final ownership model
+  - the next real slice should port canonical project graph ownership to Worker + D1, then mirror/cache it locally
+
+## Goal
+
+Capture an architecture-first design for Cloudflare-backed TeamForge project sync, including bidirectional GitHub/Huly semantics and operator controls.
+
+## Plan
+
+- [x] Write a design plan covering canonical ownership, sync controls, conflict handling, error states, and phased rollout.
+- [x] Save the design plan under `docs/plans`.
+- [x] Summarize the recommended first real build slice for implementation.
+
+## Review
+
+- Design plan created:
+  - `docs/plans/2026-04-17-cloudflare-project-sync-design.md`
+- The design locks these core decisions:
+  - TeamForge on Cloudflare Worker + D1 is the system of record
+  - desktop SQLite is cache/offline projection only
+  - sync must be TeamForge-mediated, not direct GitHub <-> Huly mirroring
+  - bidirectional sync requires explicit entity mappings, queue-backed jobs, locks, conflict states, and manual operator controls
+- Recommended first real slice:
+  - canonical project graph in D1 + Worker CRUD routes + desktop client reads/writes through Worker
+- Locked architecture decision:
+  - milestones are GitHub-preferred
+  - milestone propagation path is `GitHub -> TeamForge -> Huly`
+  - Huly milestone edits should surface as drift/review-needed, not silently sync back upstream
+- Locked architecture decision:
+  - issues use split ownership
+  - GitHub owns engineering issues
+  - Huly owns execution/admin issues
+  - TeamForge must classify issue ownership explicitly instead of treating issue sync as symmetric by default
+- Locked architecture decision:
+  - issue classification uses a hybrid model
+  - TeamForge should apply rule-based defaults from repo/labels/project policy
+  - operators must be able to manually override ownership classification in TeamForge
+
+## Goal
+
+Execute the first real Cloudflare-backed TeamForge project-control-plane slice so the backend, routes, and desktop bridge stop treating local SQLite as canonical.
+
+## Plan
+
+- [x] Update contracts, fixtures, and Worker docs for the canonical project graph and policy model.
+- [x] Add and verify the additive D1 migration for project graph and sync policy storage.
+- [x] Extract Worker-side project graph reads/writes into a dedicated repository layer.
+- [x] Expand `/v1/projects` and `/v1/project-mappings` around summary-vs-graph semantics.
+- [x] Extend sync scaffolding with `github` as a valid source and add a minimal WorkspaceLock mutex API.
+- [x] Switch Tauri TeamForge project commands to Worker-first reads/writes with local cache fallback for reads only.
+- [x] Verify Worker TypeScript, local D1 migration, Rust tests, and frontend build.
+
+## Review
+
+- Contracts and payload fixtures now reflect the actual control-plane model:
+  - `docs/architecture/contracts/d1-schema-contract.md`
+  - `docs/architecture/contracts/worker-route-contract.md`
+  - `cloudflare/worker/README.md`
+  - `cloudflare/worker/fixtures/v1/projects.json`
+  - `cloudflare/worker/fixtures/v1/project-mappings.json`
+- Added the canonical Cloudflare migration:
+  - `cloudflare/worker/migrations/0002_project_control_plane.sql`
+- The new migration extends Worker D1 ownership for:
+  - project slug / portfolio / client / visibility / sync mode
+  - GitHub repo links
+  - Huly project links
+  - artifact registry rows
+  - project sync policy rows
+- Worker-side project graph logic moved out of route handlers into:
+  - `cloudflare/worker/src/lib/project-registry.ts`
+- Route semantics now match the architecture:
+  - `/v1/projects` returns project summaries
+  - `/v1/project-mappings` returns full editable project graphs
+  - `cloudflare/worker/src/routes/projects.ts`
+  - `cloudflare/worker/src/routes/v1.ts`
+- Sync/control-plane scaffolding improved:
+  - `github` is now a valid sync source in `cloudflare/worker/src/lib/env.ts` and `cloudflare/worker/src/routes/sync.ts`
+  - `WorkspaceLock` now supports `/acquire` and `/release` mutex operations in `cloudflare/worker/src/index.ts`
+- Tauri desktop project commands are now Worker-canonical:
+  - Worker client added in `src-tauri/src/sync/teamforge_worker.rs`
+  - sync module exports updated in `src-tauri/src/sync/mod.rs`
+  - `get_teamforge_projects` now fetches from the Worker first, then updates the local cache projection, then falls back to local cache only if the Worker fetch fails
+  - `save_teamforge_project` now writes to the Worker first and only updates local SQLite after a successful remote response
+  - stale local cache cleanup/projection helper added in `src-tauri/src/db/queries.rs`
+- Existing GitHub sync compatibility was preserved:
+  - TeamForge-linked repos are still bridged into `github_repo_configs` after remote reads/writes so the current GitHub sync path continues to see the linked repos
+
+- Verification passed:
+  - `rg -n "project_github_links|project_huly_links|project_sync_policies|/v1/project-mappings" docs/architecture/contracts cloudflare/worker/README.md cloudflare/worker/fixtures/v1`
+  - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit`
+  - `wrangler d1 migrations apply TEAMFORGE_DB --local --config cloudflare/worker/wrangler.jsonc`
+  - `cargo test --manifest-path src-tauri/Cargo.toml teamforge_project_graph`
+  - `cargo test --manifest-path src-tauri/Cargo.toml`
+  - `pnpm build`
+
+- Remaining intentionally out of scope after this slice:
+  - live GitHub issue propagation
+  - live Huly issue propagation
+  - milestone propagation jobs
+  - sync journal rows for issue/milestone writes
+  - conflict inbox UI
+  - explicit issue classification override UI
+
+## Goal
+
+Land the Cloudflare control-plane slice on `main`, refresh release/docs metadata for the next app version, and convert the remaining follow-up plan into GitHub issues.
+
+## Plan
+
+- [x] Bump version metadata and refresh release-facing docs.
+- [x] Update README and packaged app descriptions so they describe the Cloudflare-backed control-plane architecture.
+- [x] Update GitHub repository description metadata.
+- [x] Create GitHub issues for the remaining control-plane backlog.
+- [x] Stage, commit, and push the full slice to `main`.
+
+## Review
+
+- Bumped version metadata from `0.1.17` to `0.1.18` across:
+  - `package.json`
+  - `sidecar/package.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/Cargo.lock`
+  - `src-tauri/tauri.conf.json`
+- Refreshed release-facing docs:
+  - `CHANGELOG.md` now includes `v0.1.18`
+  - `README.md` now describes the Cloudflare Worker + D1 control plane, Worker-canonical TeamForge project registry behavior, and the current release state
+- Updated GitHub repo metadata:
+  - description: `LCARS mission-control desktop app with a Cloudflare-backed TeamForge project control plane for GitHub, Huly, and Clockify operations.`
+  - homepage: `https://thoughtseed.com`
+- Created GitHub follow-up issues for the remaining plan:
+  - `#40` GitHub-authoritative milestone propagation with Huly drift review
+  - `#41` Huly-owned execution and admin issue propagation
+  - `#42` Sync journal and conflict records for GitHub/Huly propagation
+  - `#43` Operator UI for project registry, conflict inbox, and classification overrides
+  - `#44` GitHub-owned engineering issue propagation
+- Final verification before landing this slice:
+  - `cargo test --manifest-path src-tauri/Cargo.toml`
+  - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit`
+  - `pnpm build`
+
+## Goal
+
 Automate OTA release publication for signed macOS updater bundles:
 - upload the Tauri updater artifact, signature, and release notes to Cloudflare R2
 - call `/internal/releases/publish` with the published artifact metadata

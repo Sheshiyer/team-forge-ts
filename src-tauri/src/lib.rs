@@ -106,6 +106,8 @@ pub fn run() {
             commands::trigger_sync,
             commands::get_settings,
             commands::save_setting,
+            commands::get_teamforge_projects,
+            commands::save_teamforge_project,
             commands::get_overview,
             commands::get_quota_compliance,
             commands::get_time_entries_view,

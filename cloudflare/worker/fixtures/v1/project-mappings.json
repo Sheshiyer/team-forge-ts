@@ -1,14 +1,63 @@
 {
   "ok": true,
   "data": {
-    "mappings": [
+    "projects": [
       {
-        "projectId": "proj_01JTEST0001",
-        "workspaceId": "ws_01JTEST0001",
-        "clockifyProjectId": "clockify-project-123",
-        "hulyProjectId": "huly-project-456",
-        "status": "linked",
-        "updatedAt": "2026-04-09T09:00:00Z"
+        "project": {
+          "id": "proj_parkarea",
+          "workspaceId": "ws_thoughtseed",
+          "slug": "parkarea-phase-2",
+          "name": "ParkArea Phase 2 - Germany Launch",
+          "portfolioName": "Thoughtseed Client Delivery",
+          "clientName": "ParkArea",
+          "projectType": "client_delivery",
+          "status": "active",
+          "syncMode": "hybrid",
+          "visibility": "workspace"
+        },
+        "githubLinks": [
+          {
+            "repo": "Sheshiyer/parkarea-aleph",
+            "repoRole": "primary",
+            "syncIssues": true,
+            "syncMilestones": true,
+            "syncLabels": true
+          }
+        ],
+        "hulyLinks": [
+          {
+            "hulyProjectId": "PARKAREA_PHASE_2",
+            "syncIssues": true,
+            "syncMilestones": true,
+            "syncComponents": false,
+            "syncTemplates": false
+          }
+        ],
+        "artifacts": [
+          {
+            "artifactType": "prd",
+            "title": "Germany launch PRD",
+            "url": "https://example.com/prd",
+            "source": "notion",
+            "isPrimary": true
+          },
+          {
+            "artifactType": "contract",
+            "title": "Launch contract",
+            "url": "https://example.com/contract",
+            "source": "drive",
+            "isPrimary": false
+          }
+        ],
+        "policy": {
+          "issueOwnershipMode": "split",
+          "engineeringSource": "github",
+          "executionSource": "huly",
+          "milestoneAuthority": "github",
+          "issueClassificationMode": "hybrid",
+          "directionMode": "review_gate",
+          "ruleConfig": {}
+        }
       }
     ]
   }

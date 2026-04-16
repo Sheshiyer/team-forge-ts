@@ -25,6 +25,10 @@ This document freezes the canonical shared schema TeamForge will own in D1.
 - `employee_external_ids`
 - `projects`
 - `project_external_ids`
+- `project_github_links`
+- `project_huly_links`
+- `project_artifacts`
+- `project_sync_policies`
 
 ### Integrations and sync
 
@@ -53,6 +57,10 @@ This document freezes the canonical shared schema TeamForge will own in D1.
 ### D1 is canonical for
 
 - shared project metadata
+- canonical TeamForge project identity and project graph state
+- GitHub repo linkage and Huly project linkage
+- project artifact registry records
+- project-level sync policy and ownership policy
 - shared employee identity mapping
 - shared upstream connection metadata
 - sync history
@@ -67,6 +75,7 @@ This document freezes the canonical shared schema TeamForge will own in D1.
 ### D1 must become canonical first for
 
 - project mapping state
+- project sync policy state
 - employee external ID mapping
 - connection health metadata
 
@@ -87,6 +96,49 @@ This document freezes the canonical shared schema TeamForge will own in D1.
 - Worker handlers should use a repository or service layer
 - raw SQL should not be duplicated across route handlers
 - route handlers should not contain schema-shaping logic
+- project graph read/write logic should be assembled in one repository boundary, not spread across `/v1/projects` and `/v1/project-mappings`
+
+## Project Control Plane Rules
+
+### `projects` table role
+
+`projects` is the canonical TeamForge project identity table.
+
+It may include:
+
+- `slug`
+- `portfolio_name`
+- `client_name`
+- `visibility`
+- `sync_mode`
+
+It should not inline all linked GitHub or Huly state.
+
+### Link table roles
+
+- `project_github_links` stores explicit repo mappings and repo-level sync flags
+- `project_huly_links` stores explicit Huly project mappings and Huly-side sync flags
+- `project_artifacts` stores PRD, contract, process, design, legal, and implementation links
+- `project_sync_policies` stores per-project sync rules and issue/milestone authority settings
+
+### Ownership policy rules
+
+Project sync policy must be able to express:
+
+- issue ownership mode
+- engineering source
+- execution source
+- milestone authority
+- issue classification mode
+- direction mode
+
+The canonical defaults for this architecture are:
+
+- issue ownership mode: `split`
+- engineering source: `github`
+- execution source: `huly`
+- milestone authority: `github`
+- issue classification mode: `hybrid`
 
 ## Transitional Data Rules
 

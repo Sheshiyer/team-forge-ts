@@ -32,7 +32,7 @@
 
 ---
 
-> **Tracking your team shouldn't require switching between 6 browser tabs.** TeamForge unifies Clockify time tracking and Huly.io project management into a single native Mac applet — with a Star Trek LCARS interface that makes mission control feel like the bridge of the Enterprise.
+> **Tracking your team shouldn't require switching between 6 browser tabs.** TeamForge unifies Clockify time tracking, Huly execution workflows, and a Cloudflare-backed TeamForge project control plane into a single native Mac applet — with a Star Trek LCARS interface that makes mission control feel like the bridge of the Enterprise.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
@@ -56,14 +56,14 @@ Cross-reference Clockify hours with Huly time reports. Spot discrepancies. Track
 <tr>
 <td width="50%" valign="top">
 
-### 11 Huly Integrations
-Milestones, issues, HR departments, leave requests, holidays, chat activity, board cards, calendar events — all queryable via pure Rust HTTP client.
+### Canonical Project Control Plane
+Cloudflare Worker + D1 now own TeamForge project identity, GitHub repo links, Huly project links, artifacts, and sync policy metadata.
 
 </td>
 <td width="50%" valign="top">
 
-### App-Wide LCARS Console System
-The bridge look now runs across the full shell and major dashboard views with shared rails, section bands, segmented controls, and responsive console panels.
+### Hybrid GitHub + Huly Orchestration
+Engineering issues stay GitHub-owned, execution/admin issues stay Huly-owned, and milestones remain GitHub-authoritative by default.
 
 </td>
 </tr>
@@ -85,13 +85,13 @@ Leave tracking and yearly holidays now live on a dedicated Calendar route, keepi
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
-## New In v0.1.7
+## New In v0.1.18
 
-- **P2 dashboard wave shipped** with new Clients, Devices, Knowledge, Training, Onboarding, and Planner pages.
-- **Sprints, Team, and Overview are upgraded** with sprint burndown/capacity detail, monthly-hours visibility, and role-based dashboard modes.
-- **Backend command surface now supports all new pages** with typed Tauri IPC responses and Clockify/Huly-backed data models.
-- **Ops modules now have a dedicated sidebar section** so all new operational views are grouped consistently in the LCARS shell.
-- **Release `v0.1.7` is the rollout baseline** for the new page architecture and version-bumped packaging.
+- **Cloudflare-backed TeamForge project control plane shipped** with canonical Worker + D1 ownership for project metadata, GitHub links, Huly links, artifacts, and sync policy.
+- **Worker project routes now separate summary vs graph concerns** so `/v1/projects` serves list/health views while `/v1/project-mappings` serves the full editable project graph.
+- **Desktop TeamForge project registry is now Worker-canonical**: reads fetch remote first and writes only persist locally after a successful Worker response.
+- **Sync scaffolding is ready for the next orchestration slice** with `github` as a valid sync source and a minimal `WorkspaceLock` mutex API for serialized project work.
+- **Release metadata is now at `0.1.18`** across the frontend package, sidecar package, Tauri config, and Rust crate.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
@@ -133,7 +133,8 @@ On first launch:
 
 ## Releases
 
-- **Latest tag:** `v0.1.9`
+- **Current app version in repo:** `0.1.18`
+- **Latest published tag:** `v0.1.17`
 - **Release trigger:** pushing a tag that matches `v*`
 - **Artifacts:** macOS `.app` and `.dmg` bundles built by GitHub Actions for Apple Silicon and Intel targets
 - **Download page:** [GitHub Releases](https://github.com/Sheshiyer/team-forge-ts/releases)
@@ -146,12 +147,15 @@ graph LR
     A["React Frontend<br/>WebView"] <-->|"Tauri IPC"| B["Rust Backend<br/>Tauri Core"]
     B -->|"reqwest"| C["Clockify REST API"]
     B -->|"JSON-RPC + REST"| D["Huly.io Transactor"]
-    B <-->|"sqlx"| E[("SQLite")]
-    B -->|"30s/5m/60m"| F["Background Scheduler"]
-    F --> C
-    F --> D
-    B -->|"Notifications"| G["macOS Alerts"]
-    B -->|"Tray"| H["Menu Bar Icon"]
+    B -->|"HTTP"| E["Cloudflare Worker<br/>TeamForge API"]
+    E <-->|"D1"| F[("Canonical Project Graph")]
+    E -->|"Queues + DO Locks"| G["Sync Orchestration"]
+    B <-->|"sqlx"| H[("SQLite Cache / Projection")]
+    B -->|"30s/5m/60m"| I["Background Scheduler"]
+    I --> C
+    I --> D
+    B -->|"Notifications"| J["macOS Alerts"]
+    B -->|"Tray"| K["Menu Bar Icon"]
 ```
 <!-- readme-gen:end:architecture -->
 
@@ -201,6 +205,16 @@ The rollout is now documented in-repo instead of living only in chat and GitHub 
 - [Changelog](CHANGELOG.md)
 - [Thoughtseed Huly System Design](docs/huly-system-design.md)
 - [Huly Rollout Implementation Plan](docs/plans/2026-04-06-huly-rollout.md)
+- [Cloudflare Project Sync Architecture](docs/plans/2026-04-17-cloudflare-project-sync-design.md)
+- [Cloudflare Project Backend Implementation Plan](docs/plans/2026-04-17-cloudflare-project-backend-implementation.md)
+
+Remaining Cloudflare control-plane follow-up is now tracked in GitHub:
+
+- [#40](https://github.com/Sheshiyer/team-forge-ts/issues/40) GitHub-authoritative milestone propagation with Huly drift review
+- [#41](https://github.com/Sheshiyer/team-forge-ts/issues/41) Huly-owned execution and admin issue propagation
+- [#42](https://github.com/Sheshiyer/team-forge-ts/issues/42) Sync journal and conflict records for GitHub/Huly propagation
+- [#43](https://github.com/Sheshiyer/team-forge-ts/issues/43) Operator UI for project registry, conflict inbox, and classification overrides
+- [#44](https://github.com/Sheshiyer/team-forge-ts/issues/44) GitHub-owned engineering issue propagation
 
 ## Dashboard Views
 
@@ -230,12 +244,13 @@ team-forge-ts/
     hooks/                     # Typed Tauri invoke layer + viewport helpers
     stores/appStore.ts         # Zustand state
     lib/                       # Types, formatting, CSV export, shared LCARS page styles
+  cloudflare/worker/           # Canonical TeamForge Worker + D1 control plane
   src-tauri/                   # Rust backend
     src/clockify/              # HTTP client, sync, rate limiter
     src/huly/                  # REST client, types, sync
     src/commands/              # Tauri command surface
-    src/sync/                  # Background scheduler, alerts
-    src/db/                    # SQLite models, queries, migrations
+    src/sync/                  # Background scheduler, alerts, TeamForge Worker bridge
+    src/db/                    # SQLite cache/projection models, queries, migrations
     migrations/                # SQLite schema, including local Team calendar storage
   sidecar/                     # Node.js Huly SDK (reserved)
 ```
@@ -271,8 +286,9 @@ TeamForge connects to Huly via **direct REST API calls** (no SDK required). We r
 | Users/Projects | Clockify | 60 min |
 | Huly issues | Huly | 5 min |
 | Huly presence | Huly | 60s |
+| TeamForge project graph | Cloudflare Worker | On demand |
 
-SQLite is the single source of truth. Frontend reads cached data via Tauri IPC — never calls APIs directly.
+Cloudflare Worker + D1 are now the canonical source of truth for TeamForge project graph and sync policy state. Frontend reads still go through Tauri IPC, and local SQLite remains the desktop cache/offline projection for operational reads.
 
 Menu bar quick actions:
 - **Show TeamForge** brings the app to the front

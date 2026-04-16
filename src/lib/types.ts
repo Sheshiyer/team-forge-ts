@@ -68,6 +68,101 @@ export interface ExecutionProjectView {
   utilization: number;
 }
 
+export interface TeamforgeProject {
+  id: string;
+  slug: string;
+  name: string;
+  portfolioName: string | null;
+  clientName: string | null;
+  projectType: string | null;
+  status: string;
+  syncMode: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TeamforgeProjectGithubRepoLink {
+  projectId: string;
+  repo: string;
+  displayName: string | null;
+  isPrimary: boolean;
+  syncIssues: boolean;
+  syncMilestones: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TeamforgeProjectHulyLink {
+  projectId: string;
+  hulyProjectId: string;
+  syncIssues: boolean;
+  syncMilestones: boolean;
+  syncComponents: boolean;
+  syncTemplates: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TeamforgeProjectArtifact {
+  id: string;
+  projectId: string;
+  artifactType: string;
+  title: string;
+  url: string;
+  source: string;
+  externalId: string | null;
+  isPrimary: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TeamforgeProjectGraph {
+  project: TeamforgeProject;
+  githubRepos: TeamforgeProjectGithubRepoLink[];
+  hulyLinks: TeamforgeProjectHulyLink[];
+  artifacts: TeamforgeProjectArtifact[];
+}
+
+export interface TeamforgeProjectGithubRepoLinkInput {
+  repo: string;
+  displayName?: string | null;
+  isPrimary?: boolean;
+  syncIssues?: boolean;
+  syncMilestones?: boolean;
+}
+
+export interface TeamforgeProjectHulyLinkInput {
+  hulyProjectId: string;
+  syncIssues?: boolean;
+  syncMilestones?: boolean;
+  syncComponents?: boolean;
+  syncTemplates?: boolean;
+}
+
+export interface TeamforgeProjectArtifactInput {
+  id?: string;
+  artifactType: string;
+  title: string;
+  url: string;
+  source: string;
+  externalId?: string | null;
+  isPrimary?: boolean;
+}
+
+export interface TeamforgeProjectInput {
+  id?: string;
+  slug?: string | null;
+  name: string;
+  portfolioName?: string | null;
+  clientName?: string | null;
+  projectType?: string | null;
+  status?: string | null;
+  syncMode?: string | null;
+  githubRepos?: TeamforgeProjectGithubRepoLinkInput[];
+  hulyLinks?: TeamforgeProjectHulyLinkInput[];
+  artifacts?: TeamforgeProjectArtifactInput[];
+}
+
 export interface PresenceStatus {
   employeeName: string;
   clockifyTimerActive: boolean;

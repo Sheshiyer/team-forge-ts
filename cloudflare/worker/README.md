@@ -16,6 +16,7 @@ Wave 1 provides:
 - a dedicated Worker codebase scaffold
 - a Wrangler configuration with the required bindings
 - an additive `0001_initial.sql` D1 migration
+- a follow-on project control-plane migration for canonical TeamForge project graph storage
 - sample payload fixtures for the first public route set
 - `/v1/credentials` as the desktop integration boundary for shared vendor tokens
   and non-secret mapping/config
@@ -26,6 +27,7 @@ Wave 1 does not yet provide:
 - complete route implementations
 - vendor sync logic
 - OTA publication logic
+- live GitHub or Huly issue/milestone propagation
 
 ## Current Cloudflare Status
 
@@ -49,14 +51,34 @@ Because of that, `wrangler.jsonc` still contains placeholder IDs for:
 ## Next Steps
 
 1. Authenticate the Cloudflare MCP or Wrangler against the target account.
-2. Create or bind the real D1 database and replace `REPLACE_WITH_TEAMFORGE_D1_DATABASE_ID`.
-3. Create the R2 bucket and queue, then replace the remaining placeholders.
-4. Implement the first repository-backed routes:
-   - `/v1/bootstrap`
-   - `/v1/remote-config`
-   - `/v1/projects`
-   - `/v1/project-mappings`
+2. Apply the additive project control-plane migration so D1 owns:
+   - canonical project metadata
+   - GitHub repo links
+   - Huly project links
+   - project artifacts
+   - project sync policy
+3. Create the R2 bucket and queue, then replace the remaining placeholders if still missing.
+4. Implement the first repository-backed project routes:
+   - `/v1/projects` for summary rows
+   - `/v1/project-mappings` for full project graph reads/writes
 5. Add queue consumers and Durable Object coordination for sync flows.
+
+## Project Control Plane
+
+The current architectural direction is:
+
+- Cloudflare Worker + D1 is the canonical TeamForge control plane
+- local SQLite in the desktop app is a cache/offline projection only
+- GitHub owns engineering issues
+- Huly owns execution/admin issues
+- milestones are GitHub-authoritative by default
+
+The Worker project routes are expected to separate summary and graph concerns:
+
+- `/v1/projects`
+  - project list and sync-health summary
+- `/v1/project-mappings`
+  - full editable project graph including links, artifacts, and policy
 
 ## Integration Config
 

@@ -427,6 +427,276 @@ pub async fn upsert_project(pool: &SqlitePool, p: &Project) -> Result<(), sqlx::
     Ok(())
 }
 
+pub async fn replace_teamforge_project_graph(
+    pool: &SqlitePool,
+    graph: &TeamforgeProjectGraph,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        "INSERT INTO teamforge_projects (
+            id,
+            slug,
+            name,
+            portfolio_name,
+            client_name,
+            project_type,
+            status,
+            sync_mode,
+            created_at,
+            updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        ON CONFLICT(id) DO UPDATE SET
+          slug = excluded.slug,
+          name = excluded.name,
+          portfolio_name = excluded.portfolio_name,
+          client_name = excluded.client_name,
+          project_type = excluded.project_type,
+          status = excluded.status,
+          sync_mode = excluded.sync_mode,
+          updated_at = datetime('now')",
+    )
+    .bind(&graph.project.id)
+    .bind(&graph.project.slug)
+    .bind(&graph.project.name)
+    .bind(&graph.project.portfolio_name)
+    .bind(&graph.project.client_name)
+    .bind(&graph.project.project_type)
+    .bind(&graph.project.status)
+    .bind(&graph.project.sync_mode)
+    .bind(&graph.project.created_at)
+    .bind(&graph.project.updated_at)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("DELETE FROM teamforge_project_github_repos WHERE project_id = ?1")
+        .bind(&graph.project.id)
+        .execute(&mut *tx)
+        .await?;
+    for repo_link in &graph.github_repos {
+        sqlx::query(
+            "INSERT INTO teamforge_project_github_repos (
+                project_id,
+                repo,
+                display_name,
+                is_primary,
+                sync_issues,
+                sync_milestones,
+                created_at,
+                updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(&graph.project.id)
+        .bind(&repo_link.repo)
+        .bind(&repo_link.display_name)
+        .bind(repo_link.is_primary)
+        .bind(repo_link.sync_issues)
+        .bind(repo_link.sync_milestones)
+        .bind(&repo_link.created_at)
+        .bind(&repo_link.updated_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    sqlx::query("DELETE FROM teamforge_project_huly_links WHERE project_id = ?1")
+        .bind(&graph.project.id)
+        .execute(&mut *tx)
+        .await?;
+    for huly_link in &graph.huly_links {
+        sqlx::query(
+            "INSERT INTO teamforge_project_huly_links (
+                project_id,
+                huly_project_id,
+                sync_issues,
+                sync_milestones,
+                sync_components,
+                sync_templates,
+                created_at,
+                updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(&graph.project.id)
+        .bind(&huly_link.huly_project_id)
+        .bind(huly_link.sync_issues)
+        .bind(huly_link.sync_milestones)
+        .bind(huly_link.sync_components)
+        .bind(huly_link.sync_templates)
+        .bind(&huly_link.created_at)
+        .bind(&huly_link.updated_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    sqlx::query("DELETE FROM teamforge_project_artifacts WHERE project_id = ?1")
+        .bind(&graph.project.id)
+        .execute(&mut *tx)
+        .await?;
+    for artifact in &graph.artifacts {
+        sqlx::query(
+            "INSERT INTO teamforge_project_artifacts (
+                id,
+                project_id,
+                artifact_type,
+                title,
+                url,
+                source,
+                external_id,
+                is_primary,
+                created_at,
+                updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        )
+        .bind(&artifact.id)
+        .bind(&graph.project.id)
+        .bind(&artifact.artifact_type)
+        .bind(&artifact.title)
+        .bind(&artifact.url)
+        .bind(&artifact.source)
+        .bind(&artifact.external_id)
+        .bind(artifact.is_primary)
+        .bind(&artifact.created_at)
+        .bind(&artifact.updated_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn get_teamforge_project_graphs(
+    pool: &SqlitePool,
+) -> Result<Vec<TeamforgeProjectGraph>, sqlx::Error> {
+    let projects = sqlx::query_as::<_, TeamforgeProject>(
+        "SELECT * FROM teamforge_projects
+         ORDER BY
+           COALESCE(portfolio_name, ''),
+           name,
+           id",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    if projects.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let project_ids: Vec<String> = projects.iter().map(|project| project.id.clone()).collect();
+    let placeholders = project_ids
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let github_sql = format!(
+        "SELECT * FROM teamforge_project_github_repos
+         WHERE project_id IN ({placeholders})
+         ORDER BY project_id, is_primary DESC, repo"
+    );
+    let mut github_query = sqlx::query_as::<_, TeamforgeProjectGithubRepoLink>(&github_sql);
+    for project_id in &project_ids {
+        github_query = github_query.bind(project_id);
+    }
+    let github_links = github_query.fetch_all(pool).await?;
+
+    let huly_sql = format!(
+        "SELECT * FROM teamforge_project_huly_links
+         WHERE project_id IN ({placeholders})
+         ORDER BY project_id, huly_project_id"
+    );
+    let mut huly_query = sqlx::query_as::<_, TeamforgeProjectHulyLink>(&huly_sql);
+    for project_id in &project_ids {
+        huly_query = huly_query.bind(project_id);
+    }
+    let huly_links = huly_query.fetch_all(pool).await?;
+
+    let artifact_sql = format!(
+        "SELECT * FROM teamforge_project_artifacts
+         WHERE project_id IN ({placeholders})
+         ORDER BY project_id, is_primary DESC, artifact_type, title"
+    );
+    let mut artifact_query = sqlx::query_as::<_, TeamforgeProjectArtifact>(&artifact_sql);
+    for project_id in &project_ids {
+        artifact_query = artifact_query.bind(project_id);
+    }
+    let artifacts = artifact_query.fetch_all(pool).await?;
+
+    let mut github_by_project: HashMap<String, Vec<TeamforgeProjectGithubRepoLink>> =
+        HashMap::new();
+    for link in github_links {
+        github_by_project
+            .entry(link.project_id.clone())
+            .or_default()
+            .push(link);
+    }
+
+    let mut huly_by_project: HashMap<String, Vec<TeamforgeProjectHulyLink>> = HashMap::new();
+    for link in huly_links {
+        huly_by_project
+            .entry(link.project_id.clone())
+            .or_default()
+            .push(link);
+    }
+
+    let mut artifacts_by_project: HashMap<String, Vec<TeamforgeProjectArtifact>> = HashMap::new();
+    for artifact in artifacts {
+        artifacts_by_project
+            .entry(artifact.project_id.clone())
+            .or_default()
+            .push(artifact);
+    }
+
+    Ok(projects
+        .into_iter()
+        .map(|project| {
+            let project_id = project.id.clone();
+            TeamforgeProjectGraph {
+                project,
+                github_repos: github_by_project.remove(&project_id).unwrap_or_default(),
+                huly_links: huly_by_project.remove(&project_id).unwrap_or_default(),
+                artifacts: artifacts_by_project.remove(&project_id).unwrap_or_default(),
+            }
+        })
+        .collect())
+}
+
+pub async fn replace_teamforge_project_graph_projection(
+    pool: &SqlitePool,
+    graphs: &[TeamforgeProjectGraph],
+) -> Result<(), sqlx::Error> {
+    if graphs.is_empty() {
+        sqlx::query("DELETE FROM teamforge_projects")
+            .execute(pool)
+            .await?;
+        return Ok(());
+    }
+
+    let project_ids: Vec<String> = graphs.iter().map(|graph| graph.project.id.clone()).collect();
+    let placeholders = project_ids
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
+    let delete_sql = format!(
+        "DELETE FROM teamforge_projects WHERE id NOT IN ({placeholders})"
+    );
+    let mut delete_query = sqlx::query(&delete_sql);
+    for project_id in &project_ids {
+        delete_query = delete_query.bind(project_id);
+    }
+    delete_query.execute(pool).await?;
+
+    for graph in graphs {
+        replace_teamforge_project_graph(pool, graph).await?;
+    }
+
+    Ok(())
+}
+
 // ─── GitHub Planning Cache ───────────────────────────────────────
 
 pub async fn upsert_github_repo_config(
@@ -2171,6 +2441,186 @@ mod tests {
         assert_eq!(pr_count, 1);
         assert_eq!(branch_count, 1);
         assert_eq!(check_count, 1);
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn teamforge_project_graph_round_trips_with_links_and_artifacts() {
+        let dir = unique_test_dir();
+        let pool = init_db(&dir).await.expect("init db");
+
+        let graph = TeamforgeProjectGraph {
+            project: TeamforgeProject {
+                id: "tf-project-parkarea".to_string(),
+                slug: "parkarea-germany-launch".to_string(),
+                name: "ParkArea Phase 2 - Germany Launch".to_string(),
+                portfolio_name: Some("Thoughtseed".to_string()),
+                client_name: Some("ParkArea".to_string()),
+                project_type: Some("client-delivery".to_string()),
+                status: "active".to_string(),
+                sync_mode: "bidirectional".to_string(),
+                created_at: "2026-04-17T00:00:00Z".to_string(),
+                updated_at: "2026-04-17T00:00:00Z".to_string(),
+            },
+            github_repos: vec![
+                TeamforgeProjectGithubRepoLink {
+                    project_id: "tf-project-parkarea".to_string(),
+                    repo: "Sheshiyer/parkarea-aleph".to_string(),
+                    display_name: Some("ParkArea Core Repo".to_string()),
+                    is_primary: true,
+                    sync_issues: true,
+                    sync_milestones: true,
+                    created_at: "2026-04-17T00:00:00Z".to_string(),
+                    updated_at: "2026-04-17T00:00:00Z".to_string(),
+                },
+                TeamforgeProjectGithubRepoLink {
+                    project_id: "tf-project-parkarea".to_string(),
+                    repo: "Thoughtseed/parkarea-legal".to_string(),
+                    display_name: Some("ParkArea Legal Pack".to_string()),
+                    is_primary: false,
+                    sync_issues: false,
+                    sync_milestones: false,
+                    created_at: "2026-04-17T00:00:00Z".to_string(),
+                    updated_at: "2026-04-17T00:00:00Z".to_string(),
+                },
+            ],
+            huly_links: vec![TeamforgeProjectHulyLink {
+                project_id: "tf-project-parkarea".to_string(),
+                huly_project_id: "huly-project-parkarea".to_string(),
+                sync_issues: true,
+                sync_milestones: true,
+                sync_components: true,
+                sync_templates: true,
+                created_at: "2026-04-17T00:00:00Z".to_string(),
+                updated_at: "2026-04-17T00:00:00Z".to_string(),
+            }],
+            artifacts: vec![
+                TeamforgeProjectArtifact {
+                    id: "artifact-prd".to_string(),
+                    project_id: "tf-project-parkarea".to_string(),
+                    artifact_type: "prd".to_string(),
+                    title: "Germany Launch PRD".to_string(),
+                    url: "https://docs.example.com/parkarea/prd".to_string(),
+                    source: "docs".to_string(),
+                    external_id: None,
+                    is_primary: true,
+                    created_at: "2026-04-17T00:00:00Z".to_string(),
+                    updated_at: "2026-04-17T00:00:00Z".to_string(),
+                },
+                TeamforgeProjectArtifact {
+                    id: "artifact-contract".to_string(),
+                    project_id: "tf-project-parkarea".to_string(),
+                    artifact_type: "contract".to_string(),
+                    title: "Master Services Agreement".to_string(),
+                    url: "https://docs.example.com/parkarea/msa".to_string(),
+                    source: "legal".to_string(),
+                    external_id: Some("msa-parkarea-2026".to_string()),
+                    is_primary: false,
+                    created_at: "2026-04-17T00:00:00Z".to_string(),
+                    updated_at: "2026-04-17T00:00:00Z".to_string(),
+                },
+            ],
+        };
+
+        replace_teamforge_project_graph(&pool, &graph)
+            .await
+            .expect("save teamforge project graph");
+
+        let loaded = get_teamforge_project_graphs(&pool)
+            .await
+            .expect("load teamforge project graphs");
+
+        assert_eq!(loaded.len(), 1);
+        let graph = &loaded[0];
+        assert_eq!(graph.project.slug, "parkarea-germany-launch");
+        assert_eq!(graph.github_repos.len(), 2);
+        assert_eq!(graph.huly_links.len(), 1);
+        assert_eq!(graph.artifacts.len(), 2);
+        assert_eq!(graph.github_repos[0].repo, "Sheshiyer/parkarea-aleph");
+        assert_eq!(graph.huly_links[0].huly_project_id, "huly-project-parkarea");
+        assert!(graph.artifacts.iter().any(|artifact| artifact.artifact_type == "prd"));
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn replacing_teamforge_project_graph_removes_stale_links() {
+        let dir = unique_test_dir();
+        let pool = init_db(&dir).await.expect("init db");
+
+        let mut graph = TeamforgeProjectGraph {
+            project: TeamforgeProject {
+                id: "tf-project-internal-ops".to_string(),
+                slug: "internal-ops".to_string(),
+                name: "Internal Ops".to_string(),
+                portfolio_name: Some("Thoughtseed".to_string()),
+                client_name: None,
+                project_type: Some("internal".to_string()),
+                status: "active".to_string(),
+                sync_mode: "bidirectional".to_string(),
+                created_at: "2026-04-17T00:00:00Z".to_string(),
+                updated_at: "2026-04-17T00:00:00Z".to_string(),
+            },
+            github_repos: vec![TeamforgeProjectGithubRepoLink {
+                project_id: "tf-project-internal-ops".to_string(),
+                repo: "Thoughtseed/internal-ops".to_string(),
+                display_name: None,
+                is_primary: true,
+                sync_issues: true,
+                sync_milestones: true,
+                created_at: "2026-04-17T00:00:00Z".to_string(),
+                updated_at: "2026-04-17T00:00:00Z".to_string(),
+            }],
+            huly_links: vec![TeamforgeProjectHulyLink {
+                project_id: "tf-project-internal-ops".to_string(),
+                huly_project_id: "huly-ops".to_string(),
+                sync_issues: true,
+                sync_milestones: true,
+                sync_components: true,
+                sync_templates: false,
+                created_at: "2026-04-17T00:00:00Z".to_string(),
+                updated_at: "2026-04-17T00:00:00Z".to_string(),
+            }],
+            artifacts: vec![TeamforgeProjectArtifact {
+                id: "artifact-ops-playbook".to_string(),
+                project_id: "tf-project-internal-ops".to_string(),
+                artifact_type: "process".to_string(),
+                title: "Ops Playbook".to_string(),
+                url: "https://docs.example.com/internal/ops-playbook".to_string(),
+                source: "docs".to_string(),
+                external_id: None,
+                is_primary: true,
+                created_at: "2026-04-17T00:00:00Z".to_string(),
+                updated_at: "2026-04-17T00:00:00Z".to_string(),
+            }],
+        };
+
+        replace_teamforge_project_graph(&pool, &graph)
+            .await
+            .expect("first save teamforge graph");
+
+        graph.github_repos.clear();
+        graph.huly_links.clear();
+        graph.artifacts.clear();
+        graph.project.name = "Internal Ops Platform".to_string();
+
+        replace_teamforge_project_graph(&pool, &graph)
+            .await
+            .expect("replace teamforge graph");
+
+        let loaded = get_teamforge_project_graphs(&pool)
+            .await
+            .expect("load replaced graphs");
+
+        assert_eq!(loaded.len(), 1);
+        let graph = &loaded[0];
+        assert_eq!(graph.project.name, "Internal Ops Platform");
+        assert!(graph.github_repos.is_empty());
+        assert!(graph.huly_links.is_empty());
+        assert!(graph.artifacts.is_empty());
 
         pool.close().await;
         let _ = std::fs::remove_dir_all(dir);

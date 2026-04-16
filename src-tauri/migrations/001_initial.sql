@@ -62,6 +62,65 @@ CREATE TABLE IF NOT EXISTS github_repo_configs (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS teamforge_projects (
+    id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    portfolio_name TEXT,
+    client_name TEXT,
+    project_type TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    sync_mode TEXT NOT NULL DEFAULT 'bidirectional',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS teamforge_project_github_repos (
+    project_id TEXT NOT NULL REFERENCES teamforge_projects(id) ON DELETE CASCADE,
+    repo TEXT NOT NULL,
+    display_name TEXT,
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    sync_issues INTEGER NOT NULL DEFAULT 1,
+    sync_milestones INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (project_id, repo)
+);
+
+CREATE INDEX IF NOT EXISTS idx_teamforge_project_github_repos_repo
+    ON teamforge_project_github_repos(repo);
+
+CREATE TABLE IF NOT EXISTS teamforge_project_huly_links (
+    project_id TEXT NOT NULL REFERENCES teamforge_projects(id) ON DELETE CASCADE,
+    huly_project_id TEXT NOT NULL,
+    sync_issues INTEGER NOT NULL DEFAULT 1,
+    sync_milestones INTEGER NOT NULL DEFAULT 1,
+    sync_components INTEGER NOT NULL DEFAULT 1,
+    sync_templates INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (project_id, huly_project_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_teamforge_project_huly_links_huly
+    ON teamforge_project_huly_links(huly_project_id);
+
+CREATE TABLE IF NOT EXISTS teamforge_project_artifacts (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES teamforge_projects(id) ON DELETE CASCADE,
+    artifact_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    source TEXT NOT NULL,
+    external_id TEXT,
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_teamforge_project_artifacts_project
+    ON teamforge_project_artifacts(project_id, artifact_type, title);
+
 CREATE TABLE IF NOT EXISTS github_milestones (
     repo TEXT NOT NULL,
     number INTEGER NOT NULL,

@@ -2,6 +2,42 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.18 - 2026-04-17
+
+This release lands the first Cloudflare-backed TeamForge project control-plane slice and switches the desktop project registry to Worker-canonical reads and writes.
+
+### Added
+
+- Added `cloudflare/worker/migrations/0002_project_control_plane.sql` to extend the canonical D1 schema with:
+  - TeamForge project metadata fields such as slug, portfolio, client, visibility, and sync mode
+  - `project_github_links`
+  - `project_huly_links`
+  - `project_artifacts`
+  - `project_sync_policies`
+- Added a dedicated Worker repository layer in `cloudflare/worker/src/lib/project-registry.ts` so project graph reads and writes no longer live directly inside route handlers.
+- Added a Tauri Worker bridge in `src-tauri/src/sync/teamforge_worker.rs` so TeamForge project graphs are fetched from and saved to the Cloudflare backend.
+
+### Changed
+
+- Updated the project route contract so:
+  - `/v1/projects` serves project summaries and sync-health context
+  - `/v1/project-mappings` serves the full editable project graph
+- Updated Worker fixtures and backend docs to match the canonical TeamForge project graph and policy model.
+- Extended sync scaffolding so `github` is now a valid sync source for control-plane work.
+- Replaced the placeholder `WorkspaceLock` scaffold with a minimal `/acquire` and `/release` mutex API for future serialized sync orchestration.
+- Changed `get_teamforge_projects` to fetch from the Worker first and fall back to cached SQLite projection only when the Worker is unavailable.
+- Changed `save_teamforge_project` to write to the Worker first and update SQLite only after a successful remote response.
+- Preserved the current GitHub sync bridge by continuing to mirror TeamForge-linked repos into `github_repo_configs`.
+- Bumped release metadata to `0.1.18` across the frontend package, sidecar package, Tauri config, and Rust crate.
+
+### Verification
+
+- `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit`
+- `wrangler d1 migrations apply TEAMFORGE_DB --local --config cloudflare/worker/wrangler.jsonc`
+- `cargo test --manifest-path src-tauri/Cargo.toml teamforge_project_graph`
+- `cargo test --manifest-path src-tauri/Cargo.toml`
+- `pnpm build`
+
 ## v0.1.17 - 2026-04-17
 
 This release keeps the OTA workflow green while restoring optional fine-grained PAT support for GitHub release publication.

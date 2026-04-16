@@ -86,6 +86,82 @@ Status routes should report:
 - stats when available
 - timestamps
 
+## Project Route Rules
+
+### `GET /v1/projects`
+
+This route returns project summary rows, not the full editable graph.
+
+Each row should be shaped for list and health views and may include:
+
+- canonical project identity
+- `githubRepoCount`
+- `hulyLinkCount`
+- `artifactCount`
+- `issueOwnershipMode`
+- `milestoneAuthority`
+- `syncHealth`
+
+### `PUT /v1/projects/:projectId`
+
+This route updates metadata only.
+
+Expected metadata fields:
+
+- `name`
+- `slug`
+- `portfolioName`
+- `clientName`
+- `projectType`
+- `status`
+- `syncMode`
+- `visibility`
+
+It should not be the primary route for replacing link records or artifact graphs.
+
+### `GET /v1/project-mappings`
+
+This route returns the full canonical project graph for operator-facing editing.
+
+Each graph payload should include:
+
+- `project`
+- `githubLinks`
+- `hulyLinks`
+- `artifacts`
+- `policy`
+
+### `PUT /v1/project-mappings/:projectId`
+
+This route is the graph upsert boundary.
+
+It should accept and normalize:
+
+- project metadata
+- GitHub links
+- Huly links
+- project artifacts
+- project sync policy
+
+## Project Policy Rules
+
+The canonical project policy payload must be able to express:
+
+- `issueOwnershipMode`
+- `engineeringSource`
+- `executionSource`
+- `milestoneAuthority`
+- `issueClassificationMode`
+- `directionMode`
+- `ruleConfig`
+
+The default architecture contract is:
+
+- engineering issues are GitHub-owned
+- execution/admin issues are Huly-owned
+- milestones are GitHub-authoritative
+- issue classification is hybrid rule-based plus manual override
+
 ## Huly Normalization Rules
 
 - preview is always dry-run

@@ -8,6 +8,8 @@ import type {
   ProjectStats,
   ProjectCatalogItem,
   ExecutionProjectView,
+  TeamforgeProjectGraph,
+  TeamforgeProjectInput,
   ActivityItem,
   PresenceStatus,
   Employee,
@@ -74,6 +76,10 @@ const invokeApi = {
     invoke<ProjectCatalogItem[]>("get_projects_catalog"),
   getExecutionProjects: () =>
     invoke<ExecutionProjectView[]>("get_execution_projects"),
+  getTeamforgeProjects: () =>
+    invoke<TeamforgeProjectGraph[]>("get_teamforge_projects"),
+  saveTeamforgeProject: (input: TeamforgeProjectInput) =>
+    invoke<TeamforgeProjectGraph>("save_teamforge_project", { input }),
   getActivityFeed: (limit: number) =>
     invoke<ActivityItem[]>("get_activity_feed", { limit }),
   getProjectActivity: (projectId: string, limit: number) =>

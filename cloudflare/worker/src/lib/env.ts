@@ -28,7 +28,7 @@ export interface DurableObjectNamespaceLike {
 export interface SyncJobMessage {
   jobId: string;
   workspaceId: string;
-  source: "clockify" | "huly" | "slack";
+  source: "clockify" | "github" | "huly" | "slack";
   jobType: string;
 }
 

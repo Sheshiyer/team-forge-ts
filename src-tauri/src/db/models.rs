@@ -68,6 +68,62 @@ pub struct GithubRepoConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
+pub struct TeamforgeProject {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub portfolio_name: Option<String>,
+    pub client_name: Option<String>,
+    pub project_type: Option<String>,
+    pub status: String,
+    pub sync_mode: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeProjectGithubRepoLink {
+    pub project_id: String,
+    pub repo: String,
+    pub display_name: Option<String>,
+    pub is_primary: bool,
+    pub sync_issues: bool,
+    pub sync_milestones: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeProjectHulyLink {
+    pub project_id: String,
+    pub huly_project_id: String,
+    pub sync_issues: bool,
+    pub sync_milestones: bool,
+    pub sync_components: bool,
+    pub sync_templates: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeProjectArtifact {
+    pub id: String,
+    pub project_id: String,
+    pub artifact_type: String,
+    pub title: String,
+    pub url: String,
+    pub source: String,
+    pub external_id: Option<String>,
+    pub is_primary: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
 pub struct GithubMilestoneCache {
     pub repo: String,
     pub number: i64,
@@ -351,6 +407,15 @@ pub struct ProjectStats {
     pub billable_hours: f64,
     pub team_members: u32,
     pub utilization: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeProjectGraph {
+    pub project: TeamforgeProject,
+    pub github_repos: Vec<TeamforgeProjectGithubRepoLink>,
+    pub huly_links: Vec<TeamforgeProjectHulyLink>,
+    pub artifacts: Vec<TeamforgeProjectArtifact>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
