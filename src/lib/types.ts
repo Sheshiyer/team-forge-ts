@@ -123,6 +123,114 @@ export interface TeamforgeProjectGraph {
   artifacts: TeamforgeProjectArtifact[];
 }
 
+export interface TeamforgeProjectSyncPolicy {
+  issuesEnabled: boolean;
+  milestonesEnabled: boolean;
+  componentsEnabled: boolean;
+  templatesEnabled: boolean;
+  issueOwnershipMode: string;
+  engineeringSource: string;
+  executionSource: string;
+  milestoneAuthority: string;
+  issueClassificationMode: string;
+  directionMode: string;
+  ruleConfigJson: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TeamforgePolicyState {
+  syncState: string;
+  lastSyncAt: string | null;
+  lastSyncStatus: string | null;
+  lastSyncJobId: string | null;
+  pausedAt: string | null;
+  pausedBy: string | null;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+}
+
+export interface TeamforgeSyncEntityMapping {
+  id: string;
+  entityType: string;
+  title: string;
+  status: string | null;
+  ownershipDomain: string;
+  classificationSource: string;
+  classificationReason: string | null;
+  mappingStatus: string;
+  sourceUrl: string | null;
+  githubRepo: string | null;
+  githubNumber: number | null;
+  hulyProjectId: string | null;
+  hulyEntityId: string | null;
+  lastSource: string | null;
+  lastSourceVersion: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastSyncedAt: string | null;
+}
+
+export interface TeamforgeSyncJournalEntry {
+  id: string;
+  entityMappingId: string | null;
+  entityType: string;
+  sourceSystem: string;
+  destinationSystem: string;
+  action: string;
+  status: string;
+  sourceRef: string | null;
+  destinationRef: string | null;
+  payloadHash: string;
+  payloadJson: string | null;
+  retryCount: number;
+  conflictId: string | null;
+  jobId: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  actorId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface TeamforgeSyncConflict {
+  id: string;
+  entityMappingId: string | null;
+  entityType: string;
+  conflictType: string;
+  canonicalSource: string;
+  detectedSource: string;
+  status: string;
+  summary: string;
+  githubPayloadJson: string | null;
+  hulyPayloadJson: string | null;
+  resolutionNote: string | null;
+  resolvedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt: string | null;
+}
+
+export interface TeamforgeProjectControlPlaneSummary {
+  openConflicts: number;
+  mappedMilestones: number;
+  engineeringIssues: number;
+  executionIssues: number;
+  recentFailures: number;
+}
+
+export interface TeamforgeProjectControlPlane {
+  project: TeamforgeProjectGraph;
+  policy: TeamforgeProjectSyncPolicy | null;
+  policyState: TeamforgePolicyState;
+  entityMappings: TeamforgeSyncEntityMapping[];
+  journal: TeamforgeSyncJournalEntry[];
+  conflicts: TeamforgeSyncConflict[];
+  summary: TeamforgeProjectControlPlaneSummary;
+}
+
 export interface TeamforgeProjectGithubRepoLinkInput {
   repo: string;
   displayName?: string | null;
@@ -161,6 +269,18 @@ export interface TeamforgeProjectInput {
   githubRepos?: TeamforgeProjectGithubRepoLinkInput[];
   hulyLinks?: TeamforgeProjectHulyLinkInput[];
   artifacts?: TeamforgeProjectArtifactInput[];
+  policy?: Partial<TeamforgeProjectSyncPolicy>;
+}
+
+export interface TeamforgeProjectActionInput {
+  projectId: string;
+  action: string;
+  actorId?: string | null;
+  mappingId?: string | null;
+  ownershipDomain?: string | null;
+  reason?: string | null;
+  conflictId?: string | null;
+  resolutionNote?: string | null;
 }
 
 export interface PresenceStatus {

@@ -5,8 +5,10 @@ import { handleGetCredentials } from "./credentials";
 import { handleGetNormalizationHistory, handleNormalizationApply, handleNormalizationPreview } from "./normalization";
 import { handleOtaCheck, handleOtaInstallEvent } from "./ota";
 import {
+  handleGetProjectControlPlane,
   handleGetProjectMappings,
   handleGetProjects,
+  handlePostProjectAction,
   handlePutProject,
   handlePutProjectMappings,
 } from "./projects";
@@ -56,6 +58,14 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   const mappingMatch = pathname.match(/^\/v1\/project-mappings\/([^/]+)$/);
   if (method === "PUT" && mappingMatch) {
     return handlePutProjectMappings(env, mappingMatch[1], request);
+  }
+  const controlPlaneMatch = pathname.match(/^\/v1\/project-mappings\/([^/]+)\/control-plane$/);
+  if (method === "GET" && controlPlaneMatch) {
+    return handleGetProjectControlPlane(env, controlPlaneMatch[1]);
+  }
+  const projectActionMatch = pathname.match(/^\/v1\/project-mappings\/([^/]+)\/actions$/);
+  if (method === "POST" && projectActionMatch) {
+    return handlePostProjectAction(env, projectActionMatch[1], request);
   }
 
   // Credentials (shared integration tokens)

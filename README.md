@@ -87,10 +87,10 @@ Leave tracking and yearly holidays now live on a dedicated Calendar route, keepi
 
 ## New In v0.1.18
 
-- **Cloudflare-backed TeamForge project control plane shipped** with canonical Worker + D1 ownership for project metadata, GitHub links, Huly links, artifacts, and sync policy.
-- **Worker project routes now separate summary vs graph concerns** so `/v1/projects` serves list/health views while `/v1/project-mappings` serves the full editable project graph.
-- **Desktop TeamForge project registry is now Worker-canonical**: reads fetch remote first and writes only persist locally after a successful Worker response.
-- **Sync scaffolding is ready for the next orchestration slice** with `github` as a valid sync source and a minimal `WorkspaceLock` mutex API for serialized project work.
+- **Cloudflare-backed TeamForge control plane now covers live issue and milestone propagation** with GitHub-owned engineering flow, Huly-owned execution/admin flow, and GitHub-authoritative milestone drift review.
+- **Worker project control-plane routes shipped** so `/v1/project-mappings/:projectId/control-plane` exposes sync health, mappings, journal rows, conflicts, and policy state while `/v1/project-mappings/:projectId/actions` handles operator actions.
+- **Projects now includes an operator control-plane mode** with registry editing, sync now/pause/resume/retry actions, classification overrides, conflict review, and sync-journal visibility.
+- **Desktop TeamForge project registry remains Worker-canonical**: reads fetch remote first, writes only persist locally after a successful Worker response, and local SQLite stays a cache/offline projection.
 - **Release metadata is now at `0.1.18`** across the frontend package, sidecar package, Tauri config, and Rust crate.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
@@ -129,7 +129,7 @@ On first launch:
 4. Enter your **Huly JWT token**
 5. Paste the **Slack Bot User OAuth Token** (`xoxb-...`) if you want Slack-backed chat activity in **Comms**
 6. Hit **Sync Now** — data populates across all views
-7. Open **Team** for org mapping and employee summaries, then **Calendar** for leave and holiday operations
+7. Open **Projects** for execution summaries or the TeamForge control plane, **Team** for org mapping and employee summaries, then **Calendar** for leave and holiday operations
 
 ## Releases
 
@@ -208,13 +208,13 @@ The rollout is now documented in-repo instead of living only in chat and GitHub 
 - [Cloudflare Project Sync Architecture](docs/plans/2026-04-17-cloudflare-project-sync-design.md)
 - [Cloudflare Project Backend Implementation Plan](docs/plans/2026-04-17-cloudflare-project-backend-implementation.md)
 
-Remaining Cloudflare control-plane follow-up is now tracked in GitHub:
+The first Cloudflare control-plane tranche tracked in GitHub is now implemented on the current `0.1.18` line:
 
-- [#40](https://github.com/Sheshiyer/team-forge-ts/issues/40) GitHub-authoritative milestone propagation with Huly drift review
-- [#41](https://github.com/Sheshiyer/team-forge-ts/issues/41) Huly-owned execution and admin issue propagation
-- [#42](https://github.com/Sheshiyer/team-forge-ts/issues/42) Sync journal and conflict records for GitHub/Huly propagation
-- [#43](https://github.com/Sheshiyer/team-forge-ts/issues/43) Operator UI for project registry, conflict inbox, and classification overrides
-- [#44](https://github.com/Sheshiyer/team-forge-ts/issues/44) GitHub-owned engineering issue propagation
+- milestone propagation from GitHub into Huly with drift-review conflict records
+- Huly-owned execution/admin issue propagation
+- GitHub-owned engineering issue propagation
+- sync journal and conflict records for GitHub/Huly activity
+- operator UI for registry editing, conflict review, classification overrides, and sync controls
 
 ## Dashboard Views
 
@@ -222,7 +222,7 @@ Remaining Cloudflare control-plane follow-up is now tracked in GitHub:
 |:-----|:--------:|:------:|:--------------|
 | **Overview** | `Cmd+1` | Clockify | Quota compliance, team hours, utilization rate, metric cards |
 | **Timesheet** | `Cmd+2` | Clockify | Time entries with employee/date filtering, CSV export |
-| **Projects** | `Cmd+3` | Clockify | Per-project breakdown, utilization bars, CSV export |
+| **Projects** | `Cmd+3` | Clockify + Worker | Per-project execution breakdown, utilization export, and TeamForge control-plane editing |
 | **Sprints** | `Cmd+4` | Huly | Milestone tracking, progress bars, on-track/delayed status |
 | **Insights** | `Cmd+5` | Both | Time discrepancies, estimation accuracy, priority queue health |
 | **Team** | `Cmd+6` | Huly + SQLite | Drag-and-drop org chart mapping, department structure, and employee operations summaries |

@@ -9,7 +9,7 @@ This document freezes the public and internal HTTP contract for the TeamForge Wo
 - all public routes are versioned under `/v1`
 - all public routes require app auth
 - all internal routes require service authentication or queue/workflow origin validation
-- heavy vendor sync work runs asynchronously
+- heavy vendor sync work runs asynchronously unless an operator-scoped project control-plane action intentionally runs one project sync pass inline under a project lock
 
 ## Response Envelope
 
@@ -45,6 +45,8 @@ This document freezes the public and internal HTTP contract for the TeamForge Wo
 | `PUT` | `/v1/projects/:projectId` | update project metadata |
 | `GET` | `/v1/project-mappings` | read mapping state |
 | `PUT` | `/v1/project-mappings/:projectId` | upsert mapping |
+| `GET` | `/v1/project-mappings/:projectId/control-plane` | read operator control-plane detail |
+| `POST` | `/v1/project-mappings/:projectId/actions` | run operator control-plane action |
 | `POST` | `/v1/connections/:source/test` | server-side connection test |
 | `GET` | `/v1/connections` | connection health |
 | `POST` | `/v1/sync/jobs` | enqueue sync |
@@ -143,6 +145,35 @@ It should accept and normalize:
 - project artifacts
 - project sync policy
 
+### `GET /v1/project-mappings/:projectId/control-plane`
+
+This route returns the operator-facing control-plane detail for one project.
+
+The payload should include:
+
+- `project`
+- `policy`
+- `policyState`
+- `entityMappings`
+- `conflicts`
+- `journal`
+- `summary`
+
+### `POST /v1/project-mappings/:projectId/actions`
+
+This route accepts explicit operator actions for one project control plane.
+
+Supported actions must cover:
+
+- `pause`
+- `resume`
+- `retry`
+- `sync_now`
+- `set_classification`
+- `resolve_conflict`
+
+The route should return the refreshed control-plane detail after the action completes.
+
 ## Project Policy Rules
 
 The canonical project policy payload must be able to express:
@@ -155,12 +186,32 @@ The canonical project policy payload must be able to express:
 - `directionMode`
 - `ruleConfig`
 
+Runtime project policy state must also be able to express:
+
+- `syncState`
+- `lastSyncAt`
+- `lastSyncStatus`
+- `lastSyncJobId`
+- `pausedAt`
+- `pausedBy`
+- `lastErrorCode`
+- `lastErrorMessage`
+
 The default architecture contract is:
 
 - engineering issues are GitHub-owned
 - execution/admin issues are Huly-owned
 - milestones are GitHub-authoritative
 - issue classification is hybrid rule-based plus manual override
+
+## Sync Mapping Rules
+
+Canonical sync state must persist:
+
+- entity mappings between TeamForge, GitHub, and Huly records
+- durable manual classification overrides
+- conflict rows for drift or review-needed propagation failures
+- journal rows for sync actions, failures, retries, and operator interventions
 
 ## Huly Normalization Rules
 

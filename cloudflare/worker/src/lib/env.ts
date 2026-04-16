@@ -23,6 +23,9 @@ export interface DurableObjectStateLike {
 
 export interface DurableObjectNamespaceLike {
   idFromName(name: string): unknown;
+  get(id: unknown): {
+    fetch(input: Request | string, init?: RequestInit): Promise<Response>;
+  };
 }
 
 export interface SyncJobMessage {

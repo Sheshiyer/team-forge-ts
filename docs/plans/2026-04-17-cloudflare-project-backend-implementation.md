@@ -8,6 +8,8 @@
 
 **Tech Stack:** Cloudflare Workers, D1, Queues, Durable Objects, Wrangler, Rust/Tauri, React/TypeScript
 
+> **Implementation note:** This plan is now partly historical. The repo's `0.1.18` line implements the original registry slice and the follow-on control-plane tranche: live GitHub/Huly issue and milestone propagation, sync journal/conflict tables, and the operator conflict/control UI.
+
 ---
 
 ## Scope Lock

@@ -431,6 +431,55 @@ Land the Cloudflare control-plane slice on `main`, refresh release/docs metadata
 
 ## Goal
 
+Finish the remaining TeamForge control-plane backlog on the current unreleased `0.1.18` line:
+- `#40` GitHub-authoritative milestone propagation with Huly drift review
+- `#41` Huly-owned execution/admin issue propagation
+- `#42` sync journal + conflict records
+- `#43` operator UI for registry/conflicts/classification overrides
+- `#44` GitHub-owned engineering issue propagation
+
+## Plan
+
+- [x] Add Worker/D1 schema for sync entity mappings, sync journal rows, sync conflicts, and explicit classification override metadata.
+- [x] Implement Worker-side GitHub + Huly project sync processors that use jobs, locks, and journal rows for milestone and issue propagation.
+- [x] Expose Worker query/control routes for sync journal, conflict inbox, project sync health, and operator actions (`retry`, `pause`, `resume`, classification override).
+- [x] Extend the Tauri Worker bridge and shared frontend types for the new TeamForge control-plane data and actions.
+- [x] Build the operator-facing TeamForge UI for project registry editing, conflict review, override management, and sync controls.
+- [x] Run Worker migration/typecheck, Rust tests, and frontend build; then refresh changelog/docs while keeping the unreleased version at `0.1.18` unless implementation forces a new bump.
+
+## Review
+
+- Added `cloudflare/worker/migrations/0003_sync_control_plane.sql` so D1 now persists:
+  - runtime sync state on `project_sync_policies`
+  - `sync_entity_mappings`
+  - `sync_conflicts`
+  - `sync_journal`
+- Added Worker-side control-plane services in:
+  - `cloudflare/worker/src/lib/github-api.ts`
+  - `cloudflare/worker/src/lib/huly-api.ts`
+  - `cloudflare/worker/src/lib/locks.ts`
+  - `cloudflare/worker/src/lib/sync-control-plane.ts`
+- Implemented Worker control-plane routes:
+  - `GET /v1/project-mappings/:projectId/control-plane`
+  - `POST /v1/project-mappings/:projectId/actions`
+- Extended the Tauri bridge and frontend invoke/types so the desktop app can load control-plane detail and run operator actions against the Worker.
+- Rebuilt `src/pages/Projects.tsx` into dual modes:
+  - `EXECUTION` for the existing rollups/export view
+  - `CONTROL PLANE` for registry editing, sync controls, classification overrides, conflict review, and sync-journal inspection
+- Refreshed release-facing docs for the completed `0.1.18` tranche:
+  - `README.md`
+  - `CHANGELOG.md`
+  - `docs/architecture/contracts/worker-route-contract.md`
+  - `docs/architecture/contracts/d1-schema-contract.md`
+  - `docs/plans/2026-04-17-cloudflare-project-sync-design.md`
+  - `docs/plans/2026-04-17-cloudflare-project-backend-implementation.md`
+- Verification passed:
+  - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit`
+  - `cargo test --manifest-path src-tauri/Cargo.toml teamforge_project_graph -- --nocapture`
+  - `pnpm build`
+
+## Goal
+
 Automate OTA release publication for signed macOS updater bundles:
 - upload the Tauri updater artifact, signature, and release notes to Cloudflare R2
 - call `/internal/releases/publish` with the published artifact metadata

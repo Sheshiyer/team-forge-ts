@@ -2,7 +2,7 @@
 
 **Goal:** Make TeamForge the canonical Cloudflare-backed control plane for projects that span GitHub and Huly, with bidirectional sync, explicit manual controls, and safe fallback behavior.
 
-**Status:** Architecture/design plan
+**Status:** Architecture/design plan; the initial milestone/issue/journal/conflict/operator-control tranche is now implemented on the repo's `0.1.18` line.
 
 ---
 

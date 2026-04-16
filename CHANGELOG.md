@@ -4,38 +4,37 @@ All notable changes to TeamForge are documented in this file.
 
 ## v0.1.18 - 2026-04-17
 
-This release lands the first Cloudflare-backed TeamForge project control-plane slice and switches the desktop project registry to Worker-canonical reads and writes.
+This release completes the first TeamForge Cloudflare control-plane tranche on top of the Worker-canonical project registry, adding live GitHub/Huly issue and milestone propagation, sync journal/conflict tracking, and an operator-facing control-plane UI.
 
 ### Added
 
-- Added `cloudflare/worker/migrations/0002_project_control_plane.sql` to extend the canonical D1 schema with:
-  - TeamForge project metadata fields such as slug, portfolio, client, visibility, and sync mode
-  - `project_github_links`
-  - `project_huly_links`
-  - `project_artifacts`
-  - `project_sync_policies`
-- Added a dedicated Worker repository layer in `cloudflare/worker/src/lib/project-registry.ts` so project graph reads and writes no longer live directly inside route handlers.
-- Added a Tauri Worker bridge in `src-tauri/src/sync/teamforge_worker.rs` so TeamForge project graphs are fetched from and saved to the Cloudflare backend.
+- Added `cloudflare/worker/migrations/0003_sync_control_plane.sql` to extend the canonical D1 schema with:
+  - runtime sync-state fields on `project_sync_policies`
+  - `sync_entity_mappings`
+  - `sync_conflicts`
+  - `sync_journal`
+- Added Worker control-plane services for:
+  - GitHub milestone propagation and Huly drift review
+  - Huly-owned execution/admin issue propagation
+  - GitHub-owned engineering issue propagation
+  - classification override persistence
+  - journal and conflict recording
+- Added Worker control-plane routes:
+  - `GET /v1/project-mappings/:projectId/control-plane`
+  - `POST /v1/project-mappings/:projectId/actions`
+- Added Tauri bridge commands plus shared TypeScript models for TeamForge control-plane detail, entity mappings, conflicts, journal rows, and operator actions.
 
 ### Changed
 
-- Updated the project route contract so:
-  - `/v1/projects` serves project summaries and sync-health context
-  - `/v1/project-mappings` serves the full editable project graph
-- Updated Worker fixtures and backend docs to match the canonical TeamForge project graph and policy model.
-- Extended sync scaffolding so `github` is now a valid sync source for control-plane work.
-- Replaced the placeholder `WorkspaceLock` scaffold with a minimal `/acquire` and `/release` mutex API for future serialized sync orchestration.
-- Changed `get_teamforge_projects` to fetch from the Worker first and fall back to cached SQLite projection only when the Worker is unavailable.
-- Changed `save_teamforge_project` to write to the Worker first and update SQLite only after a successful remote response.
-- Preserved the current GitHub sync bridge by continuing to mirror TeamForge-linked repos into `github_repo_configs`.
-- Bumped release metadata to `0.1.18` across the frontend package, sidecar package, Tauri config, and Rust crate.
+- The Projects page now has `EXECUTION` and `CONTROL PLANE` modes so operators can manage registry state, review conflicts, override issue classification, and trigger sync actions from the desktop app.
+- Updated the Worker route and D1 schema contracts to reflect the new control-plane endpoints, sync mapping tables, and policy-state fields.
+- Refreshed `README.md` so `0.1.18` describes the full control-plane tranche instead of the earlier partial registry slice.
+- Release metadata remains at `0.1.18` across the frontend package, sidecar package, Tauri config, and Rust crate.
 
 ### Verification
 
 - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit`
-- `wrangler d1 migrations apply TEAMFORGE_DB --local --config cloudflare/worker/wrangler.jsonc`
 - `cargo test --manifest-path src-tauri/Cargo.toml teamforge_project_graph`
-- `cargo test --manifest-path src-tauri/Cargo.toml`
 - `pnpm build`
 
 ## v0.1.17 - 2026-04-17

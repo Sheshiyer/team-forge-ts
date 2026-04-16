@@ -694,6 +694,21 @@ pub struct TeamforgeProjectArtifactInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TeamforgeProjectSyncPolicyInput {
+    pub issues_enabled: Option<bool>,
+    pub milestones_enabled: Option<bool>,
+    pub components_enabled: Option<bool>,
+    pub templates_enabled: Option<bool>,
+    pub issue_ownership_mode: Option<String>,
+    pub engineering_source: Option<String>,
+    pub execution_source: Option<String>,
+    pub milestone_authority: Option<String>,
+    pub issue_classification_mode: Option<String>,
+    pub direction_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TeamforgeProjectInput {
     pub id: Option<String>,
     pub slug: Option<String>,
@@ -709,6 +724,20 @@ pub struct TeamforgeProjectInput {
     pub huly_links: Vec<TeamforgeProjectHulyLinkInput>,
     #[serde(default)]
     pub artifacts: Vec<TeamforgeProjectArtifactInput>,
+    pub policy: Option<TeamforgeProjectSyncPolicyInput>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeProjectActionInput {
+    pub project_id: String,
+    pub action: String,
+    pub actor_id: Option<String>,
+    pub mapping_id: Option<String>,
+    pub ownership_domain: Option<String>,
+    pub reason: Option<String>,
+    pub conflict_id: Option<String>,
+    pub resolution_note: Option<String>,
 }
 
 #[tauri::command]
@@ -889,6 +918,48 @@ pub async fn save_teamforge_project(
         "githubLinks": github_links,
         "hulyLinks": huly_links,
         "artifacts": artifacts,
+        "policy": input.policy.as_ref().map(|policy| json!({
+            "issuesEnabled": policy.issues_enabled.unwrap_or(true),
+            "milestonesEnabled": policy.milestones_enabled.unwrap_or(true),
+            "componentsEnabled": policy.components_enabled.unwrap_or(false),
+            "templatesEnabled": policy.templates_enabled.unwrap_or(false),
+            "issueOwnershipMode": policy
+                .issue_ownership_mode
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("split"),
+            "engineeringSource": policy
+                .engineering_source
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("github"),
+            "executionSource": policy
+                .execution_source
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("huly"),
+            "milestoneAuthority": policy
+                .milestone_authority
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("github"),
+            "issueClassificationMode": policy
+                .issue_classification_mode
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("hybrid"),
+            "directionMode": policy
+                .direction_mode
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("review_gate"),
+        })),
     });
 
     let graph = teamforge_worker::save_teamforge_project_graph(pool, &project_id, &payload).await?;
@@ -899,6 +970,65 @@ pub async fn save_teamforge_project(
     bridge_teamforge_graph_to_github_configs(pool, &graph).await?;
 
     Ok(graph)
+}
+
+#[tauri::command]
+pub async fn get_teamforge_project_control_plane(
+    db: State<'_, DbPool>,
+    project_id: String,
+) -> Result<TeamforgeProjectControlPlaneView, String> {
+    teamforge_worker::fetch_teamforge_project_control_plane(&db.0, project_id.trim()).await
+}
+
+#[tauri::command]
+pub async fn run_teamforge_project_action(
+    db: State<'_, DbPool>,
+    input: TeamforgeProjectActionInput,
+) -> Result<TeamforgeProjectControlPlaneView, String> {
+    let project_id = input.project_id.trim();
+    if project_id.is_empty() {
+        return Err("project_id is required".to_string());
+    }
+    let action = input.action.trim();
+    if action.is_empty() {
+        return Err("action is required".to_string());
+    }
+
+    let payload = json!({
+        "action": action,
+        "actorId": input
+            .actor_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        "mappingId": input
+            .mapping_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        "ownershipDomain": input
+            .ownership_domain
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        "reason": input
+            .reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        "conflictId": input
+            .conflict_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        "resolutionNote": input
+            .resolution_note
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+    });
+
+    teamforge_worker::post_teamforge_project_action(&db.0, project_id, &payload).await
 }
 
 async fn bridge_teamforge_graph_to_github_configs(

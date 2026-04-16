@@ -420,6 +420,128 @@ pub struct TeamforgeProjectGraph {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TeamforgeProjectSyncPolicyView {
+    pub issues_enabled: bool,
+    pub milestones_enabled: bool,
+    pub components_enabled: bool,
+    pub templates_enabled: bool,
+    pub issue_ownership_mode: String,
+    pub engineering_source: String,
+    pub execution_source: String,
+    pub milestone_authority: String,
+    pub issue_classification_mode: String,
+    pub direction_mode: String,
+    pub rule_config_json: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgePolicyStateView {
+    pub sync_state: String,
+    pub last_sync_at: Option<String>,
+    pub last_sync_status: Option<String>,
+    pub last_sync_job_id: Option<String>,
+    pub paused_at: Option<String>,
+    pub paused_by: Option<String>,
+    pub last_error_code: Option<String>,
+    pub last_error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeSyncEntityMappingView {
+    pub id: String,
+    pub entity_type: String,
+    pub title: String,
+    pub status: Option<String>,
+    pub ownership_domain: String,
+    pub classification_source: String,
+    pub classification_reason: Option<String>,
+    pub mapping_status: String,
+    pub source_url: Option<String>,
+    pub github_repo: Option<String>,
+    pub github_number: Option<i64>,
+    pub huly_project_id: Option<String>,
+    pub huly_entity_id: Option<String>,
+    pub last_source: Option<String>,
+    pub last_source_version: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_synced_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeSyncJournalEntryView {
+    pub id: String,
+    pub entity_mapping_id: Option<String>,
+    pub entity_type: String,
+    pub source_system: String,
+    pub destination_system: String,
+    pub action: String,
+    pub status: String,
+    pub source_ref: Option<String>,
+    pub destination_ref: Option<String>,
+    pub payload_hash: String,
+    pub payload_json: Option<String>,
+    pub retry_count: u32,
+    pub conflict_id: Option<String>,
+    pub job_id: Option<String>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub actor_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeSyncConflictView {
+    pub id: String,
+    pub entity_mapping_id: Option<String>,
+    pub entity_type: String,
+    pub conflict_type: String,
+    pub canonical_source: String,
+    pub detected_source: String,
+    pub status: String,
+    pub summary: String,
+    pub github_payload_json: Option<String>,
+    pub huly_payload_json: Option<String>,
+    pub resolution_note: Option<String>,
+    pub resolved_by: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub resolved_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeProjectControlPlaneSummaryView {
+    pub open_conflicts: u32,
+    pub mapped_milestones: u32,
+    pub engineering_issues: u32,
+    pub execution_issues: u32,
+    pub recent_failures: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeProjectControlPlaneView {
+    pub project: TeamforgeProjectGraph,
+    pub policy: Option<TeamforgeProjectSyncPolicyView>,
+    pub policy_state: TeamforgePolicyStateView,
+    pub entity_mappings: Vec<TeamforgeSyncEntityMappingView>,
+    pub journal: Vec<TeamforgeSyncJournalEntryView>,
+    pub conflicts: Vec<TeamforgeSyncConflictView>,
+    pub summary: TeamforgeProjectControlPlaneSummaryView,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExecutionProjectView {
     pub id: String,
     pub source: String,

@@ -37,6 +37,9 @@ This document freezes the canonical shared schema TeamForge will own in D1.
 - `sync_cursors`
 - `sync_jobs`
 - `sync_runs`
+- `sync_entity_mappings`
+- `sync_conflicts`
+- `sync_journal`
 - `workspace_normalization_actions`
 
 ### Transitional operational tables
@@ -61,6 +64,9 @@ This document freezes the canonical shared schema TeamForge will own in D1.
 - GitHub repo linkage and Huly project linkage
 - project artifact registry records
 - project-level sync policy and ownership policy
+- project-level sync runtime state
+- canonical entity mapping between TeamForge, GitHub, and Huly records
+- sync journal history and conflict state
 - shared employee identity mapping
 - shared upstream connection metadata
 - sync history
@@ -119,7 +125,13 @@ It should not inline all linked GitHub or Huly state.
 - `project_github_links` stores explicit repo mappings and repo-level sync flags
 - `project_huly_links` stores explicit Huly project mappings and Huly-side sync flags
 - `project_artifacts` stores PRD, contract, process, design, legal, and implementation links
-- `project_sync_policies` stores per-project sync rules and issue/milestone authority settings
+- `project_sync_policies` stores per-project sync rules, issue/milestone authority settings, and last-sync runtime state
+
+### Sync state table roles
+
+- `sync_entity_mappings` stores canonical cross-system entity linkage plus ownership, classification, hash, and payload snapshots
+- `sync_conflicts` stores review-needed drift and propagation conflicts that operators must resolve
+- `sync_journal` stores project-scoped sync actions, retries, failures, and operator interventions in durable audit order
 
 ### Ownership policy rules
 
@@ -139,6 +151,8 @@ The canonical defaults for this architecture are:
 - execution source: `huly`
 - milestone authority: `github`
 - issue classification mode: `hybrid`
+
+Manual classification overrides must be durable and take precedence over rule-derived defaults until they are explicitly changed.
 
 ## Transitional Data Rules
 

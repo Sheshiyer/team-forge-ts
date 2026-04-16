@@ -7,6 +7,11 @@ import {
   type ProjectGraphInput,
   type ProjectMetadataInput,
 } from "../lib/project-registry";
+import {
+  getProjectControlPlaneDetail,
+  performProjectAction,
+  type ProjectActionRequest,
+} from "../lib/sync-control-plane";
 import { jsonError, jsonOk } from "../lib/response";
 
 interface ProjectMetadataRequest {
@@ -116,5 +121,45 @@ export async function handlePutProjectMappings(
     return jsonOk({ project });
   } catch (error) {
     return mapError(error, "invalid_project_graph");
+  }
+}
+
+export async function handleGetProjectControlPlane(
+  env: Env,
+  projectId: string,
+): Promise<Response> {
+  if (!env.TEAMFORGE_DB) {
+    return jsonError({ code: "db_unavailable", message: "Database not available.", retryable: true }, 503);
+  }
+
+  const detail = await getProjectControlPlaneDetail(env.TEAMFORGE_DB, projectId);
+  if (!detail) {
+    return jsonError({ code: "not_found", message: `Project ${projectId} not found.`, retryable: false }, 404);
+  }
+
+  return jsonOk({ detail });
+}
+
+export async function handlePostProjectAction(
+  env: Env,
+  projectId: string,
+  request: Request,
+): Promise<Response> {
+  if (!env.TEAMFORGE_DB) {
+    return jsonError({ code: "db_unavailable", message: "Database not available.", retryable: true }, 503);
+  }
+
+  let body: ProjectActionRequest;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonError({ code: "invalid_json", message: "Request body must be valid JSON.", retryable: false }, 400);
+  }
+
+  try {
+    const result = await performProjectAction(env.TEAMFORGE_DB, env, projectId, body);
+    return jsonOk(result);
+  } catch (error) {
+    return mapError(error, "project_action_failed");
   }
 }
