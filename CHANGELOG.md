@@ -2,6 +2,22 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.17 - 2026-04-17
+
+This release keeps the OTA workflow green while restoring optional fine-grained PAT support for GitHub release publication.
+
+### Changed
+
+- Updated `.github/workflows/release.yml` so tagged releases prefer `GH_RELEASE_PAT` when present and fall back to the default `GITHUB_TOKEN` otherwise.
+- Bumped release metadata to `0.1.17` across the frontend package, sidecar package, Tauri config, and Rust crate so the next tagged build produces a real new release.
+
+### Verification
+
+- `pnpm build`
+- `cargo test --manifest-path src-tauri/Cargo.toml`
+- `pnpm tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'`
+- `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/release.yml"); puts "release.yml: OK"'`
+
 ## v0.1.16 - 2026-04-16
 
 This release wires the OTA publication path end to end so a tagged macOS build can publish signed updater bundles to Cloudflare and register them with the Worker manifest service.

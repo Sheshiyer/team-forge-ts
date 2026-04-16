@@ -5086,7 +5086,7 @@ dependencies = [
 
 [[package]]
 name = "team-forge-ts"
-version = "0.1.16"
+version = "0.1.17"
 dependencies = [
  "chrono",
  "reqwest 0.12.28",
