@@ -67,7 +67,7 @@ function Projects() {
 
   const [projects, setProjects] = useState<ExecutionProjectView[]>([]);
   const [executionLoading, setExecutionLoading] = useState(true);
-  const [executionLoadedOnce, setExecutionLoadedOnce] = useState(false);
+  const [executionError, setExecutionError] = useState<string | null>(null);
 
   const [teamforgeProjects, setTeamforgeProjects] = useState<TeamforgeProjectGraph[]>([]);
   const [registryLoading, setRegistryLoading] = useState(true);
@@ -82,18 +82,17 @@ function Projects() {
   const loadExecution = useCallback(async (): Promise<boolean> => {
     try {
       setProjects(await api.getExecutionProjects());
-      setExecutionLoadedOnce(true);
+      setExecutionError(null);
       setExecutionLoading(false);
       return true;
-    } catch {
-      if (executionLoadedOnce) {
-        setExecutionLoading(false);
-      } else {
-        setExecutionLoading(true);
-      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not load execution projects.";
+      setExecutionError(message);
+      setExecutionLoading(false);
       return false;
     }
-  }, [api, executionLoadedOnce]);
+  }, [api]);
 
   useEffect(() => {
     let cancelled = false;
@@ -134,8 +133,9 @@ function Projects() {
   }, [api]);
 
   useEffect(() => {
+    if (mode !== "control") return;
     loadRegistry();
-  }, [loadRegistry]);
+  }, [loadRegistry, mode]);
 
   const loadControlPlane = useCallback(async (projectId: string) => {
     setDetailLoading(true);
@@ -154,13 +154,14 @@ function Projects() {
   }, [api]);
 
   useEffect(() => {
+    if (mode !== "control") return;
     if (!selectedProjectId) {
       setControlPlane(null);
       setDraft(EMPTY_DRAFT);
       return;
     }
     loadControlPlane(selectedProjectId);
-  }, [selectedProjectId, loadControlPlane]);
+  }, [selectedProjectId, loadControlPlane, mode]);
 
   const totalHours = projects.reduce((sum, project) => sum + project.totalHours, 0);
   const githubProjects = projects.filter((project) => project.source === "github");
@@ -361,6 +362,11 @@ function Projects() {
 
       {mode === "execution" ? (
         <>
+          {executionError && (
+            <div style={styles.message}>
+              EXECUTION DATA FAILED TO LOAD. RETRYING IN THE BACKGROUND. {executionError}
+            </div>
+          )}
           {executionLoading ? (
             <div style={styles.summaryRow}>
               <SkeletonCard />

@@ -480,6 +480,68 @@ Finish the remaining TeamForge control-plane backlog on the current unreleased `
 
 ## Goal
 
+Publish the completed `0.1.18` control-plane tranche as the next OTA/release candidate:
+- create tag `v0.1.18` on the pushed `main` commit
+- push the tag to GitHub
+- verify the configured release workflow starts for both macOS targets and OTA publish steps
+
+## Plan
+
+- [x] Confirm current tag/workflow state and record the release target commit.
+- [x] Create local tag `v0.1.18` on commit `e3001f1`.
+- [x] Push the new tag to `origin` so GitHub Actions starts the release workflow.
+- [x] Verify the triggered workflow/run state and summarize what the user should test from the older installed build.
+
+## Review
+
+- Confirmed release target:
+  - local tag `v0.1.18` created as an annotated tag on commit `e3001f1`
+  - remote tag pushed to `origin`
+- Verified workflow inventory:
+  - `.github/workflows/release.yml` is the single configured GitHub Actions workflow in this repo
+  - the tag push auto-triggered `Build & Release` run `24537568963`
+- First run failure captured and resolved:
+  - initial `v0.1.18` run failed in `Build Tauri app (Apple Silicon)`
+  - root cause: optional repo secret `GH_RELEASE_PAT` was present but lacked release-write access, overriding the safe `GITHUB_TOKEN` fallback
+  - fix applied: deleted `GH_RELEASE_PAT`, then reran the same release run
+- Final rerun result:
+  - GitHub Actions run `24537568963` completed with `success`
+  - `Publish OTA release (Apple Silicon)` succeeded at `2026-04-16T22:47:29Z`
+  - `Publish OTA release (Intel)` succeeded at `2026-04-16T22:51:09Z`
+  - whole `build-macos` job completed successfully at `2026-04-16T22:52:08Z`
+
+## Goal
+
+Fix the Projects page loading stall reported against the installed `0.1.18` app:
+- identify why `EXECUTION` mode stays in skeleton state
+- keep the new control-plane work from blocking legacy execution data
+- verify the page can fail gracefully instead of hanging on first load
+
+## Plan
+
+- [x] Confirm whether the execution-project SQL path is healthy against the live app database and isolate the blocking fetch path.
+- [x] Patch `src/pages/Projects.tsx` so control-plane data only loads when `CONTROL PLANE` is opened and execution fetch failures surface as a recoverable message instead of an endless skeleton.
+- [x] Run frontend verification and summarize the likely root cause plus any release/version implications.
+
+## Review
+
+- Live investigation against the installed app state showed:
+  - the desktop SQLite file exists at `~/Library/Application Support/com.thoughtseed.teamforge/teamforge.db`
+  - the execution-project backing tables are present and populated
+  - the key SQL used by `get_execution_projects` succeeds directly against the live database
+- Root-cause call:
+  - the new Worker-backed TeamForge registry fetch was being started unconditionally on page mount, even in `EXECUTION` mode
+  - at the same time, the execution pane kept first-load failures hidden behind a permanent skeleton
+  - together that created a bad failure mode where the page looked hung even though the legacy execution query path itself was healthy
+- Implemented fix in `src/pages/Projects.tsx`:
+  - load TeamForge registry/control-plane data only when `CONTROL PLANE` is opened
+  - stop keeping `EXECUTION` mode in an endless skeleton on first failure
+  - surface a retrying error message while background retries continue
+- Verification passed:
+  - `pnpm build`
+
+## Goal
+
 Automate OTA release publication for signed macOS updater bundles:
 - upload the Tauri updater artifact, signature, and release notes to Cloudflare R2
 - call `/internal/releases/publish` with the published artifact metadata
@@ -519,6 +581,37 @@ Automate OTA release publication for signed macOS updater bundles:
   - `cargo test --manifest-path src-tauri/Cargo.toml` (`31 passed, 0 failed, 3 ignored`)
 - Manual follow-up remains with the user:
   - install/test the real `0.1.15 -> 0.1.16` OTA hop locally after pushing the tag and ensuring GitHub repo secrets/vars are set.
+
+## Goal
+
+Cut a patch release for the Projects page loading fix so the installed `v0.1.18` app can update to a version with the execution/control-plane loading bug resolved:
+- bump release metadata to `0.1.19`
+- refresh changelog/release-facing docs for the patch scope
+- verify the patch locally before publishing
+- commit, push, tag, and confirm the GitHub release workflow starts cleanly
+
+## Plan
+
+- [x] Bump release metadata and release-facing docs from `0.1.18` to `0.1.19` with a patch-focused changelog entry for the Projects page loading fix.
+- [x] Run local verification for the release candidate so the patch is backed by fresh build/test evidence before any git publish step.
+- [ ] Commit the patch-release changes on `main` and push the branch to `origin`.
+- [ ] Create and push the annotated tag `v0.1.19`, then verify the GitHub Actions release workflow reaches a healthy state.
+
+## Review
+
+- Bumped `0.1.19` across:
+  - root `package.json`
+  - `sidecar/package.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/tauri.conf.json`
+  - root package entry in `src-tauri/Cargo.lock`
+- Refreshed release-facing docs for the patch scope:
+  - `CHANGELOG.md` now includes `v0.1.19`
+  - `README.md` now describes the Projects loading hardening and reflects repo version `0.1.19`
+  - `README.md` latest published tag corrected to `v0.1.18`
+- Verification passed:
+  - `pnpm build`
+  - `cargo test --manifest-path src-tauri/Cargo.toml` (`33 passed, 0 failed, 3 ignored`)
 
 ## Goal
 

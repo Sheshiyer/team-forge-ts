@@ -2,6 +2,20 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.19 - 2026-04-17
+
+This patch release hardens the Projects page so execution data no longer appears hung when the control-plane fetch path is unavailable during first load.
+
+### Changed
+
+- Updated `src/pages/Projects.tsx` so TeamForge registry/control-plane data loads only when `CONTROL PLANE` is opened, keeping the legacy `EXECUTION` mode independent of the Worker-backed fetch path during initial page load.
+- Added a visible retrying error state for execution-data failures instead of leaving the page in a permanent skeleton while background retries continue.
+- Bumped release metadata to `0.1.19` across the frontend package, sidecar package, Tauri config, and Rust crate.
+
+### Verification
+
+- `pnpm build`
+
 ## v0.1.18 - 2026-04-17
 
 This release completes the first TeamForge Cloudflare control-plane tranche on top of the Worker-canonical project registry, adding live GitHub/Huly issue and milestone propagation, sync journal/conflict tracking, and an operator-facing control-plane UI.

@@ -85,13 +85,12 @@ Leave tracking and yearly holidays now live on a dedicated Calendar route, keepi
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
-## New In v0.1.18
+## New In v0.1.19
 
-- **Cloudflare-backed TeamForge control plane now covers live issue and milestone propagation** with GitHub-owned engineering flow, Huly-owned execution/admin flow, and GitHub-authoritative milestone drift review.
-- **Worker project control-plane routes shipped** so `/v1/project-mappings/:projectId/control-plane` exposes sync health, mappings, journal rows, conflicts, and policy state while `/v1/project-mappings/:projectId/actions` handles operator actions.
-- **Projects now includes an operator control-plane mode** with registry editing, sync now/pause/resume/retry actions, classification overrides, conflict review, and sync-journal visibility.
-- **Desktop TeamForge project registry remains Worker-canonical**: reads fetch remote first, writes only persist locally after a successful Worker response, and local SQLite stays a cache/offline projection.
-- **Release metadata is now at `0.1.18`** across the frontend package, sidecar package, Tauri config, and Rust crate.
+- **Projects execution loading is now isolated from the new control-plane fetch path** so opening the page no longer stalls `EXECUTION` mode while the TeamForge registry is still coming online.
+- **Control-plane data now loads lazily when `CONTROL PLANE` is opened**, preserving the Worker-canonical project registry without blocking the legacy execution summary view.
+- **Execution-mode first-load failures now surface a retry banner instead of an endless skeleton**, making startup races recoverable and visible from the installed app.
+- **Release metadata is now at `0.1.19`** across the frontend package, sidecar package, Tauri config, and Rust crate.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
@@ -133,8 +132,8 @@ On first launch:
 
 ## Releases
 
-- **Current app version in repo:** `0.1.18`
-- **Latest published tag:** `v0.1.17`
+- **Current app version in repo:** `0.1.19`
+- **Latest published tag:** `v0.1.18`
 - **Release trigger:** pushing a tag that matches `v*`
 - **Artifacts:** macOS `.app` and `.dmg` bundles built by GitHub Actions for Apple Silicon and Intel targets
 - **Download page:** [GitHub Releases](https://github.com/Sheshiyer/team-forge-ts/releases)
@@ -208,7 +207,7 @@ The rollout is now documented in-repo instead of living only in chat and GitHub 
 - [Cloudflare Project Sync Architecture](docs/plans/2026-04-17-cloudflare-project-sync-design.md)
 - [Cloudflare Project Backend Implementation Plan](docs/plans/2026-04-17-cloudflare-project-backend-implementation.md)
 
-The first Cloudflare control-plane tranche tracked in GitHub is now implemented on the current `0.1.18` line:
+The first Cloudflare control-plane tranche tracked in GitHub is now implemented on the current `0.1.19` line:
 
 - milestone propagation from GitHub into Huly with drift-review conflict records
 - Huly-owned execution/admin issue propagation
