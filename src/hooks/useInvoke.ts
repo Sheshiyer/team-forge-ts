@@ -49,6 +49,8 @@ import type {
   CredentialSyncResult,
   CloudIntegrationSyncResult,
   GitHubSyncReport,
+  IdentityMapEntry,
+  IdentityOverrideInput,
 } from "../lib/types";
 
 const invokeApi = {
@@ -97,6 +99,10 @@ const invokeApi = {
   updateEmployeeQuota: (employeeId: string, quota: number) =>
     invoke<void>("update_employee_quota", { employeeId, quota }),
   getSyncStatus: () => invoke<SyncState[]>("get_sync_status"),
+  getIdentityReviewQueue: (maxConfidence?: number) =>
+    invoke<IdentityMapEntry[]>("get_identity_review_queue", { maxConfidence }),
+  setIdentityOverride: (input: IdentityOverrideInput) =>
+    invoke<string>("set_identity_override", { input }),
   startBackgroundSync: () => invoke<string>("start_background_sync"),
   testHulyConnection: (token: string) =>
     invoke<string>("test_huly_connection", { token }),

@@ -257,6 +257,7 @@ pub struct SlackMessageActivity {
     pub id: Option<i64>,
     pub message_key: String,
     pub slack_channel_id: String,
+    pub slack_channel_name: Option<String>,
     pub slack_user_id: Option<String>,
     pub employee_id: Option<String>,
     pub message_ts: String,
@@ -564,6 +565,13 @@ pub struct ExecutionProjectView {
     pub billable_hours: f64,
     pub team_members: u32,
     pub utilization: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionProjectsResponse {
+    pub projects: Vec<ExecutionProjectView>,
+    pub source_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -337,6 +337,32 @@ export interface SyncState {
   lastCursor: string | null;
 }
 
+export interface IdentityMapEntry {
+  id: number | null;
+  source: string;
+  externalId: string;
+  employeeId: string | null;
+  confidence: number;
+  resolutionStatus: string;
+  matchMethod: string | null;
+  isOverride: boolean;
+  overrideBy: string | null;
+  overrideReason: string | null;
+  overrideAt: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IdentityOverrideInput {
+  source: string;
+  externalId: string;
+  employeeId: string;
+  operator: string;
+  reason: string;
+}
+
 export interface ClockifyUser {
   id: string;
   name: string;

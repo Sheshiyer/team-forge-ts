@@ -2,6 +2,25 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.20 - 2026-04-18
+
+This milestone closeout release finishes the Ops Fabric v0.3.0 execution track by clearing the remaining TeamForge and Paperclip integration issues, tightening the ops-event contract, and exposing the remaining operator controls needed to run the sync fabric safely.
+
+### Changed
+
+- Added operator-facing Huly cadence controls and identity review / manual override controls in `src/pages/Settings.tsx`.
+- Moved the remaining Slack analytics paths onto durable SQLite-backed activity reads in the TeamForge command/query layer.
+- Made background Huly issue, presence, and team-cache polling cadences configurable through scheduler settings.
+- Added `docs/runbooks/huly-sync-cadence.md` and tightened `docs/architecture/contracts/ops-event-schema-contract.md` with explicit backward-compatibility and collision-handling rules.
+- Closed the full `Ops Fabric v0.3.0 — TeamForge ↔ Paperclip Unification` milestone issue set (`#20`–`#39`) with evidence comments.
+- Bumped release metadata to `0.1.20` across the frontend package, sidecar package, Tauri config, and Rust crate.
+
+### Verification
+
+- `pnpm build`
+- `cargo fmt --manifest-path src-tauri/Cargo.toml`
+- `cargo test --manifest-path src-tauri/Cargo.toml identity -- --nocapture` currently fails before compilation because the local Cargo environment reports a checksum mismatch for `hyper-util v0.1.19`
+
 ## v0.1.19 - 2026-04-17
 
 This patch release hardens the Projects page so execution data no longer appears hung when the control-plane fetch path is unavailable during first load.

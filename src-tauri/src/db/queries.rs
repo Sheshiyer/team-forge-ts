@@ -22,6 +22,7 @@ pub async fn init_db(app_data_dir: &Path) -> Result<SqlitePool, sqlx::Error> {
         .await?;
     ensure_identity_map_columns(&pool).await?;
     ensure_github_repo_config_columns(&pool).await?;
+    ensure_slack_message_activity_columns(&pool).await?;
 
     Ok(pool)
 }
@@ -44,6 +45,18 @@ async fn ensure_identity_map_columns(pool: &SqlitePool) -> Result<(), sqlx::Erro
 
 async fn ensure_github_repo_config_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     for statement in ["ALTER TABLE github_repo_configs ADD COLUMN client_name TEXT"] {
+        if let Err(error) = sqlx::query(statement).execute(pool).await {
+            let message = error.to_string().to_lowercase();
+            if !message.contains("duplicate column name") {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_slack_message_activity_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    for statement in ["ALTER TABLE slack_message_activity ADD COLUMN slack_channel_name TEXT"] {
         if let Err(error) = sqlx::query(statement).execute(pool).await {
             let message = error.to_string().to_lowercase();
             if !message.contains("duplicate column name") {
@@ -675,15 +688,16 @@ pub async fn replace_teamforge_project_graph_projection(
         return Ok(());
     }
 
-    let project_ids: Vec<String> = graphs.iter().map(|graph| graph.project.id.clone()).collect();
+    let project_ids: Vec<String> = graphs
+        .iter()
+        .map(|graph| graph.project.id.clone())
+        .collect();
     let placeholders = project_ids
         .iter()
         .map(|_| "?")
         .collect::<Vec<_>>()
         .join(", ");
-    let delete_sql = format!(
-        "DELETE FROM teamforge_projects WHERE id NOT IN ({placeholders})"
-    );
+    let delete_sql = format!("DELETE FROM teamforge_projects WHERE id NOT IN ({placeholders})");
     let mut delete_query = sqlx::query(&delete_sql);
     for project_id in &project_ids {
         delete_query = delete_query.bind(project_id);
@@ -1425,6 +1439,7 @@ pub async fn upsert_slack_message_activity(
         "INSERT INTO slack_message_activity (
             message_key,
             slack_channel_id,
+            slack_channel_name,
             slack_user_id,
             employee_id,
             message_ts,
@@ -1432,9 +1447,10 @@ pub async fn upsert_slack_message_activity(
             content_preview,
             detected_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
         ON CONFLICT(message_key) DO UPDATE SET
           slack_channel_id = excluded.slack_channel_id,
+          slack_channel_name = excluded.slack_channel_name,
           slack_user_id = excluded.slack_user_id,
           employee_id = excluded.employee_id,
           message_ts = excluded.message_ts,
@@ -1444,6 +1460,7 @@ pub async fn upsert_slack_message_activity(
     )
     .bind(&activity.message_key)
     .bind(&activity.slack_channel_id)
+    .bind(&activity.slack_channel_name)
     .bind(&activity.slack_user_id)
     .bind(&activity.employee_id)
     .bind(&activity.message_ts)
@@ -1465,6 +1482,25 @@ pub async fn get_slack_message_activity_since(
          WHERE message_ts_ms IS NOT NULL AND message_ts_ms >= ?1
          ORDER BY message_ts_ms DESC",
     )
+    .bind(since_ts_ms)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_slack_message_activity_for_employee_since(
+    pool: &SqlitePool,
+    employee_id: &str,
+    since_ts_ms: i64,
+) -> Result<Vec<SlackMessageActivity>, sqlx::Error> {
+    sqlx::query_as::<_, SlackMessageActivity>(
+        "SELECT *
+         FROM slack_message_activity
+         WHERE employee_id = ?1
+           AND message_ts_ms IS NOT NULL
+           AND message_ts_ms >= ?2
+         ORDER BY message_ts_ms DESC",
+    )
+    .bind(employee_id)
     .bind(since_ts_ms)
     .fetch_all(pool)
     .await
@@ -2098,6 +2134,7 @@ mod tests {
             id: None,
             message_key: "slack:C123:1744470000.123456".to_string(),
             slack_channel_id: "C123".to_string(),
+            slack_channel_name: Some("daily-standup".to_string()),
             slack_user_id: Some("U123".to_string()),
             employee_id: Some(employee.id.clone()),
             message_ts: "1744470000.123456".to_string(),
@@ -2127,6 +2164,17 @@ mod tests {
             .expect("load persisted slack activity");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].employee_id.as_deref(), Some(employee.id.as_str()));
+        assert_eq!(rows[0].slack_channel_name.as_deref(), Some("daily-standup"));
+
+        let employee_rows =
+            get_slack_message_activity_for_employee_since(&pool, &employee.id, 1_744_469_000_000)
+                .await
+                .expect("load employee slack activity");
+        assert_eq!(employee_rows.len(), 1);
+        assert_eq!(
+            employee_rows[0].slack_channel_name.as_deref(),
+            Some("daily-standup")
+        );
 
         pool.close().await;
         let _ = std::fs::remove_dir_all(dir);
@@ -2540,7 +2588,10 @@ mod tests {
         assert_eq!(graph.artifacts.len(), 2);
         assert_eq!(graph.github_repos[0].repo, "Sheshiyer/parkarea-aleph");
         assert_eq!(graph.huly_links[0].huly_project_id, "huly-project-parkarea");
-        assert!(graph.artifacts.iter().any(|artifact| artifact.artifact_type == "prd"));
+        assert!(graph
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.artifact_type == "prd"));
 
         pool.close().await;
         let _ = std::fs::remove_dir_all(dir);

@@ -276,6 +276,7 @@ CREATE TABLE IF NOT EXISTS slack_message_activity (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     message_key TEXT NOT NULL UNIQUE,
     slack_channel_id TEXT NOT NULL,
+    slack_channel_name TEXT,
     slack_user_id TEXT,
     employee_id TEXT REFERENCES employees(id),
     message_ts TEXT NOT NULL,

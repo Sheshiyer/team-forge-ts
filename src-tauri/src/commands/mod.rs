@@ -230,6 +230,7 @@ fn slack_content_preview(text: Option<&str>) -> Option<String> {
 async fn persist_slack_message_activity(
     pool: &sqlx::SqlitePool,
     channel_id: &str,
+    channel_name: Option<&str>,
     slack_user_id: Option<&str>,
     employee_id: Option<&str>,
     message: &SlackMessage,
@@ -238,6 +239,7 @@ async fn persist_slack_message_activity(
         id: None,
         message_key: slack_message_key(channel_id, &message.ts),
         slack_channel_id: channel_id.to_string(),
+        slack_channel_name: channel_name.map(|value| value.to_string()),
         slack_user_id: slack_user_id.map(|value| value.to_string()),
         employee_id: employee_id.map(|value| value.to_string()),
         message_ts: message.ts.clone(),
@@ -760,7 +762,9 @@ pub async fn get_teamforge_projects(
                 .await
                 .map_err(|e| format!("load cached TeamForge projects: {e}"))?;
             if cached.is_empty() {
-                Err(format!("load TeamForge projects from Worker: {remote_error}"))
+                Err(format!(
+                    "load TeamForge projects from Worker: {remote_error}"
+                ))
             } else {
                 Ok(cached)
             }
@@ -4837,102 +4841,28 @@ pub async fn get_chat_activity(db: State<'_, DbPool>) -> Result<Vec<ChatActivity
         }
     }
 
-    let mut slack_live_synced = false;
-    if let Some(client) = get_optional_slack_client(pool).await? {
-        slack_live_synced = true;
-        let channel_filters = queries::get_setting(pool, "slack_channel_filters")
-            .await
-            .map_err(|e| format!("read slack_channel_filters: {e}"))?
-            .unwrap_or_default();
+    let seven_days_ago_ms = Utc::now()
+        .checked_sub_signed(chrono::Duration::days(7))
+        .unwrap_or_else(Utc::now)
+        .timestamp_millis();
+    let persisted_rows = queries::get_slack_message_activity_since(pool, seven_days_ago_ms)
+        .await
+        .map_err(|e| format!("load persisted slack activity: {e}"))?;
+    for row in persisted_rows {
+        let Some(employee_id) = row.employee_id.as_ref() else {
+            continue;
+        };
+        let Some(employee_name) = employee_name_by_id.get(employee_id) else {
+            continue;
+        };
 
-        let channels = filter_slack_channels(
-            client.list_channels().await.unwrap_or_default(),
-            &channel_filters,
+        add_chat_activity(
+            &mut per_user,
+            employee_name,
+            row.slack_channel_id.clone(),
+            row.message_ts_ms,
+            "Slack",
         );
-        let users = client.list_users().await.unwrap_or_default();
-        let slack_user_to_employee_id =
-            resolve_slack_user_employee_ids(pool, &employees, &users).await?;
-
-        let oldest_ts = format!(
-            "{}.000000",
-            Utc::now()
-                .checked_sub_signed(chrono::Duration::days(7))
-                .unwrap_or_else(Utc::now)
-                .timestamp()
-        );
-
-        for channel in channels {
-            let channel_id = channel.id.clone();
-            let messages = client
-                .get_channel_messages_since(&channel_id, &oldest_ts)
-                .await
-                .unwrap_or_default();
-
-            for message in messages {
-                if message.bot_id.is_some() || message.subtype.as_deref() == Some("bot_message") {
-                    continue;
-                }
-
-                let slack_user_id = message.user.as_deref();
-                let mapped_employee_id = slack_user_id
-                    .and_then(|id| slack_user_to_employee_id.get(id))
-                    .cloned();
-                let mapped_employee_name = mapped_employee_id
-                    .as_ref()
-                    .and_then(|id| employee_name_by_id.get(id));
-
-                if let Err(error) = persist_slack_message_activity(
-                    pool,
-                    &channel_id,
-                    slack_user_id,
-                    mapped_employee_id.as_deref(),
-                    &message,
-                )
-                .await
-                {
-                    eprintln!("[commands] warning: {error}");
-                }
-
-                let Some(employee_name) = mapped_employee_name else {
-                    continue;
-                };
-
-                add_chat_activity(
-                    &mut per_user,
-                    employee_name,
-                    channel_id.clone(),
-                    slack_ts_to_millis(&message.ts),
-                    "Slack",
-                );
-            }
-        }
-    }
-
-    if !slack_live_synced {
-        let seven_days_ago_ms = Utc::now()
-            .checked_sub_signed(chrono::Duration::days(7))
-            .unwrap_or_else(Utc::now)
-            .timestamp_millis();
-        if let Ok(persisted_rows) =
-            queries::get_slack_message_activity_since(pool, seven_days_ago_ms).await
-        {
-            for row in persisted_rows {
-                let Some(employee_id) = row.employee_id.as_ref() else {
-                    continue;
-                };
-                let Some(employee_name) = employee_name_by_id.get(employee_id) else {
-                    continue;
-                };
-
-                add_chat_activity(
-                    &mut per_user,
-                    employee_name,
-                    row.slack_channel_id.clone(),
-                    row.message_ts_ms,
-                    "Slack",
-                );
-            }
-        }
     }
 
     let mut results: Vec<ChatActivityView> = per_user
@@ -5177,10 +5107,6 @@ pub async fn get_employee_summary(
             employee.name
         ));
     }
-    let employees = queries::get_employees(pool)
-        .await
-        .map_err(|e| format!("db error: {e}"))?;
-
     let snapshot = build_team_snapshot_from_cache(pool, None).await?;
     let today = Local::now().date_naive();
     let weekday_num = today.weekday().num_days_from_monday();
@@ -5348,103 +5274,32 @@ pub async fn get_employee_summary(
         }
     }
 
-    if let Some(client) = get_optional_slack_client(pool).await? {
-        let channel_filters = queries::get_setting(pool, "slack_channel_filters")
-            .await
-            .map_err(|e| format!("read slack_channel_filters: {e}"))?
-            .unwrap_or_default();
-        let channels = filter_slack_channels(
-            client.list_channels().await.unwrap_or_default(),
-            &channel_filters,
-        );
-        let standup_channel_ids: HashSet<String> = channels
-            .iter()
-            .filter(|channel| {
-                channel
-                    .name
-                    .as_deref()
-                    .map(is_standup_label)
-                    .unwrap_or(false)
-            })
-            .map(|channel| channel.id.clone())
-            .collect();
-        let users = client.list_users().await.unwrap_or_default();
-        let mut slack_user_ids: HashSet<String> =
-            queries::get_identity_external_ids_for_employee(pool, "slack", &employee.id)
-                .await
-                .map_err(|e| format!("load slack identity ids: {e}"))?
-                .into_iter()
-                .collect();
-        if slack_user_ids.is_empty() {
-            let slack_user_to_employee_id =
-                resolve_slack_user_employee_ids(pool, &employees, &users).await?;
-            slack_user_ids = slack_user_to_employee_id
-                .iter()
-                .filter_map(|(user_id, employee_id)| {
-                    if employee_id == &employee.id {
-                        Some(user_id.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-        }
-
-        if !slack_user_ids.is_empty() {
-            let oldest_ts = format!(
-                "{}.000000",
-                Utc::now()
-                    .checked_sub_signed(chrono::Duration::days(7))
-                    .unwrap_or_else(Utc::now)
-                    .timestamp()
-            );
-
-            for channel in channels {
-                let is_standup_channel = standup_channel_ids.contains(&channel.id);
-                for message in client
-                    .get_channel_messages_since(&channel.id, &oldest_ts)
-                    .await
-                    .unwrap_or_default()
-                {
-                    if message.bot_id.is_some() || message.subtype.as_deref() == Some("bot_message")
-                    {
-                        continue;
-                    }
-
-                    let slack_user_id = message.user.as_deref();
-                    let mapped_employee_id = slack_user_id
-                        .filter(|user_id| slack_user_ids.contains(*user_id))
-                        .map(|_| employee.id.clone());
-                    if let Err(error) = persist_slack_message_activity(
-                        pool,
-                        &channel.id,
-                        slack_user_id,
-                        mapped_employee_id.as_deref(),
-                        &message,
-                    )
-                    .await
-                    {
-                        eprintln!("[commands] warning: {error}");
-                    }
-                    if mapped_employee_id.is_none() {
-                        continue;
-                    }
-
-                    messages_last_7_days += 1;
-                    if let Some(timestamp_ms) = slack_ts_to_millis(&message.ts) {
-                        last_message_at_ms = Some(
-                            last_message_at_ms
-                                .map_or(timestamp_ms, |current| current.max(timestamp_ms)),
-                        );
-                        if is_standup_channel {
-                            standups_last_7_days += 1;
-                            last_standup_at_ms = Some(
-                                last_standup_at_ms
-                                    .map_or(timestamp_ms, |current| current.max(timestamp_ms)),
-                            );
-                        }
-                    }
-                }
+    let seven_days_ago_ms = Utc::now()
+        .checked_sub_signed(chrono::Duration::days(7))
+        .unwrap_or_else(Utc::now)
+        .timestamp_millis();
+    let persisted_slack_rows = queries::get_slack_message_activity_for_employee_since(
+        pool,
+        &employee.id,
+        seven_days_ago_ms,
+    )
+    .await
+    .map_err(|e| format!("load persisted employee slack activity: {e}"))?;
+    for row in persisted_slack_rows {
+        messages_last_7_days += 1;
+        if let Some(timestamp_ms) = row.message_ts_ms {
+            last_message_at_ms =
+                Some(last_message_at_ms.map_or(timestamp_ms, |current| current.max(timestamp_ms)));
+            if row
+                .slack_channel_name
+                .as_deref()
+                .map(is_standup_label)
+                .unwrap_or(false)
+            {
+                standups_last_7_days += 1;
+                last_standup_at_ms = Some(
+                    last_standup_at_ms.map_or(timestamp_ms, |current| current.max(timestamp_ms)),
+                );
             }
         }
     }
@@ -5702,6 +5557,7 @@ pub async fn get_standup_report(db: State<'_, DbPool>) -> Result<StandupReport, 
                 if let Err(error) = persist_slack_message_activity(
                     pool,
                     &channel.id,
+                    channel.name.as_deref(),
                     slack_user_id,
                     mapped_employee_id.as_deref(),
                     &msg,

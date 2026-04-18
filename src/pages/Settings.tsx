@@ -14,9 +14,18 @@ import {
   type DownloadProgressState,
   type TauriUpdateHandle,
 } from "../lib/updater";
-import type { ClockifyWorkspace, Employee, SyncState } from "../lib/types";
+import type {
+  ClockifyWorkspace,
+  Employee,
+  IdentityMapEntry,
+  SyncState,
+} from "../lib/types";
 
 const DEFAULT_IGNORED_EMAILS = "thoughtseedlabs@gmail.com";
+const DEFAULT_HULY_ISSUES_INTERVAL_SECONDS = "600";
+const DEFAULT_HULY_PRESENCE_INTERVAL_SECONDS = "120";
+const DEFAULT_HULY_TEAM_CACHE_INTERVAL_SECONDS = "3600";
+const DEFAULT_IDENTITY_OPERATOR = "TeamForge operator";
 const SLACK_REQUIRED_SCOPES = [
   "channels:read",
   "channels:history",
@@ -80,6 +89,18 @@ function normalizeGithubRepos(value: string): string {
     .join(", ");
 }
 
+function normalizePositiveInteger(value: string, fallback: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return String(parsed);
+}
+
 function Settings() {
   const api = useInvoke();
   const viewportWidth = useViewportWidth();
@@ -101,6 +122,14 @@ function Settings() {
   const [hulyMessage, setHulyMessage] = useState<string | null>(null);
   const [hulySyncing, setHulySyncing] = useState(false);
   const [hulySyncResult, setHulySyncResult] = useState<string | null>(null);
+  const [hulyIssuesIntervalSeconds, setHulyIssuesIntervalSeconds] = useState(
+    DEFAULT_HULY_ISSUES_INTERVAL_SECONDS
+  );
+  const [hulyPresenceIntervalSeconds, setHulyPresenceIntervalSeconds] = useState(
+    DEFAULT_HULY_PRESENCE_INTERVAL_SECONDS
+  );
+  const [hulyTeamCacheIntervalSeconds, setHulyTeamCacheIntervalSeconds] =
+    useState(DEFAULT_HULY_TEAM_CACHE_INTERVAL_SECONDS);
 
   const [slackBotToken, setSlackBotToken] = useState("");
   const [showSlackBotToken, setShowSlackBotToken] = useState(false);
@@ -141,6 +170,21 @@ function Settings() {
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [editingQuotas, setEditingQuotas] = useState<Record<string, string>>({});
+  const [identityReviewQueue, setIdentityReviewQueue] = useState<IdentityMapEntry[]>([]);
+  const [identityReviewLoading, setIdentityReviewLoading] = useState(false);
+  const [identityReviewMessage, setIdentityReviewMessage] = useState<string | null>(null);
+  const [identityOverrideOperator, setIdentityOverrideOperator] = useState(
+    DEFAULT_IDENTITY_OPERATOR
+  );
+  const [identityOverrideSelections, setIdentityOverrideSelections] = useState<
+    Record<string, string>
+  >({});
+  const [identityOverrideReasons, setIdentityOverrideReasons] = useState<
+    Record<string, string>
+  >({});
+  const [identityOverrideBusyKey, setIdentityOverrideBusyKey] = useState<string | null>(
+    null
+  );
 
   const trimmedSlackToken = slackBotToken.trim();
   const normalizedIgnoredEmployeeIdString =
@@ -169,6 +213,13 @@ function Settings() {
     updateStatus === "installing" ||
     updateStatus === "restarting";
   const isCompactLayout = viewportWidth < 1080;
+  const employeeNameById = new Map(employees.map((employee) => [employee.id, employee.name]));
+  const activeEmployees = [...employees]
+    .filter((employee) => employee.isActive)
+    .sort((left, right) => left.name.localeCompare(right.name));
+
+  const getIdentityQueueKey = (entry: IdentityMapEntry) =>
+    `${entry.source}:${entry.externalId}`;
 
   const loadSettings = useCallback(async () => {
     try {
@@ -180,6 +231,18 @@ function Settings() {
         parseMultiValueSetting(settings.clockify_ignored_employee_ids || "")
       );
       if (settings.huly_token) setHulyToken(settings.huly_token);
+      setHulyIssuesIntervalSeconds(
+        settings.huly_sync_issues_interval_seconds ||
+          DEFAULT_HULY_ISSUES_INTERVAL_SECONDS
+      );
+      setHulyPresenceIntervalSeconds(
+        settings.huly_sync_presence_interval_seconds ||
+          DEFAULT_HULY_PRESENCE_INTERVAL_SECONDS
+      );
+      setHulyTeamCacheIntervalSeconds(
+        settings.huly_sync_team_cache_interval_seconds ||
+          DEFAULT_HULY_TEAM_CACHE_INTERVAL_SECONDS
+      );
       if (settings.slack_bot_token) setSlackBotToken(settings.slack_bot_token);
       setSlackChannelFilters(settings.slack_channel_filters || "");
       if (settings.github_token) setGithubToken(settings.github_token);
@@ -193,6 +256,29 @@ function Settings() {
     } catch { /* Settings may not exist yet */ }
   }, []);
 
+  const loadIdentityReviewQueue = useCallback(async () => {
+    setIdentityReviewLoading(true);
+    setIdentityReviewMessage(null);
+    try {
+      const reviewQueue = await api.getIdentityReviewQueue(0.85);
+      setIdentityReviewQueue(reviewQueue);
+      setIdentityOverrideSelections((current) => {
+        const next = { ...current };
+        for (const entry of reviewQueue) {
+          const key = `${entry.source}:${entry.externalId}`;
+          if (!next[key] && entry.employeeId) {
+            next[key] = entry.employeeId;
+          }
+        }
+        return next;
+      });
+    } catch (error) {
+      setIdentityReviewMessage(`Error: ${String(error)}`);
+    } finally {
+      setIdentityReviewLoading(false);
+    }
+  }, [api]);
+
   const loadSyncStatus = useCallback(async () => {
     try { setSyncStates(await api.getSyncStatus()); } catch { /* ignore */ }
   }, []);
@@ -205,7 +291,8 @@ function Settings() {
     loadSettings();
     loadSyncStatus();
     loadEmployees();
-  }, [loadSettings, loadSyncStatus, loadEmployees]);
+    loadIdentityReviewQueue();
+  }, [loadIdentityReviewQueue, loadSettings, loadSyncStatus, loadEmployees]);
 
   useEffect(() => {
     let cancelled = false;
@@ -324,10 +411,42 @@ function Settings() {
 
   const handleSaveHuly = async () => {
     try {
+      const normalizedIssuesInterval = normalizePositiveInteger(
+        hulyIssuesIntervalSeconds,
+        DEFAULT_HULY_ISSUES_INTERVAL_SECONDS
+      );
+      const normalizedPresenceInterval = normalizePositiveInteger(
+        hulyPresenceIntervalSeconds,
+        DEFAULT_HULY_PRESENCE_INTERVAL_SECONDS
+      );
+      const normalizedTeamCacheInterval = normalizePositiveInteger(
+        hulyTeamCacheIntervalSeconds,
+        DEFAULT_HULY_TEAM_CACHE_INTERVAL_SECONDS
+      );
       await api.saveSetting("huly_token", hulyToken);
-      setHulyMessage("Huly token saved");
+      await api.saveSetting(
+        "huly_sync_issues_interval_seconds",
+        normalizedIssuesInterval
+      );
+      await api.saveSetting(
+        "huly_sync_presence_interval_seconds",
+        normalizedPresenceInterval
+      );
+      await api.saveSetting(
+        "huly_sync_team_cache_interval_seconds",
+        normalizedTeamCacheInterval
+      );
+      setHulyIssuesIntervalSeconds(normalizedIssuesInterval);
+      setHulyPresenceIntervalSeconds(normalizedPresenceInterval);
+      setHulyTeamCacheIntervalSeconds(normalizedTeamCacheInterval);
+      const schedulerMessage = await api.startBackgroundSync();
+      setHulyStatus("success");
+      setHulyMessage(`Huly settings saved • ${schedulerMessage}`);
       setTimeout(() => { if (hulyStatus !== "error") setHulyMessage(null); }, 3000);
-    } catch (err) { setHulyMessage(`Error: ${err}`); }
+    } catch (err) {
+      setHulyStatus("error");
+      setHulyMessage(`Error: ${err}`);
+    }
   };
 
   const handleHulySync = async () => {
@@ -351,6 +470,52 @@ function Settings() {
       await loadEmployees();
       setEditingQuotas((prev) => { const next = { ...prev }; delete next[employeeId]; return next; });
     } catch { /* ignore */ }
+  };
+
+  const handleIdentityOverride = async (entry: IdentityMapEntry) => {
+    const queueKey = getIdentityQueueKey(entry);
+    const employeeId =
+      identityOverrideSelections[queueKey] || entry.employeeId || "";
+    const operator = identityOverrideOperator.trim() || DEFAULT_IDENTITY_OPERATOR;
+    const reason = (identityOverrideReasons[queueKey] || "").trim();
+
+    if (!employeeId) {
+      setIdentityReviewMessage(
+        `Error: select an employee before overriding ${entry.source}:${entry.externalId}`
+      );
+      return;
+    }
+
+    if (!reason) {
+      setIdentityReviewMessage(
+        `Error: add an override reason for ${entry.source}:${entry.externalId}`
+      );
+      return;
+    }
+
+    setIdentityOverrideBusyKey(queueKey);
+    setIdentityReviewMessage(null);
+    try {
+      const result = await api.setIdentityOverride({
+        source: entry.source,
+        externalId: entry.externalId,
+        employeeId,
+        operator,
+        reason,
+      });
+      setIdentityReviewMessage(result);
+      setIdentityOverrideReasons((current) => {
+        const next = { ...current };
+        delete next[queueKey];
+        return next;
+      });
+      await loadIdentityReviewQueue();
+      await loadEmployees();
+    } catch (error) {
+      setIdentityReviewMessage(`Error: ${String(error)}`);
+    } finally {
+      setIdentityOverrideBusyKey(null);
+    }
   };
 
   const handleTestSlack = async () => {
@@ -780,6 +945,49 @@ function Settings() {
           )}
         </div>
 
+        <div style={styles.field}>
+          <label style={styles.label}>SYNC CADENCE (SECONDS)</label>
+          <div style={styles.inlineFieldGrid}>
+            <div>
+              <label style={styles.miniLabel}>ISSUES</label>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={hulyIssuesIntervalSeconds}
+                onChange={(event) => setHulyIssuesIntervalSeconds(event.target.value)}
+                style={styles.input}
+              />
+            </div>
+            <div>
+              <label style={styles.miniLabel}>PRESENCE</label>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={hulyPresenceIntervalSeconds}
+                onChange={(event) => setHulyPresenceIntervalSeconds(event.target.value)}
+                style={styles.input}
+              />
+            </div>
+            <div>
+              <label style={styles.miniLabel}>TEAM CACHE</label>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={hulyTeamCacheIntervalSeconds}
+                onChange={(event) => setHulyTeamCacheIntervalSeconds(event.target.value)}
+                style={styles.input}
+              />
+            </div>
+          </div>
+          <div style={styles.helperText}>
+            SAVE RESTARTS THE BACKGROUND SCHEDULER SO UPDATED HULY ISSUE, PRESENCE,
+            AND TEAM-CACHE POLLING WINDOWS APPLY IMMEDIATELY.
+          </div>
+        </div>
+
         <div style={styles.buttonRow}>
           <button onClick={handleSaveHuly} style={styles.primaryButton}>SAVE</button>
           <button
@@ -795,6 +1003,222 @@ function Settings() {
             </span>
           )}
         </div>
+      </div>
+
+      {/* Identity Review */}
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-peach)" }}>
+        <h2 style={styles.sectionTitle}>IDENTITY REVIEW</h2>
+        <div style={styles.sectionDivider} />
+
+        <div style={styles.summaryGrid}>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>QUEUE SIZE</span>
+            <span style={styles.summaryValue}>{identityReviewQueue.length}</span>
+          </div>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>LOW CONFIDENCE</span>
+            <span style={styles.summaryValue}>
+              {
+                identityReviewQueue.filter(
+                  (entry) => entry.employeeId && entry.confidence < 1
+                ).length
+              }
+            </span>
+          </div>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>UNLINKED</span>
+            <span style={styles.summaryValue}>
+              {
+                identityReviewQueue.filter((entry) => !entry.employeeId).length
+              }
+            </span>
+          </div>
+        </div>
+
+        <div style={styles.field}>
+          <label style={styles.label}>OVERRIDE OPERATOR</label>
+          <input
+            value={identityOverrideOperator}
+            onChange={(event) => setIdentityOverrideOperator(event.target.value)}
+            placeholder={DEFAULT_IDENTITY_OPERATOR}
+            style={styles.input}
+          />
+          <div style={styles.helperText}>
+            MANUAL OVERRIDES RECORD THE OPERATOR, REASON, AND OVERRIDE TIMESTAMP
+            INTO THE CANONICAL `identity_map` ROW.
+          </div>
+        </div>
+
+        <div style={styles.buttonRow}>
+          <button
+            onClick={loadIdentityReviewQueue}
+            disabled={identityReviewLoading}
+            style={{
+              ...styles.ghostButton,
+              opacity: identityReviewLoading ? 0.5 : 1,
+            }}
+          >
+            {identityReviewLoading ? "REFRESHING..." : "REFRESH REVIEW QUEUE"}
+          </button>
+          {identityReviewMessage && (
+            <span
+              style={{
+                ...styles.label,
+                color: identityReviewMessage.startsWith("Error")
+                  ? "var(--lcars-red)"
+                  : "var(--lcars-green)",
+              }}
+            >
+              {identityReviewMessage.toUpperCase()}
+            </span>
+          )}
+        </div>
+
+        {identityReviewLoading ? (
+          <div style={styles.helperText}>LOADING IDENTITY REVIEW QUEUE...</div>
+        ) : identityReviewQueue.length === 0 ? (
+          <p style={styles.emptyText}>
+            NO UNRESOLVED OR LOW-CONFIDENCE IDENTITY LINKS NEED REVIEW.
+          </p>
+        ) : (
+          <div style={styles.identityQueue}>
+            {identityReviewQueue.map((entry) => {
+              const queueKey = getIdentityQueueKey(entry);
+              const selectedEmployeeId =
+                identityOverrideSelections[queueKey] || entry.employeeId || "";
+              const selectedEmployeeName = selectedEmployeeId
+                ? employeeNameById.get(selectedEmployeeId) || selectedEmployeeId
+                : "UNLINKED";
+              const overrideReason = identityOverrideReasons[queueKey] || "";
+              const overrideBusy = identityOverrideBusyKey === queueKey;
+
+              return (
+                <div key={queueKey} style={styles.identityCard}>
+                  <div style={styles.identityCardHeader}>
+                    <div>
+                      <div style={styles.identityTitle}>
+                        {entry.source.toUpperCase()} • {entry.externalId}
+                      </div>
+                      <div style={styles.identitySubtitle}>
+                        {entry.matchMethod || "UNCLASSIFIED MATCH METHOD"}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        ...styles.identityBadge,
+                        color:
+                          entry.confidence >= 0.95
+                            ? "var(--lcars-green)"
+                            : entry.confidence >= 0.75
+                              ? "var(--lcars-orange)"
+                              : "var(--lcars-red)",
+                      }}
+                    >
+                      {Math.round(entry.confidence * 100)}%
+                    </div>
+                  </div>
+
+                  <div style={styles.identityMetaGrid}>
+                    <div style={styles.identityMetaItem}>
+                      <span style={styles.identityMetaLabel}>STATUS</span>
+                      <span style={styles.identityMetaValue}>
+                        {entry.resolutionStatus.toUpperCase()}
+                      </span>
+                    </div>
+                    <div style={styles.identityMetaItem}>
+                      <span style={styles.identityMetaLabel}>CURRENT LINK</span>
+                      <span style={styles.identityMetaValue}>
+                        {entry.employeeId
+                          ? employeeNameById.get(entry.employeeId) || entry.employeeId
+                          : "UNLINKED"}
+                      </span>
+                    </div>
+                    <div style={styles.identityMetaItem}>
+                      <span style={styles.identityMetaLabel}>OVERRIDE BY</span>
+                      <span style={styles.identityMetaValue}>
+                        {entry.overrideBy || "—"}
+                      </span>
+                    </div>
+                    <div style={styles.identityMetaItem}>
+                      <span style={styles.identityMetaLabel}>OVERRIDE REASON</span>
+                      <span style={styles.identityMetaValue}>
+                        {entry.overrideReason || "—"}
+                      </span>
+                    </div>
+                    <div style={styles.identityMetaItem}>
+                      <span style={styles.identityMetaLabel}>OVERRIDE AT</span>
+                      <span style={styles.identityMetaValue}>
+                        {entry.overrideAt ? timeAgo(entry.overrideAt) : "—"}
+                      </span>
+                    </div>
+                    <div style={styles.identityMetaItem}>
+                      <span style={styles.identityMetaLabel}>UPDATED</span>
+                      <span style={styles.identityMetaValue}>
+                        {timeAgo(entry.updatedAt)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div style={styles.inlineFieldGrid}>
+                    <div>
+                      <label style={styles.miniLabel}>TARGET EMPLOYEE</label>
+                      <select
+                        value={selectedEmployeeId}
+                        onChange={(event) =>
+                          setIdentityOverrideSelections((current) => ({
+                            ...current,
+                            [queueKey]: event.target.value,
+                          }))
+                        }
+                        style={styles.input}
+                      >
+                        <option value="">SELECT CREW MEMBER</option>
+                        {activeEmployees.map((employee) => (
+                          <option key={employee.id} value={employee.id}>
+                            {employee.name}
+                          </option>
+                        ))}
+                      </select>
+                      <div style={styles.helperText}>
+                        TARGETING {selectedEmployeeName.toUpperCase()}
+                      </div>
+                    </div>
+                    <div>
+                      <label style={styles.miniLabel}>OVERRIDE REASON</label>
+                      <textarea
+                        value={overrideReason}
+                        onChange={(event) =>
+                          setIdentityOverrideReasons((current) => ({
+                            ...current,
+                            [queueKey]: event.target.value,
+                          }))
+                        }
+                        placeholder="WHY THIS LINK IS AUTHORITATIVE"
+                        style={{ ...styles.input, minHeight: 84, resize: "vertical" }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={styles.buttonRow}>
+                    <button
+                      onClick={() => handleIdentityOverride(entry)}
+                      disabled={overrideBusy || !selectedEmployeeId || !overrideReason.trim()}
+                      style={{
+                        ...styles.primaryButton,
+                        opacity:
+                          overrideBusy || !selectedEmployeeId || !overrideReason.trim()
+                            ? 0.5
+                            : 1,
+                      }}
+                    >
+                      {overrideBusy ? "APPLYING..." : "APPLY MANUAL OVERRIDE"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Slack Connection */}
@@ -1288,6 +1712,21 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     flexWrap: "wrap" as const,
   },
+  inlineFieldGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gap: 12,
+    alignItems: "start",
+  },
+  miniLabel: {
+    display: "block",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    color: "var(--text-quaternary)",
+    marginBottom: 6,
+    letterSpacing: "1.25px",
+    textTransform: "uppercase" as const,
+  },
   checkboxRow: {
     display: "flex",
     alignItems: "center",
@@ -1396,6 +1835,71 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11,
     color: "inherit",
     opacity: 0.88,
+    wordBreak: "break-word" as const,
+  },
+  identityQueue: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 14,
+    marginTop: 14,
+  },
+  identityCard: {
+    ...lcarsPageStyles.subtleCard,
+    borderLeftColor: "var(--lcars-peach)",
+    padding: "14px 16px",
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 12,
+  },
+  identityCardHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "flex-start",
+    flexWrap: "wrap" as const,
+  },
+  identityTitle: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 11,
+    color: "var(--lcars-orange)",
+    letterSpacing: "1.2px",
+    textTransform: "uppercase" as const,
+  },
+  identitySubtitle: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-tan)",
+    marginTop: 4,
+    wordBreak: "break-word" as const,
+  },
+  identityBadge: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 11,
+    letterSpacing: "1.4px",
+    textTransform: "uppercase" as const,
+    whiteSpace: "nowrap" as const,
+  },
+  identityMetaGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gap: 10,
+  },
+  identityMetaItem: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 4,
+  },
+  identityMetaLabel: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    color: "var(--text-quaternary)",
+    letterSpacing: "1.3px",
+    textTransform: "uppercase" as const,
+  },
+  identityMetaValue: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-tan)",
     wordBreak: "break-word" as const,
   },
   summaryGrid: {

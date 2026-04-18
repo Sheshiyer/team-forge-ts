@@ -15,6 +15,20 @@ use crate::slack::client::SlackClient;
 use crate::slack::sync::SlackSyncEngine;
 use crate::sync::alerts;
 
+const DEFAULT_HULY_ISSUES_INTERVAL_SECS: u64 = 600;
+const DEFAULT_HULY_PRESENCE_INTERVAL_SECS: u64 = 120;
+const DEFAULT_HULY_TEAM_CACHE_INTERVAL_SECS: u64 = 3600;
+
+async fn load_interval_setting(pool: &SqlitePool, key: &str, default_secs: u64) -> u64 {
+    queries::get_setting(pool, key)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default_secs)
+}
+
 /// Background sync scheduler that polls integrations on intervals.
 pub struct SyncScheduler {
     cancel_tx: watch::Sender<bool>,
@@ -157,16 +171,35 @@ impl SyncScheduler {
             match HulyClient::connect(None, &token).await {
                 Ok(client) => {
                     let client = Arc::new(client);
+                    let huly_issues_interval = load_interval_setting(
+                        &pool,
+                        "huly_sync_issues_interval_seconds",
+                        DEFAULT_HULY_ISSUES_INTERVAL_SECS,
+                    )
+                    .await;
+                    let huly_presence_interval = load_interval_setting(
+                        &pool,
+                        "huly_sync_presence_interval_seconds",
+                        DEFAULT_HULY_PRESENCE_INTERVAL_SECS,
+                    )
+                    .await;
+                    let huly_team_cache_interval = load_interval_setting(
+                        &pool,
+                        "huly_sync_team_cache_interval_seconds",
+                        DEFAULT_HULY_TEAM_CACHE_INTERVAL_SECS,
+                    )
+                    .await;
 
                     // 4. Huly issue activity every 10 minutes
                     {
                         let pool = pool.clone();
                         let client = client.clone();
+                        let interval_secs = huly_issues_interval;
                         let mut rx = cancel_rx.clone();
                         handles.push(tokio::spawn(async move {
                             loop {
                                 tokio::select! {
-                                    _ = tokio::time::sleep(std::time::Duration::from_secs(600)) => {}
+                                    _ = tokio::time::sleep(std::time::Duration::from_secs(interval_secs)) => {}
                                     _ = rx.changed() => { break; }
                                 }
                                 let engine = HulySyncEngine::new(client.clone(), pool.clone());
@@ -181,11 +214,12 @@ impl SyncScheduler {
                     {
                         let pool = pool.clone();
                         let client = client.clone();
+                        let interval_secs = huly_presence_interval;
                         let mut rx = cancel_rx.clone();
                         handles.push(tokio::spawn(async move {
                             loop {
                                 tokio::select! {
-                                    _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {}
+                                    _ = tokio::time::sleep(std::time::Duration::from_secs(interval_secs)) => {}
                                     _ = rx.changed() => { break; }
                                 }
                                 let engine = HulySyncEngine::new(client.clone(), pool.clone());
@@ -200,11 +234,12 @@ impl SyncScheduler {
                     {
                         let pool = pool.clone();
                         let client = client.clone();
+                        let interval_secs = huly_team_cache_interval;
                         let mut rx = cancel_rx.clone();
                         handles.push(tokio::spawn(async move {
                             loop {
                                 tokio::select! {
-                                    _ = tokio::time::sleep(std::time::Duration::from_secs(3600)) => {}
+                                    _ = tokio::time::sleep(std::time::Duration::from_secs(interval_secs)) => {}
                                     _ = rx.changed() => { break; }
                                 }
                                 let engine = HulySyncEngine::new(client.clone(), pool.clone());
