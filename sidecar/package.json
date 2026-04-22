@@ -1,6 +1,6 @@
 {
   "name": "@teamforge/huly-sidecar",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "description": "Reserved Huly-sidecar utilities for TeamForge desktop and project-sync workflows.",
   "private": true,
   "type": "module",

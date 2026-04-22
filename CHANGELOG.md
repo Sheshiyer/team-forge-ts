@@ -2,6 +2,41 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.21 - 2026-04-22
+
+This release turns the new TeamForge founder console into a real local-control
+surface by wiring native vault selection and Paperclip launcher controls on top
+of the Worker-backed project and issue control plane.
+
+### Changed
+
+- Added a `LOCAL WORKSPACE` section in `src/pages/Settings.tsx` for:
+  - choosing and validating the local vault directory
+  - configuring the Paperclip launcher script path and working directory
+  - opening the Paperclip UI directly from TeamForge
+- Added native Tauri commands for:
+  - `pick_vault_directory`
+  - `validate_vault_directory`
+  - `launch_paperclip_script`
+  - `open_paperclip_ui`
+- Added `scripts/launch-thoughtseed-paperclip.sh` so TeamForge can launch the
+  real sibling `thougghtseed-paperclip` repo through its existing
+  `babysitter.sh start` contract without requiring extra CLI args in settings.
+- Updated vault resolution so TeamForge prefers the saved local
+  `local_vault_root` setting before falling back to environment variables or
+  Obsidian heuristics.
+- Replaced the misleading `Devices` shell module with a real `Issues` module
+  grouped by active project.
+- Moved active project issue loading onto the Worker-owned TeamForge issue feed
+  with local SQLite used only as cache/offline projection.
+- Bumped release metadata to `0.1.21` across the frontend package, sidecar
+  package, Tauri config, and Rust crate.
+
+### Verification
+
+- `cargo fmt --manifest-path src-tauri/Cargo.toml`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+- `pnpm build`
 ## v0.1.20 - 2026-04-18
 
 This milestone closeout release finishes the Ops Fabric v0.3.0 execution track by clearing the remaining TeamForge and Paperclip integration issues, tightening the ops-event contract, and exposing the remaining operator controls needed to run the sync fabric safely.

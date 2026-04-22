@@ -88,6 +88,67 @@ interface ProjectSyncPolicyRow {
   updated_at: string;
 }
 
+interface ClientProfileRow {
+  id: string;
+  workspace_id: string;
+  client_id: string;
+  client_name: string;
+  engagement_model: string;
+  industry: string | null;
+  primary_contact: string | null;
+  active: number;
+  onboarded: string | null;
+  project_ids_json: string | null;
+  stakeholders_json: string | null;
+  strategic_fit_json: string | null;
+  risks_json: string | null;
+  resource_links_json: string | null;
+  tags_json: string | null;
+  source_path: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface OnboardingFlowRow {
+  id: string;
+  workspace_id: string;
+  flow_id: string;
+  audience: string;
+  status: string;
+  owner: string | null;
+  starts_on: string | null;
+  client_id: string | null;
+  member_id: string | null;
+  project_ids_json: string | null;
+  primary_contact: string | null;
+  workspace_ready: number | null;
+  manager: string | null;
+  department: string | null;
+  joined_on: string | null;
+  source_path: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface OnboardingFlowQueryRow extends OnboardingFlowRow {
+  client_profile_name: string | null;
+}
+
+interface OnboardingTaskRow {
+  id: string;
+  onboarding_flow_id: string;
+  workspace_id: string;
+  task_id: string;
+  title: string;
+  completed: number;
+  completed_at: string | null;
+  resource_created: string | null;
+  notes: string | null;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ProjectSummary {
   id: string;
   workspaceId: string;
@@ -159,10 +220,13 @@ export interface ProjectArtifact {
   projectId: string;
   workspaceId: string;
   artifactType: string;
+  artifactFamily: string;
+  isVaultArtifact: boolean;
   title: string;
   url: string;
   source: string;
   externalId: string | null;
+  sourcePath: string | null;
   isPrimary: boolean;
   createdAt: string;
   updatedAt: string;
@@ -187,12 +251,112 @@ export interface ProjectSyncPolicy {
   updatedAt: string;
 }
 
+export type ProjectClientProfileMatchSource = "project_id" | "client_name" | "project_slug";
+
+export interface ProjectClientProfileSummary {
+  id: string;
+  workspaceId: string;
+  clientId: string;
+  clientName: string;
+  engagementModel: string;
+  industry: string | null;
+  primaryContact: string | null;
+  active: boolean;
+  onboarded: string | null;
+  projectIds: string[];
+  sourcePath: string | null;
+  matchedBy: ProjectClientProfileMatchSource;
+}
+
+export interface ClientProfile {
+  id: string;
+  workspaceId: string;
+  clientId: string;
+  clientName: string;
+  engagementModel: string;
+  industry: string | null;
+  primaryContact: string | null;
+  active: boolean;
+  onboarded: string | null;
+  projectIds: string[];
+  stakeholders: string[];
+  strategicFit: string[];
+  risks: string[];
+  resourceLinks: string[];
+  tags: string[];
+  sourcePath: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClientProfileProjectLink {
+  id: string;
+  workspaceId: string;
+  slug: string | null;
+  name: string;
+  status: string;
+  projectType: string | null;
+  clientName: string | null;
+  matchSource: ProjectClientProfileMatchSource;
+}
+
+export interface ClientProfileDetail {
+  clientProfile: ClientProfile;
+  linkedProjects: ClientProfileProjectLink[];
+}
+
+export interface OnboardingTask {
+  id: string;
+  flowId: string;
+  workspaceId: string;
+  taskId: string;
+  title: string;
+  completed: boolean;
+  completedAt: string | null;
+  resourceCreated: string | null;
+  notes: string | null;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OnboardingFlow {
+  id: string;
+  workspaceId: string;
+  flowId: string;
+  audience: string;
+  status: string;
+  owner: string | null;
+  startsOn: string | null;
+  subjectId: string | null;
+  subjectName: string | null;
+  clientId: string | null;
+  memberId: string | null;
+  projectIds: string[];
+  primaryContact: string | null;
+  workspaceReady: boolean | null;
+  manager: string | null;
+  department: string | null;
+  joinedOn: string | null;
+  sourcePath: string | null;
+  totalTasks: number;
+  completedTasks: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OnboardingFlowWithTasks {
+  flow: OnboardingFlow;
+  tasks: OnboardingTask[];
+}
+
 export interface ProjectGraph {
   project: ProjectView;
   githubLinks: ProjectGithubLink[];
   hulyLinks: ProjectHulyLink[];
   artifacts: ProjectArtifact[];
   policy: ProjectSyncPolicy | null;
+  clientProfile: ProjectClientProfileSummary | null;
 }
 
 export interface ProjectMetadataInput {
@@ -249,6 +413,55 @@ export interface ProjectSyncPolicyInput {
   issueClassificationMode?: string;
   directionMode?: string;
   ruleConfig?: Record<string, unknown> | null;
+}
+
+export interface ClientProfileInput {
+  id?: string;
+  workspaceId: string;
+  clientId: string;
+  clientName?: string;
+  engagementModel?: string;
+  industry?: string | null;
+  primaryContact?: string | null;
+  active?: boolean;
+  onboarded?: string | null;
+  projectIds?: string[];
+  stakeholders?: string[];
+  strategicFit?: string[];
+  risks?: string[];
+  resourceLinks?: string[];
+  tags?: string[];
+  sourcePath?: string | null;
+}
+
+export interface OnboardingTaskInput {
+  id?: string;
+  taskId: string;
+  title: string;
+  completed?: boolean;
+  completedAt?: string | null;
+  resourceCreated?: string | null;
+  notes?: string | null;
+  position?: number;
+}
+
+export interface OnboardingFlowInput {
+  id?: string;
+  flowId: string;
+  audience: "client" | "employee";
+  status?: string;
+  owner?: string | null;
+  startsOn?: string | null;
+  clientId?: string | null;
+  memberId?: string | null;
+  projectIds?: string[];
+  primaryContact?: string | null;
+  workspaceReady?: boolean | null;
+  manager?: string | null;
+  department?: string | null;
+  joinedOn?: string | null;
+  sourcePath?: string | null;
+  tasks?: OnboardingTaskInput[];
 }
 
 export interface ProjectGraphInput {
@@ -337,15 +550,31 @@ function mapHulyLink(row: ProjectHulyLinkRow): ProjectHulyLink {
 }
 
 function mapArtifact(row: ProjectArtifactRow): ProjectArtifact {
+  const artifactType = row.artifact_type;
+  const isVaultArtifact = artifactType.startsWith("vault-") || row.source === "vault";
+  let artifactFamily = "general";
+  if (artifactType === "vault-project-brief") artifactFamily = "project_brief";
+  if (artifactType === "vault-technical-spec") artifactFamily = "technical_spec";
+  if (artifactType === "vault-design-doc") artifactFamily = "design";
+  if (artifactType === "vault-research-doc") artifactFamily = "research";
+  if (artifactType === "vault-closeout-doc") artifactFamily = "closeout";
+
+  const externalPath = normalizeOptionalString(row.external_id);
+  const urlPath = normalizeOptionalString(row.url)?.endsWith(".md")
+    ? normalizeOptionalString(row.url)
+    : null;
   return {
     id: row.id,
     projectId: row.project_id,
     workspaceId: row.workspace_id,
-    artifactType: row.artifact_type,
+    artifactType,
+    artifactFamily,
+    isVaultArtifact,
     title: row.title,
     url: row.url,
     source: row.source,
     externalId: row.external_id,
+    sourcePath: externalPath ?? (isVaultArtifact ? urlPath : null),
     isPrimary: toBool(row.is_primary),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -371,6 +600,138 @@ function mapPolicy(row: ProjectSyncPolicyRow): ProjectSyncPolicy {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function parseStringArray(value: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function stringifyStringArray(values: string[] | undefined, fallback?: string | null): string {
+  if (values === undefined) {
+    return fallback ?? "[]";
+  }
+  return JSON.stringify(
+    values
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+}
+
+function mapClientProfile(row: ClientProfileRow): ClientProfile {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    clientId: row.client_id,
+    clientName: row.client_name,
+    engagementModel: row.engagement_model,
+    industry: row.industry,
+    primaryContact: row.primary_contact,
+    active: toBool(row.active),
+    onboarded: row.onboarded,
+    projectIds: parseStringArray(row.project_ids_json),
+    stakeholders: parseStringArray(row.stakeholders_json),
+    strategicFit: parseStringArray(row.strategic_fit_json),
+    risks: parseStringArray(row.risks_json),
+    resourceLinks: parseStringArray(row.resource_links_json),
+    tags: parseStringArray(row.tags_json),
+    sourcePath: row.source_path,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function buildProjectClientProfileSummary(
+  profile: ClientProfile,
+  matchedBy: ProjectClientProfileMatchSource,
+): ProjectClientProfileSummary {
+  return {
+    id: profile.id,
+    workspaceId: profile.workspaceId,
+    clientId: profile.clientId,
+    clientName: profile.clientName,
+    engagementModel: profile.engagementModel,
+    industry: profile.industry,
+    primaryContact: profile.primaryContact,
+    active: profile.active,
+    onboarded: profile.onboarded,
+    projectIds: profile.projectIds,
+    sourcePath: profile.sourcePath,
+    matchedBy,
+  };
+}
+
+function mapOnboardingTask(row: OnboardingTaskRow, flowId: string): OnboardingTask {
+  return {
+    id: row.id,
+    flowId,
+    workspaceId: row.workspace_id,
+    taskId: row.task_id,
+    title: row.title,
+    completed: toBool(row.completed),
+    completedAt: row.completed_at,
+    resourceCreated: row.resource_created,
+    notes: row.notes,
+    position: row.position,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapOnboardingFlow(
+  row: OnboardingFlowQueryRow,
+  tasks: OnboardingTask[],
+): OnboardingFlowWithTasks {
+  const subjectId = row.audience === "client" ? row.client_id : row.member_id;
+  const subjectName = row.audience === "client"
+    ? normalizeOptionalString(row.client_profile_name) ?? normalizeOptionalString(row.client_id)
+    : normalizeOptionalString(row.member_id);
+  const completedTasks = tasks.filter((task) => task.completed).length;
+
+  return {
+    flow: {
+      id: row.id,
+      workspaceId: row.workspace_id,
+      flowId: row.flow_id,
+      audience: row.audience,
+      status: row.status,
+      owner: row.owner,
+      startsOn: row.starts_on,
+      subjectId,
+      subjectName,
+      clientId: row.client_id,
+      memberId: row.member_id,
+      projectIds: parseStringArray(row.project_ids_json),
+      primaryContact: row.primary_contact,
+      workspaceReady: row.workspace_ready === null ? null : toBool(row.workspace_ready),
+      manager: row.manager,
+      department: row.department,
+      joinedOn: row.joined_on,
+      sourcePath: row.source_path,
+      totalTasks: tasks.length,
+      completedTasks,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    },
+    tasks,
+  };
+}
+
+function normalizeLookupKey(value: string | null | undefined): string | null {
+  const normalized = normalizeOptionalString(value)
+    ?.toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized && normalized.length > 0 ? normalized : null;
 }
 
 function normalizeOptionalString(value: string | null | undefined): string | null {
@@ -413,6 +774,89 @@ function normalizeRepoParts(input: ProjectGithubLinkInput): { repoOwner: string;
   };
 }
 
+function matchProjectToClientProfile(
+  project: ProjectView,
+  profile: ClientProfile,
+): ProjectClientProfileMatchSource | null {
+  const projectSlug = normalizeLookupKey(project.slug);
+  const projectClientName = normalizeLookupKey(project.clientName);
+  const clientId = normalizeLookupKey(profile.clientId);
+  const clientName = normalizeLookupKey(profile.clientName);
+  const projectIds = new Set(profile.projectIds.map((value) => normalizeLookupKey(value)).filter(Boolean));
+
+  if (projectSlug && projectIds.has(projectSlug)) {
+    return "project_id";
+  }
+  if (projectClientName && (projectClientName === clientId || projectClientName === clientName)) {
+    return "client_name";
+  }
+  if (projectSlug && (projectSlug === clientId || projectSlug === clientName)) {
+    return "project_slug";
+  }
+
+  return null;
+}
+
+function matchPriority(matchSource: ProjectClientProfileMatchSource): number {
+  if (matchSource === "project_id") return 0;
+  if (matchSource === "client_name") return 1;
+  return 2;
+}
+
+function findClientProfileSummaryForProject(
+  project: ProjectView,
+  clientProfiles: ClientProfile[],
+): ProjectClientProfileSummary | null {
+  let bestMatch: { profile: ClientProfile; matchSource: ProjectClientProfileMatchSource } | null = null;
+
+  for (const profile of clientProfiles) {
+    const matchSource = matchProjectToClientProfile(project, profile);
+    if (!matchSource) continue;
+
+    if (!bestMatch) {
+      bestMatch = { profile, matchSource };
+      continue;
+    }
+
+    const currentPriority = matchPriority(matchSource);
+    const bestPriority = matchPriority(bestMatch.matchSource);
+    if (currentPriority < bestPriority) {
+      bestMatch = { profile, matchSource };
+      continue;
+    }
+    if (currentPriority === bestPriority) {
+      if (profile.active && !bestMatch.profile.active) {
+        bestMatch = { profile, matchSource };
+        continue;
+      }
+      if (profile.updatedAt > bestMatch.profile.updatedAt) {
+        bestMatch = { profile, matchSource };
+      }
+    }
+  }
+
+  return bestMatch
+    ? buildProjectClientProfileSummary(bestMatch.profile, bestMatch.matchSource)
+    : null;
+}
+
+export function enrichProjectGraphWithClientProfiles(
+  graph: ProjectGraph,
+  clientProfiles: ClientProfile[],
+): ProjectGraph {
+  return {
+    ...graph,
+    clientProfile: findClientProfileSummaryForProject(graph.project, clientProfiles),
+  };
+}
+
+export function enrichProjectGraphsWithClientProfiles(
+  graphs: ProjectGraph[],
+  clientProfiles: ClientProfile[],
+): ProjectGraph[] {
+  return graphs.map((graph) => enrichProjectGraphWithClientProfiles(graph, clientProfiles));
+}
+
 function buildProjectGraph(
   project: ProjectRow,
   githubLinks: ProjectGithubLinkRow[],
@@ -426,15 +870,16 @@ function buildProjectGraph(
     hulyLinks: hulyLinks.map(mapHulyLink),
     artifacts: artifacts.map(mapArtifact),
     policy: policy ? mapPolicy(policy) : null,
+    clientProfile: null,
   };
 }
 
 async function queryProjectRows(
   db: D1DatabaseLike,
   workspaceId?: string | null,
-  status = "active",
+  status: string | null = "active",
 ): Promise<ProjectRow[]> {
-  if (workspaceId) {
+  if (workspaceId && status) {
     return queryAll<ProjectRow>(
       db,
       "SELECT * FROM projects WHERE workspace_id = ? AND status = ? ORDER BY name",
@@ -442,11 +887,25 @@ async function queryProjectRows(
       status,
     );
   }
+  if (workspaceId) {
+    return queryAll<ProjectRow>(
+      db,
+      "SELECT * FROM projects WHERE workspace_id = ? ORDER BY name",
+      workspaceId,
+    );
+  }
+
+  if (status) {
+    return queryAll<ProjectRow>(
+      db,
+      "SELECT * FROM projects WHERE status = ? ORDER BY name",
+      status,
+    );
+  }
 
   return queryAll<ProjectRow>(
     db,
-    "SELECT * FROM projects WHERE status = ? ORDER BY name",
-    status,
+    "SELECT * FROM projects ORDER BY name",
   );
 }
 
@@ -498,6 +957,83 @@ async function queryPoliciesByProjectIds(
   );
 }
 
+async function queryClientProfileRows(
+  db: D1DatabaseLike,
+  workspaceId?: string | null,
+  active?: boolean,
+): Promise<ClientProfileRow[]> {
+  let sql = "SELECT * FROM client_profiles";
+  const params: unknown[] = [];
+  const conditions: string[] = [];
+
+  if (workspaceId) {
+    conditions.push("workspace_id = ?");
+    params.push(workspaceId);
+  }
+  if (active !== undefined) {
+    conditions.push("active = ?");
+    params.push(active ? 1 : 0);
+  }
+
+  if (conditions.length > 0) {
+    sql += ` WHERE ${conditions.join(" AND ")}`;
+  }
+
+  sql += " ORDER BY client_name";
+  return queryAll<ClientProfileRow>(db, sql, ...params);
+}
+
+async function queryOnboardingFlowRows(
+  db: D1DatabaseLike,
+  workspaceId?: string | null,
+  audience?: string | null,
+  status?: string | null,
+): Promise<OnboardingFlowQueryRow[]> {
+  let sql = `
+    SELECT
+      flow.*,
+      profile.client_name AS client_profile_name
+    FROM onboarding_flows flow
+    LEFT JOIN client_profiles profile
+      ON profile.workspace_id = flow.workspace_id
+      AND profile.client_id = flow.client_id
+  `;
+  const params: unknown[] = [];
+  const conditions: string[] = [];
+
+  if (workspaceId) {
+    conditions.push("flow.workspace_id = ?");
+    params.push(workspaceId);
+  }
+  if (audience) {
+    conditions.push("flow.audience = ?");
+    params.push(audience);
+  }
+  if (status) {
+    conditions.push("flow.status = ?");
+    params.push(status);
+  }
+
+  if (conditions.length > 0) {
+    sql += ` WHERE ${conditions.join(" AND ")}`;
+  }
+
+  sql += " ORDER BY flow.starts_on DESC, flow.flow_id";
+  return queryAll<OnboardingFlowQueryRow>(db, sql, ...params);
+}
+
+async function queryOnboardingTasksByFlowIds(
+  db: D1DatabaseLike,
+  onboardingFlowIds: string[],
+): Promise<OnboardingTaskRow[]> {
+  if (onboardingFlowIds.length === 0) return [];
+  return queryAll<OnboardingTaskRow>(
+    db,
+    `SELECT * FROM onboarding_tasks WHERE onboarding_flow_id IN (${onboardingFlowIds.map(() => "?").join(",")}) ORDER BY position, task_id`,
+    ...onboardingFlowIds,
+  );
+}
+
 async function queryProjectSummaryRows(
   db: D1DatabaseLike,
   workspaceId?: string | null,
@@ -534,6 +1070,67 @@ async function queryProjectSummaryRows(
   return queryAll<ProjectSummaryRow>(db, sql, ...params);
 }
 
+async function ensureWorkspaceExists(
+  db: D1DatabaseLike,
+  workspaceId: string,
+): Promise<void> {
+  const workspace = await queryFirst<{ id: string }>(
+    db,
+    "SELECT id FROM workspaces WHERE id = ?",
+    workspaceId,
+  );
+  if (!workspace) {
+    throw new Error(`Workspace ${workspaceId} does not exist.`);
+  }
+}
+
+interface BatchCapableDatabase extends D1DatabaseLike {
+  batch?(statements: Array<{ run(): Promise<unknown> }>): Promise<unknown[]>;
+}
+
+function prepareRunnableStatement(
+  db: D1DatabaseLike,
+  sql: string,
+  ...params: unknown[]
+): { run(): Promise<unknown> } {
+  const stmt = db.prepare(sql);
+  const bound = params.length ? stmt.bind(...params) : stmt;
+  return bound as unknown as { run(): Promise<unknown> };
+}
+
+async function executeAtomicStatements(
+  db: D1DatabaseLike,
+  statements: Array<{ sql: string; params?: unknown[] }>,
+): Promise<void> {
+  const batchDb = db as BatchCapableDatabase;
+  if (typeof batchDb.batch === "function") {
+    await batchDb.batch(
+      statements.map(({ sql, params = [] }) => prepareRunnableStatement(db, sql, ...params)),
+    );
+    return;
+  }
+
+  let transactionStarted = false;
+  try {
+    await execute(db, "BEGIN IMMEDIATE TRANSACTION");
+    transactionStarted = true;
+    for (const { sql, params = [] } of statements) {
+      await execute(db, sql, ...params);
+    }
+    await execute(db, "COMMIT");
+    transactionStarted = false;
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        await execute(db, "ROLLBACK");
+      } catch {
+        // Best-effort rollback only.
+      }
+    }
+    throw error;
+  }
+}
+
 export async function listProjectSummaries(
   db: D1DatabaseLike,
   workspaceId?: string | null,
@@ -543,6 +1140,94 @@ export async function listProjectSummaries(
   return rows.map(mapProjectSummary);
 }
 
+export async function listClientProfiles(
+  db: D1DatabaseLike,
+  workspaceId?: string | null,
+  active?: boolean,
+): Promise<ClientProfile[]> {
+  const rows = await queryClientProfileRows(db, workspaceId, active);
+  return rows.map(mapClientProfile);
+}
+
+export async function getClientProfile(
+  db: D1DatabaseLike,
+  clientId: string,
+  workspaceId?: string | null,
+): Promise<ClientProfile | null> {
+  const normalizedClientId = normalizeRequiredString(clientId, "clientId");
+  const row = workspaceId
+    ? await queryFirst<ClientProfileRow>(
+        db,
+        "SELECT * FROM client_profiles WHERE workspace_id = ? AND client_id = ?",
+        workspaceId,
+        normalizedClientId,
+      )
+    : await queryFirst<ClientProfileRow>(
+        db,
+        "SELECT * FROM client_profiles WHERE client_id = ? ORDER BY updated_at DESC",
+        normalizedClientId,
+      );
+  return row ? mapClientProfile(row) : null;
+}
+
+export async function getClientProfileDetail(
+  db: D1DatabaseLike,
+  clientId: string,
+  workspaceId?: string | null,
+): Promise<ClientProfileDetail | null> {
+  const clientProfile = await getClientProfile(db, clientId, workspaceId);
+  if (!clientProfile) return null;
+
+  const projects = await queryProjectRows(db, clientProfile.workspaceId, null);
+  const linkedProjects = projects
+    .map((project) => {
+      const matchSource = matchProjectToClientProfile(mapProject(project), clientProfile);
+      if (!matchSource) return null;
+      return {
+        id: project.id,
+        workspaceId: project.workspace_id,
+        slug: project.slug,
+        name: project.name,
+        status: project.status,
+        projectType: project.project_type,
+        clientName: project.client_name,
+        matchSource,
+      } satisfies ClientProfileProjectLink;
+    })
+    .filter((project): project is ClientProfileProjectLink => project !== null);
+
+  return {
+    clientProfile,
+    linkedProjects,
+  };
+}
+
+export async function listOnboardingFlows(
+  db: D1DatabaseLike,
+  workspaceId?: string | null,
+  filters: { audience?: "client" | "employee" | null; status?: string | null } = {},
+): Promise<OnboardingFlowWithTasks[]> {
+  const flowRows = await queryOnboardingFlowRows(db, workspaceId, filters.audience, filters.status);
+  const taskRows = await queryOnboardingTasksByFlowIds(
+    db,
+    flowRows.map((flow) => flow.id),
+  );
+  const tasksByFlowId = new Map<string, OnboardingTask[]>();
+  const flowIdByRowId = new Map(flowRows.map((flow) => [flow.id, flow.flow_id]));
+
+  for (const row of taskRows) {
+    const flowId = flowIdByRowId.get(row.onboarding_flow_id);
+    if (!flowId) continue;
+    const tasks = tasksByFlowId.get(row.onboarding_flow_id) ?? [];
+    tasks.push(mapOnboardingTask(row, flowId));
+    tasksByFlowId.set(row.onboarding_flow_id, tasks);
+  }
+
+  return flowRows.map((row) =>
+    mapOnboardingFlow(row, tasksByFlowId.get(row.id) ?? []),
+  );
+}
+
 export async function listProjectGraphs(
   db: D1DatabaseLike,
   workspaceId?: string | null,
@@ -550,11 +1235,12 @@ export async function listProjectGraphs(
 ): Promise<ProjectGraph[]> {
   const projects = await queryProjectRows(db, workspaceId, status);
   const projectIds = projects.map((project) => project.id);
-  const [githubLinks, hulyLinks, artifacts, policies] = await Promise.all([
+  const [githubLinks, hulyLinks, artifacts, policies, clientProfiles] = await Promise.all([
     queryGithubLinksByProjectIds(db, projectIds),
     queryHulyLinksByProjectIds(db, projectIds),
     queryArtifactsByProjectIds(db, projectIds),
     queryPoliciesByProjectIds(db, projectIds),
+    listClientProfiles(db, workspaceId),
   ]);
 
   const githubByProject = new Map<string, ProjectGithubLinkRow[]>();
@@ -583,7 +1269,7 @@ export async function listProjectGraphs(
     policyByProject.set(row.project_id, row);
   }
 
-  return projects.map((project) =>
+  return enrichProjectGraphsWithClientProfiles(projects.map((project) =>
     buildProjectGraph(
       project,
       githubByProject.get(project.id) ?? [],
@@ -591,7 +1277,7 @@ export async function listProjectGraphs(
       artifactsByProject.get(project.id) ?? [],
       policyByProject.get(project.id) ?? null,
     ),
-  );
+  ), clientProfiles);
 }
 
 export async function getProjectGraph(
@@ -601,14 +1287,178 @@ export async function getProjectGraph(
   const project = await queryFirst<ProjectRow>(db, "SELECT * FROM projects WHERE id = ?", projectId);
   if (!project) return null;
 
-  const [githubLinks, hulyLinks, artifacts, policy] = await Promise.all([
+  const [githubLinks, hulyLinks, artifacts, policy, clientProfiles] = await Promise.all([
     queryAll<ProjectGithubLinkRow>(db, "SELECT * FROM project_github_links WHERE project_id = ? ORDER BY is_primary DESC, repo_owner, repo_name", projectId),
     queryAll<ProjectHulyLinkRow>(db, "SELECT * FROM project_huly_links WHERE project_id = ? ORDER BY huly_project_id", projectId),
     queryAll<ProjectArtifactRow>(db, "SELECT * FROM project_artifacts WHERE project_id = ? ORDER BY is_primary DESC, title", projectId),
     queryFirst<ProjectSyncPolicyRow>(db, "SELECT * FROM project_sync_policies WHERE project_id = ?", projectId),
+    listClientProfiles(db, project.workspace_id),
   ]);
 
-  return buildProjectGraph(project, githubLinks, hulyLinks, artifacts, policy);
+  return enrichProjectGraphWithClientProfiles(
+    buildProjectGraph(project, githubLinks, hulyLinks, artifacts, policy),
+    clientProfiles,
+  );
+}
+
+export async function upsertClientProfile(
+  db: D1DatabaseLike,
+  input: ClientProfileInput,
+): Promise<ClientProfile> {
+  const workspaceId = normalizeRequiredString(input.workspaceId, "workspaceId");
+  const clientId = normalizeRequiredString(input.clientId, "clientId");
+  await ensureWorkspaceExists(db, workspaceId);
+
+  const existing = await queryFirst<ClientProfileRow>(
+    db,
+    "SELECT * FROM client_profiles WHERE workspace_id = ? AND client_id = ?",
+    workspaceId,
+    clientId,
+  );
+  const ts = now();
+
+  const clientName = input.clientName ?? existing?.client_name;
+  const engagementModel = input.engagementModel ?? existing?.engagement_model;
+  if (!clientName) {
+    throw new Error("clientName is required.");
+  }
+  if (!engagementModel) {
+    throw new Error("engagementModel is required.");
+  }
+
+  await execute(
+    db,
+    `INSERT INTO client_profiles
+      (id, workspace_id, client_id, client_name, engagement_model, industry, primary_contact, active, onboarded, project_ids_json, stakeholders_json, strategic_fit_json, risks_json, resource_links_json, tags_json, source_path, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(workspace_id, client_id) DO UPDATE SET
+       client_name = excluded.client_name,
+       engagement_model = excluded.engagement_model,
+       industry = excluded.industry,
+       primary_contact = excluded.primary_contact,
+       active = excluded.active,
+       onboarded = excluded.onboarded,
+       project_ids_json = excluded.project_ids_json,
+       stakeholders_json = excluded.stakeholders_json,
+       strategic_fit_json = excluded.strategic_fit_json,
+       risks_json = excluded.risks_json,
+       resource_links_json = excluded.resource_links_json,
+       tags_json = excluded.tags_json,
+       source_path = excluded.source_path,
+       updated_at = excluded.updated_at`,
+    normalizeOptionalString(input.id) ?? existing?.id ?? nanoid(),
+    workspaceId,
+    clientId,
+    normalizeRequiredString(clientName, "clientName"),
+    normalizeRequiredString(engagementModel, "engagementModel"),
+    input.industry === undefined ? existing?.industry ?? null : normalizeOptionalString(input.industry),
+    input.primaryContact === undefined
+      ? existing?.primary_contact ?? null
+      : normalizeOptionalString(input.primaryContact),
+    input.active ?? (existing ? toBool(existing.active) : true) ? 1 : 0,
+    input.onboarded === undefined ? existing?.onboarded ?? null : normalizeOptionalString(input.onboarded),
+    stringifyStringArray(input.projectIds, existing?.project_ids_json),
+    stringifyStringArray(input.stakeholders, existing?.stakeholders_json),
+    stringifyStringArray(input.strategicFit, existing?.strategic_fit_json),
+    stringifyStringArray(input.risks, existing?.risks_json),
+    stringifyStringArray(input.resourceLinks, existing?.resource_links_json),
+    stringifyStringArray(input.tags, existing?.tags_json),
+    input.sourcePath === undefined ? existing?.source_path ?? null : normalizeOptionalString(input.sourcePath),
+    existing?.created_at ?? ts,
+    ts,
+  );
+
+  const profile = await getClientProfile(db, clientId, workspaceId);
+  if (!profile) {
+    throw new Error(`Client profile ${clientId} was not found after upsert.`);
+  }
+  return profile;
+}
+
+export async function replaceOnboardingFlows(
+  db: D1DatabaseLike,
+  workspaceId: string,
+  flows: OnboardingFlowInput[] = [],
+): Promise<OnboardingFlowWithTasks[]> {
+  const normalizedWorkspaceId = normalizeRequiredString(workspaceId, "workspaceId");
+  await ensureWorkspaceExists(db, normalizedWorkspaceId);
+
+  const ts = now();
+  const statements: Array<{ sql: string; params?: unknown[] }> = [
+    {
+      sql: "DELETE FROM onboarding_flows WHERE workspace_id = ?",
+      params: [normalizedWorkspaceId],
+    },
+  ];
+
+  for (const flow of flows) {
+    const flowId = normalizeRequiredString(flow.flowId, "flowId");
+    const audience = flow.audience;
+    if (audience !== "client" && audience !== "employee") {
+      throw new Error(`Unsupported onboarding audience: ${audience}`);
+    }
+
+    const onboardingFlowId = normalizeOptionalString(flow.id) ?? nanoid();
+    const clientId = audience === "client"
+      ? normalizeRequiredString(flow.clientId ?? undefined, "clientId")
+      : null;
+    const memberId = audience === "employee"
+      ? normalizeRequiredString(flow.memberId ?? undefined, "memberId")
+      : null;
+
+    statements.push({
+      sql: `INSERT INTO onboarding_flows
+        (id, workspace_id, flow_id, audience, status, owner, starts_on, client_id, member_id, project_ids_json, primary_contact, workspace_ready, manager, department, joined_on, source_path, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      params: [
+        onboardingFlowId,
+        normalizedWorkspaceId,
+        flowId,
+        audience,
+        normalizeOptionalString(flow.status) ?? "draft",
+        normalizeOptionalString(flow.owner),
+        normalizeOptionalString(flow.startsOn),
+        clientId,
+        memberId,
+        stringifyStringArray(flow.projectIds),
+        normalizeOptionalString(flow.primaryContact),
+        flow.workspaceReady === null || flow.workspaceReady === undefined ? null : flow.workspaceReady ? 1 : 0,
+        normalizeOptionalString(flow.manager),
+        normalizeOptionalString(flow.department),
+        normalizeOptionalString(flow.joinedOn),
+        normalizeOptionalString(flow.sourcePath),
+        ts,
+        ts,
+      ],
+    });
+
+    const tasks = flow.tasks ?? [];
+    for (let index = 0; index < tasks.length; index += 1) {
+      const task = tasks[index];
+      statements.push({
+        sql: `INSERT INTO onboarding_tasks
+          (id, onboarding_flow_id, workspace_id, task_id, title, completed, completed_at, resource_created, notes, position, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        params: [
+          normalizeOptionalString(task.id) ?? nanoid(),
+          onboardingFlowId,
+          normalizedWorkspaceId,
+          normalizeRequiredString(task.taskId, "taskId"),
+          normalizeRequiredString(task.title, "title"),
+          task.completed ? 1 : 0,
+          normalizeOptionalString(task.completedAt),
+          normalizeOptionalString(task.resourceCreated),
+          normalizeOptionalString(task.notes),
+          task.position ?? index,
+          ts,
+          ts,
+        ],
+      });
+    }
+  }
+
+  await executeAtomicStatements(db, statements);
+  return listOnboardingFlows(db, normalizedWorkspaceId);
 }
 
 export async function upsertProjectMetadata(
@@ -849,21 +1699,15 @@ export async function upsertProjectGraph(
     throw new Error("workspaceId is required.");
   }
 
-  await execute(db, "BEGIN TRANSACTION");
-  try {
-    await upsertProjectMetadata(db, projectId, {
-      ...projectInput,
-      workspaceId: resolvedWorkspaceId,
-    });
-    await replaceProjectGithubLinks(db, projectId, resolvedWorkspaceId, input.githubLinks ?? []);
-    await replaceProjectHulyLinks(db, projectId, resolvedWorkspaceId, input.hulyLinks ?? []);
-    await replaceProjectArtifacts(db, projectId, resolvedWorkspaceId, input.artifacts ?? []);
-    await upsertProjectSyncPolicy(db, projectId, resolvedWorkspaceId, input.policy);
-    await execute(db, "COMMIT");
-  } catch (error) {
-    await execute(db, "ROLLBACK");
-    throw error;
-  }
+  await ensureWorkspaceExists(db, resolvedWorkspaceId);
+  await upsertProjectMetadata(db, projectId, {
+    ...projectInput,
+    workspaceId: resolvedWorkspaceId,
+  });
+  await replaceProjectGithubLinks(db, projectId, resolvedWorkspaceId, input.githubLinks ?? []);
+  await replaceProjectHulyLinks(db, projectId, resolvedWorkspaceId, input.hulyLinks ?? []);
+  await replaceProjectArtifacts(db, projectId, resolvedWorkspaceId, input.artifacts ?? []);
+  await upsertProjectSyncPolicy(db, projectId, resolvedWorkspaceId, input.policy);
 
   const graph = await getProjectGraph(db, projectId);
   if (!graph) {

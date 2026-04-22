@@ -6,6 +6,7 @@ mod huly;
 mod ops;
 mod slack;
 mod sync;
+mod vault;
 
 use std::sync::{Arc, Mutex};
 
@@ -36,6 +37,7 @@ fn greet(name: &str) -> String {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
@@ -84,18 +86,16 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                match db::queries::init_db(&app_data_dir).await {
-                    Ok(pool) => {
-                        handle.manage(DbPool(pool));
-                        eprintln!("[teamforge] database initialized");
-                    }
-                    Err(e) => {
-                        eprintln!("[teamforge] database init failed: {e}");
-                    }
-                }
-            });
+            // Make the database available before the first page render so packaged
+            // builds cannot boot into a false empty/error state while commands race
+            // the async setup path.
+            let pool = tauri::async_runtime::block_on(db::queries::init_db(&app_data_dir))
+                .map_err(|e| {
+                    eprintln!("[teamforge] database init failed: {e}");
+                    e
+                })?;
+            app.manage(DbPool(pool));
+            eprintln!("[teamforge] database initialized");
 
             Ok(())
         })
@@ -106,7 +106,14 @@ pub fn run() {
             commands::trigger_sync,
             commands::get_settings,
             commands::save_setting,
+            commands::pick_vault_directory,
+            commands::validate_vault_directory,
+            commands::launch_paperclip_script,
+            commands::open_paperclip_ui,
             commands::get_teamforge_projects,
+            commands::get_teamforge_client_profiles,
+            commands::get_teamforge_client_profile,
+            commands::get_teamforge_onboarding_flows,
             commands::get_teamforge_project_control_plane,
             commands::save_teamforge_project,
             commands::run_teamforge_project_action,
@@ -158,6 +165,7 @@ pub fn run() {
             commands::get_standup_report,
             commands::get_clients,
             commands::get_client_detail,
+            commands::get_active_project_issues,
             commands::get_devices,
             commands::get_knowledge_articles,
             commands::get_sprint_detail,

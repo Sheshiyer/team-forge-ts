@@ -36,6 +36,10 @@ function formatDateTime(value: string | null): string {
   });
 }
 
+function stripMarkdown(value: string): string {
+  return value.replace(/\*\*/g, "").replace(/`/g, "").trim();
+}
+
 function MetricTile({
   label,
   value,
@@ -115,12 +119,30 @@ export default function EmployeeSummaryPanel({
       ? "1fr"
       : (styles.detailGrid.gridTemplateColumns as string),
   };
+  const kpiGridStyle = {
+    ...styles.kpiGrid,
+    gridTemplateColumns: isMobileLayout
+      ? "1fr"
+      : (styles.kpiGrid.gridTemplateColumns as string),
+  };
   const detailRowStyle = {
     ...styles.detailRow,
     flexDirection: isMobileLayout ? "column" : styles.detailRow.flexDirection,
     alignItems: isMobileLayout ? "flex-start" : styles.detailRow.alignItems,
     gap: isMobileLayout ? 4 : styles.detailRow.gap,
   };
+  const rolePills =
+    summary?.roleLabels.length
+      ? summary.roleLabels
+      : summary?.vaultProfile?.role
+        ? [summary.vaultProfile.role]
+        : [];
+  const departmentPills =
+    summary?.departmentNames.length
+      ? summary.departmentNames
+      : summary?.vaultProfile?.department
+        ? [summary.vaultProfile.department]
+        : [];
 
   return (
     <div style={styles.card}>
@@ -128,8 +150,8 @@ export default function EmployeeSummaryPanel({
         <div>
           <h2 style={styles.sectionTitle}>EMPLOYEE OPERATIONS SUMMARY</h2>
           <p style={styles.helperText}>
-            Standups, leave, work hours, and near-term schedule for one crew
-            member.
+            Vault-defined role context plus standups, leave, work hours, and
+            near-term schedule for one crew member.
           </p>
         </div>
         <div style={selectorWrapStyle}>
@@ -170,19 +192,25 @@ export default function EmployeeSummaryPanel({
                 <div style={styles.identityName}>{summary.employee.name}</div>
                 <div style={styles.identityMeta}>{summary.employee.email}</div>
                 <div style={styles.pillRow}>
-                  {summary.roleLabels.length > 0
-                    ? summary.roleLabels.map((role) => (
+                  {rolePills.length > 0
+                    ? rolePills.map((role) => (
                         <span key={role} style={styles.rolePill}>
                           {role.toUpperCase()}
                         </span>
                       ))
-                    : summary.departmentNames.map((department) => (
+                    : departmentPills.map((department) => (
                         <span key={department} style={styles.departmentPill}>
                           {department.toUpperCase()}
                         </span>
                       ))}
-                  {summary.departmentNames.length === 0 &&
-                  summary.roleLabels.length === 0 ? (
+                  {departmentPills.length > 0 && rolePills.length > 0
+                    ? departmentPills.map((department) => (
+                        <span key={department} style={styles.departmentPill}>
+                          {department.toUpperCase()}
+                        </span>
+                      ))
+                    : null}
+                  {departmentPills.length === 0 && rolePills.length === 0 ? (
                     <span style={styles.departmentPill}>UNASSIGNED</span>
                   ) : null}
                 </div>
@@ -234,6 +262,149 @@ export default function EmployeeSummaryPanel({
               }
               accent="var(--lcars-lavender)"
             />
+          </div>
+
+          <div style={styles.vaultCard}>
+            <div style={styles.kpiHeader}>
+              <div>
+                <div style={styles.detailTitle}>Vault Team Profile</div>
+                <div style={styles.detailSubtle}>
+                  Live role and roster metadata from the Obsidian `50-team`
+                  note.
+                </div>
+              </div>
+              {summary.vaultProfile ? (
+                <div style={styles.kpiMetaStack}>
+                  <span style={styles.kpiMetaPill}>
+                    {summary.vaultProfile.memberId.toUpperCase()}
+                  </span>
+                  <span style={styles.kpiMetaPill}>
+                    SOURCE {formatDateTime(summary.vaultProfile.sourceLastModifiedAt)}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+            <div style={styles.detailDivider} />
+
+            {summary.vaultProfile ? (
+              <>
+                <div style={styles.kpiIdentity}>
+                  <div>
+                    <div style={styles.kpiTitle}>
+                      {summary.vaultProfile.displayName.toUpperCase()}
+                    </div>
+                    <div style={styles.kpiCaption}>
+                      {summary.vaultProfile.role
+                        ? summary.vaultProfile.role
+                        : "Role not specified"}
+                      {summary.vaultProfile.department
+                        ? ` · ${summary.vaultProfile.department}`
+                        : ""}
+                    </div>
+                  </div>
+                  <div style={styles.kpiMetaStack}>
+                    {summary.vaultProfile.joined ? (
+                      <span style={styles.kpiMetaPill}>
+                        JOINED {formatDate(summary.vaultProfile.joined)}
+                      </span>
+                    ) : null}
+                    {summary.vaultProfile.contractEffective ? (
+                      <span style={styles.kpiMetaPill}>
+                        CONTRACT {formatDate(summary.vaultProfile.contractEffective)}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div style={styles.pillRow}>
+                  {summary.vaultProfile.onboardingStage.map((stage) => (
+                    <span key={stage} style={styles.departmentPill}>
+                      {stage.toUpperCase()}
+                    </span>
+                  ))}
+                  {summary.vaultProfile.probation ? (
+                    <span style={styles.rolePill}>
+                      {summary.vaultProfile.probation.toUpperCase()}
+                    </span>
+                  ) : null}
+                  {summary.vaultProfile.clockifyStatus ? (
+                    <span style={styles.rolePill}>
+                      {summary.vaultProfile.clockifyStatus.toUpperCase()}
+                    </span>
+                  ) : null}
+                </div>
+
+                {summary.vaultProfile.summaryMarkdown ? (
+                  <div style={styles.kpiScope}>
+                    {summary.vaultProfile.summaryMarkdown}
+                  </div>
+                ) : null}
+
+                <div style={detailGridStyle}>
+                  <DetailList
+                    title="Primary Projects"
+                    emptyLabel="NO PRIMARY PROJECTS RECORDED"
+                  >
+                    {summary.vaultProfile.primaryProjects.length > 0 ? (
+                      <div style={styles.detailList}>
+                        {summary.vaultProfile.primaryProjects.map((item) => (
+                          <div key={item} style={styles.listItem}>
+                            <div style={styles.detailPrimary}>{item.toUpperCase()}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </DetailList>
+
+                  <DetailList title="Scope" emptyLabel="NO ROLE SCOPE TAGS RECORDED">
+                    {summary.vaultProfile.scope.length > 0 ? (
+                      <div style={styles.detailList}>
+                        {summary.vaultProfile.scope.map((item) => (
+                          <div key={item} style={styles.listItem}>
+                            <div style={styles.detailPrimary}>{item}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </DetailList>
+
+                  <DetailList title="Team Tags" emptyLabel="NO TEAM TAGS RECORDED">
+                    {summary.vaultProfile.teamTags.length > 0 ? (
+                      <div style={styles.detailList}>
+                        {summary.vaultProfile.teamTags.map((item) => (
+                          <div key={item} style={styles.listItem}>
+                            <div style={styles.detailPrimary}>{item}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </DetailList>
+
+                  <DetailList title="Source Note" emptyLabel="SOURCE NOTE MISSING">
+                    <div style={styles.detailList}>
+                      <div style={styles.detailPrimary}>
+                        {summary.vaultProfile.sourceRelativePath}
+                      </div>
+                      {summary.vaultProfile.contactEmail ? (
+                        <div style={styles.detailSubtle}>
+                          CONTACT {summary.vaultProfile.contactEmail}
+                        </div>
+                      ) : null}
+                    </div>
+                  </DetailList>
+                </div>
+
+                {summary.vaultProfile.roleScopeMarkdown ? (
+                  <div style={styles.kpiFooter}>
+                    {summary.vaultProfile.roleScopeMarkdown}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div style={styles.emptyText}>
+                NO OBSIDIAN TEAM PROFILE FOUND FOR THIS CREW MEMBER
+              </div>
+            )}
           </div>
 
           <div style={detailGridStyle}>
@@ -311,6 +482,132 @@ export default function EmployeeSummaryPanel({
                 </div>
               ) : null}
             </DetailList>
+          </div>
+
+          <div style={styles.kpiCard}>
+            <div style={styles.kpiHeader}>
+              <div>
+                <div style={styles.detailTitle}>Latest KPI Snapshot</div>
+                <div style={styles.detailSubtle}>
+                  Latest imported per-employee KPI from the Thoughtseed vault.
+                </div>
+              </div>
+              {summary.kpiSnapshot ? (
+                <div style={styles.kpiMetaStack}>
+                  <span style={styles.kpiMetaPill}>
+                    {summary.kpiSnapshot.kpiVersion.toUpperCase()}
+                  </span>
+                  <span style={styles.kpiMetaPill}>
+                    SOURCE {formatDateTime(summary.kpiSnapshot.sourceLastModifiedAt)}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+            <div style={styles.detailDivider} />
+
+            {summary.kpiSnapshot ? (
+              <>
+                <div style={styles.kpiIdentity}>
+                  <div>
+                    <div style={styles.kpiTitle}>
+                      {summary.kpiSnapshot.title.toUpperCase()}
+                    </div>
+                    <div style={styles.kpiCaption}>
+                      {summary.kpiSnapshot.roleTemplate
+                        ? summary.kpiSnapshot.roleTemplate
+                        : "Role template not set"}
+                      {summary.kpiSnapshot.reportsTo
+                        ? ` · reports to ${summary.kpiSnapshot.reportsTo}`
+                        : ""}
+                    </div>
+                  </div>
+                  <div style={styles.kpiMetaStack}>
+                    {summary.kpiSnapshot.lastReviewed ? (
+                      <span style={styles.kpiMetaPill}>
+                        REVIEWED {formatDate(summary.kpiSnapshot.lastReviewed)}
+                      </span>
+                    ) : null}
+                    <span style={styles.kpiMetaPill}>
+                      IMPORTED {formatDateTime(summary.kpiSnapshot.importedAt)}
+                    </span>
+                  </div>
+                </div>
+
+                {summary.kpiSnapshot.tags.length > 0 ? (
+                  <div style={styles.pillRow}>
+                    {summary.kpiSnapshot.tags.map((tag) => (
+                      <span key={tag} style={styles.departmentPill}>
+                        {tag.toUpperCase()}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+
+                {summary.kpiSnapshot.roleScopeMarkdown ? (
+                  <div style={styles.kpiScope}>
+                    {summary.kpiSnapshot.roleScopeMarkdown}
+                  </div>
+                ) : null}
+
+                <div style={kpiGridStyle}>
+                  <div style={styles.kpiSection}>
+                    <div style={styles.kpiSectionTitle}>Monthly KPIs</div>
+                    <div style={styles.kpiList}>
+                      {summary.kpiSnapshot.monthlyKpis.map((item) => (
+                        <div key={item} style={styles.kpiListItem}>
+                          {stripMarkdown(item)}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div style={styles.kpiSection}>
+                    <div style={styles.kpiSectionTitle}>Quarterly Milestones</div>
+                    <div style={styles.kpiList}>
+                      {summary.kpiSnapshot.quarterlyMilestones.map((item) => (
+                        <div key={item} style={styles.kpiListItem}>
+                          {stripMarkdown(item)}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div style={styles.kpiSection}>
+                    <div style={styles.kpiSectionTitle}>Evidence Sources</div>
+                    <div style={styles.kpiList}>
+                      {summary.kpiSnapshot.evidenceSources.map((item) => (
+                        <div key={item} style={styles.kpiListItem}>
+                          {stripMarkdown(item)}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div style={styles.kpiSection}>
+                    <div style={styles.kpiSectionTitle}>Gap Flags</div>
+                    <div style={styles.kpiList}>
+                      {summary.kpiSnapshot.gapFlags.length > 0 ? (
+                        summary.kpiSnapshot.gapFlags.map((item) => (
+                          <div key={item} style={styles.kpiListItem}>
+                            {stripMarkdown(item)}
+                          </div>
+                        ))
+                      ) : (
+                        <div style={styles.emptyText}>NO GAP FLAGS RECORDED</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={styles.kpiFooter}>
+                  Source note: {summary.kpiSnapshot.sourceRelativePath}
+                </div>
+              </>
+            ) : (
+              <div style={styles.emptyText}>
+                NO IMPORTED KPI SNAPSHOT FOUND FOR THIS CREW MEMBER
+              </div>
+            )}
           </div>
         </>
       ) : null}
@@ -430,9 +727,100 @@ const styles: Record<string, React.CSSProperties> = {
     gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
     gap: 12,
   },
+  kpiGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: 12,
+    marginTop: 14,
+  },
   detailCard: {
     ...lcarsPageStyles.subtleCard,
     borderLeftColor: "var(--lcars-peach)",
+  },
+  kpiCard: {
+    ...lcarsPageStyles.subtleCard,
+    borderLeftColor: "var(--lcars-cyan)",
+    marginTop: 16,
+  },
+  vaultCard: {
+    ...lcarsPageStyles.subtleCard,
+    borderLeftColor: "var(--lcars-orange)",
+    marginBottom: 16,
+  },
+  kpiHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+    flexWrap: "wrap" as const,
+  },
+  kpiIdentity: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+    flexWrap: "wrap" as const,
+  },
+  kpiMetaStack: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap" as const,
+    justifyContent: "flex-end",
+  },
+  kpiMetaPill: {
+    border: "1px solid rgba(153, 153, 204, 0.28)",
+    color: "var(--lcars-cyan)",
+    padding: "4px 8px",
+    fontSize: 10,
+    fontFamily: "'JetBrains Mono', monospace",
+    letterSpacing: "0.6px",
+    borderRadius: 2,
+  },
+  kpiTitle: {
+    color: "var(--lcars-orange)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 13,
+    fontWeight: 700,
+    letterSpacing: "0.8px",
+  },
+  kpiCaption: {
+    color: "var(--lcars-lavender)",
+    fontSize: 11,
+    marginTop: 4,
+  },
+  kpiScope: {
+    color: "var(--lcars-tan)",
+    fontSize: 12,
+    lineHeight: 1.6,
+    marginTop: 12,
+    whiteSpace: "pre-wrap" as const,
+  },
+  kpiSection: {
+    ...lcarsPageStyles.subtleCard,
+    borderLeftColor: "rgba(255, 153, 0, 0.28)",
+    padding: 12,
+  },
+  kpiSectionTitle: {
+    ...lcarsPageStyles.metricLabel,
+    marginBottom: 10,
+  },
+  kpiList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  kpiListItem: {
+    color: "var(--lcars-tan)",
+    fontSize: 12,
+    lineHeight: 1.55,
+    paddingBottom: 8,
+    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
+  },
+  kpiFooter: {
+    color: "var(--text-quaternary)",
+    fontSize: 11,
+    marginTop: 12,
+    wordBreak: "break-word" as const,
   },
   detailTitle: lcarsPageStyles.sectionTitle,
   detailDivider: {

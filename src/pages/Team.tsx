@@ -1,40 +1,24 @@
-import { useState, useEffect, useCallback } from "react";
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import Avatar from "../components/ui/Avatar";
+import EmployeeSummaryPanel from "../components/team/EmployeeSummaryPanel";
+import { SkeletonTable } from "../components/ui/Skeleton";
 import { useInvoke } from "../hooks/useInvoke";
 import { useViewportWidth } from "../hooks/useViewportWidth";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
-import { SkeletonTable } from "../components/ui/Skeleton";
-import Avatar from "../components/ui/Avatar";
-import DepartmentCard from "../components/team/DepartmentCard";
-import DirectoryPanel, {
-  type DirectoryEntry,
-} from "../components/team/DirectoryPanel";
-import EmployeeSummaryPanel from "../components/team/EmployeeSummaryPanel";
-import ValidationBar, {
-  type ValidationIssue,
-} from "../components/team/ValidationBar";
-import type { DirectoryMode } from "../components/team/types";
 import type {
-  DepartmentView,
   Employee,
   EmployeeSummaryView,
   MonthlyHoursView,
-  OrgChartView,
-  OrgDepartmentMappingView,
-  OrgPersonView,
   TeamSnapshotView,
+  VaultTeamProfileView,
 } from "../lib/types";
 
-type RoleField = "headPersonId" | "teamLeadPersonId";
-type AssignmentRole = "member" | RoleField;
-
-type DepartmentHealthSummary = {
-  id: string;
+type DepartmentCapacitySummary = {
   name: string;
   memberCount: number;
   totalHours: number;
   quotaTotal: number;
-  headName: string | null;
 };
 
 function ProgressBar({ current, total }: { current: number; total: number }) {
@@ -96,275 +80,59 @@ function formatSnapshotTimestamp(value: string): string {
   });
 }
 
-function dedupe(ids: string[]): string[] {
-  return [...new Set(ids.filter(Boolean))];
-}
-
-function normalizeDraftDepartments(
-  departments: OrgDepartmentMappingView[]
-): OrgDepartmentMappingView[] {
-  return departments.map((department) => {
-    const memberPersonIds = dedupe([
-      ...department.memberPersonIds,
-      ...(department.headPersonId ? [department.headPersonId] : []),
-      ...(department.teamLeadPersonId ? [department.teamLeadPersonId] : []),
-    ]);
-
-    return {
-      ...department,
-      memberPersonIds,
-    };
-  });
-}
-
-function removePersonFromDepartment(
-  department: OrgDepartmentMappingView,
-  personId: string
-): OrgDepartmentMappingView {
-  return {
-    ...department,
-    memberPersonIds: department.memberPersonIds.filter((id) => id !== personId),
-    headPersonId:
-      department.headPersonId === personId ? null : department.headPersonId,
-    teamLeadPersonId:
-      department.teamLeadPersonId === personId
-        ? null
-        : department.teamLeadPersonId,
-  };
-}
-
-function movePersonToDepartment(
-  departments: OrgDepartmentMappingView[],
-  personId: string,
-  departmentId: string
-): OrgDepartmentMappingView[] {
-  return normalizeDraftDepartments(
-    departments.map((department) => {
-      const cleared = removePersonFromDepartment(department, personId);
-      if (department.id !== departmentId) {
-        return cleared;
-      }
-
-      return {
-        ...cleared,
-        memberPersonIds: dedupe([...cleared.memberPersonIds, personId]),
-      };
-    })
-  );
-}
-
-function unassignPerson(
-  departments: OrgDepartmentMappingView[],
-  personId: string
-): OrgDepartmentMappingView[] {
-  return normalizeDraftDepartments(
-    departments.map((department) => removePersonFromDepartment(department, personId))
-  );
-}
-
-function assignPersonToRole(
-  departments: OrgDepartmentMappingView[],
-  personId: string,
-  departmentId: string,
-  role: RoleField
-): OrgDepartmentMappingView[] {
-  const next = movePersonToDepartment(departments, personId, departmentId);
-  return normalizeDraftDepartments(
-    next.map((department) =>
-      department.id === departmentId
-        ? { ...department, [role]: personId }
-        : department
-    )
-  );
-}
-
-function personMatchesSearch(person: OrgPersonView, query: string): boolean {
+function profileMatchesSearch(profile: VaultTeamProfileView, query: string): boolean {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) return true;
 
-  const haystack = [person.name, person.email ?? "", person.personId]
+  const haystack = [
+    profile.displayName,
+    profile.memberId,
+    profile.role ?? "",
+    profile.department ?? "",
+    profile.contactEmail ?? "",
+    profile.primaryProjects.join(" "),
+    profile.scope.join(" "),
+    profile.teamTags.join(" "),
+    profile.onboardingStage.join(" "),
+  ]
     .join(" ")
     .toLowerCase();
 
   return haystack.includes(normalizedQuery);
 }
 
-function departmentAccent(name: string): string {
-  switch (name.toLowerCase()) {
-    case "leadership":
-      return "var(--lcars-peach)";
-    case "engineering":
-      return "var(--lcars-cyan)";
-    case "marketing":
-      return "var(--lcars-orange)";
-    case "organization":
-      return "var(--lcars-lavender)";
-    default:
-      return "var(--lcars-peach)";
-  }
-}
-
-function summarizeDepartmentHealth(
-  departments: DepartmentView[]
-): DepartmentHealthSummary[] {
-  const byName = new Map<string, DepartmentHealthSummary>();
-
-  for (const department of departments) {
-    const key = department.name.trim().toLowerCase();
-    const current = byName.get(key);
-
-    if (!current) {
-      byName.set(key, {
-        id: department.id,
-        name: department.name,
-        memberCount: department.memberCount,
-        totalHours: department.totalHours,
-        quotaTotal: department.quotaTotal,
-        headName: department.headName,
-      });
-      continue;
-    }
-
-    current.memberCount += department.memberCount;
-    current.totalHours += department.totalHours;
-    current.quotaTotal += department.quotaTotal;
-    if (!current.headName && department.headName) {
-      current.headName = department.headName;
-    }
-  }
-
-  return [...byName.values()].sort((left, right) =>
-    left.name.localeCompare(right.name)
-  );
-}
-
-function encodeAssignmentValue(
-  departmentId: string,
-  role: AssignmentRole
-): string {
-  return `${departmentId}::${role}`;
-}
-
-function parseAssignmentValue(
-  value: string
-): { departmentId: string; role: AssignmentRole } | null {
-  if (value === "unassigned") return null;
-
-  const [departmentId, role] = value.split("::");
-  if (
-    !departmentId ||
-    (role !== "member" &&
-      role !== "headPersonId" &&
-      role !== "teamLeadPersonId")
-  ) {
-    return null;
-  }
-
-  return { departmentId, role };
-}
-
-function currentAssignmentValue(
-  departments: OrgDepartmentMappingView[],
-  personId: string
-): string {
-  for (const department of departments) {
-    if (department.headPersonId === personId) {
-      return encodeAssignmentValue(department.id, "headPersonId");
-    }
-    if (department.teamLeadPersonId === personId) {
-      return encodeAssignmentValue(department.id, "teamLeadPersonId");
-    }
-    if (department.memberPersonIds.includes(personId)) {
-      return encodeAssignmentValue(department.id, "member");
-    }
-  }
-
-  return "unassigned";
-}
-
-function assignmentRoleLabel(role: AssignmentRole): string {
-  switch (role) {
-    case "headPersonId":
-      return "HEAD";
-    case "teamLeadPersonId":
-      return "TEAM LEAD";
-    default:
-      return "MEMBER";
-  }
-}
-
-function describeAssignment(
-  departments: OrgDepartmentMappingView[],
-  personId: string,
-  departmentLabelsById?: Map<string, string>
-): string {
-  const assignment = parseAssignmentValue(
-    currentAssignmentValue(departments, personId)
-  );
-
-  if (!assignment) {
-    return "UNASSIGNED";
-  }
-
-  const department = departments.find((item) => item.id === assignment.departmentId);
-  if (!department) {
-    return "UNASSIGNED";
-  }
-
-  const departmentLabel =
-    departmentLabelsById?.get(department.id) ?? department.name.toUpperCase();
-  return `${departmentLabel} • ${assignmentRoleLabel(assignment.role)}`;
+function truncateSummary(value: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.replace(/\s+/g, " ").trim();
+  if (trimmed.length <= 220) return trimmed;
+  return `${trimmed.slice(0, 217).trimEnd()}...`;
 }
 
 function Team() {
   const api = useInvoke();
+  const navigate = useNavigate();
   const viewportWidth = useViewportWidth();
   const [employees, setEmployees] = useState<Employee[]>([]);
-  const [departments, setDepartments] = useState<DepartmentView[]>([]);
-  const [orgChart, setOrgChart] = useState<OrgChartView | null>(null);
-  const [draftDepartments, setDraftDepartments] = useState<
-    OrgDepartmentMappingView[]
-  >([]);
-  const [departmentOrder, setDepartmentOrder] = useState<string[]>([]);
-  const [peopleSearch, setPeopleSearch] = useState("");
-  const [orgMessage, setOrgMessage] = useState<string | null>(null);
-  const [orgSaving, setOrgSaving] = useState(false);
+  const [vaultProfiles, setVaultProfiles] = useState<VaultTeamProfileView[]>([]);
+  const [vaultError, setVaultError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [snapshotMessage, setSnapshotMessage] = useState<string | null>(null);
   const [cacheUpdatedAt, setCacheUpdatedAt] = useState<string | null>(null);
-  const [teamActionMessage, setTeamActionMessage] = useState<string | null>(null);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState("");
-  const [directoryMode, setDirectoryMode] = useState<DirectoryMode>("unassigned");
   const [employeeSummary, setEmployeeSummary] =
     useState<EmployeeSummaryView | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [monthlyHours, setMonthlyHours] = useState<MonthlyHoursView[]>([]);
-  const isCompactLayout = viewportWidth < 1180;
-  const isNarrowLayout = viewportWidth < 980;
+  const [rosterSearch, setRosterSearch] = useState("");
+  const isNarrowLayout = viewportWidth < 940;
   const isMobileLayout = viewportWidth < 760;
 
   const applySnapshot = useCallback((snapshot: TeamSnapshotView) => {
-    setDepartments(snapshot.departments);
+    setVaultProfiles(snapshot.vaultProfiles.filter((profile) => profile.active));
+    setVaultError(snapshot.vaultError);
     setCacheUpdatedAt(snapshot.cacheUpdatedAt);
-
-    if (snapshot.orgChart) {
-      const normalized = normalizeDraftDepartments(snapshot.orgChart.departments);
-      setOrgChart(snapshot.orgChart);
-      setDraftDepartments(normalized);
-      setDepartmentOrder(normalized.map((department) => department.id));
-      setOrgMessage(null);
-    } else {
-      setOrgChart(null);
-      setDraftDepartments([]);
-      setDepartmentOrder([]);
-      setOrgMessage(
-        snapshot.hulyError
-          ? `Error: ${String(snapshot.hulyError)}`
-          : "HULY ORG CHART DATA IS NOT AVAILABLE"
-      );
-    }
   }, []);
 
   const load = useCallback(async () => {
@@ -373,20 +141,12 @@ function Team() {
     setLoading(true);
     setRefreshing(true);
     setSnapshotMessage(null);
-    setTeamActionMessage(null);
-    setOrgMessage(null);
 
     try {
       const roster = await api.getEmployees();
       setEmployees(roster);
-      setSelectedEmployeeId((current) =>
-        current && roster.some((item) => item.id === current && item.isActive)
-          ? current
-          : roster.find((item) => item.isActive)?.id ?? ""
-      );
     } catch (err) {
       setEmployees([]);
-      setSelectedEmployeeId("");
       setSnapshotMessage(`Team roster read failed: ${String(err)}`);
     }
 
@@ -402,18 +162,15 @@ function Team() {
       applySnapshot(cachedSnapshot);
 
       if (cachedSnapshot.cacheUpdatedAt) {
-        setSnapshotMessage("Showing cached Team data while live Huly refresh runs.");
+        setSnapshotMessage("Showing cached ops data while live Team refresh runs.");
       } else {
-        setSnapshotMessage("No Team cache yet. Hydrating Team data from Huly.");
+        setSnapshotMessage("No Team cache yet. Hydrating live ops overlays.");
       }
     } catch (err) {
-      setDepartments([]);
-      setOrgChart(null);
-      setDraftDepartments([]);
-      setDepartmentOrder([]);
+      setVaultProfiles([]);
+      setVaultError(`Team snapshot read failed: ${String(err)}`);
       setCacheUpdatedAt(null);
-      setOrgMessage(null);
-      setSnapshotMessage(`Team cache read failed: ${String(err)}`);
+      setSnapshotMessage(`Team snapshot read failed: ${String(err)}`);
     } finally {
       setLoading(false);
     }
@@ -423,7 +180,7 @@ function Team() {
       applySnapshot(refreshed);
       if (refreshed.hulyError) {
         setSnapshotMessage(
-          `Live Huly refresh failed. Showing cached Team data. Details: ${refreshed.hulyError}`
+          `Live Huly refresh failed. Showing cached ops data. Details: ${refreshed.hulyError}`
         );
       } else {
         setSnapshotMessage("Live Team refresh complete.");
@@ -431,7 +188,7 @@ function Team() {
     } catch (err) {
       if (cachedSnapshot?.cacheUpdatedAt) {
         setSnapshotMessage(
-          `Live Huly refresh failed. Showing cached Team data. Details: ${String(err)}`
+          `Live Huly refresh failed. Showing cached ops data. Details: ${String(err)}`
         );
       } else {
         setSnapshotMessage(`Live Team refresh failed: ${String(err)}`);
@@ -445,30 +202,31 @@ function Team() {
     load();
   }, [load]);
 
-  useEffect(() => {
-    setDepartmentOrder((current) => {
-      const ids = draftDepartments.map((department) => department.id);
-      if (ids.length === 0) return [];
-      const retained = current.filter((id) => ids.includes(id));
-      const missing = ids.filter((id) => !retained.includes(id));
-      return [...retained, ...missing];
-    });
-  }, [draftDepartments]);
-
   const activeEmployees = employees.filter((employee) => employee.isActive);
+  const employeeById = new Map(employees.map((employee) => [employee.id, employee]));
+  const profileByEmployeeId = new Map(
+    vaultProfiles
+      .filter((profile) => profile.employeeId)
+      .map((profile) => [profile.employeeId as string, profile])
+  );
+  const selectableEmployees = activeEmployees.filter((employee) =>
+    profileByEmployeeId.has(employee.id)
+  );
+  const crewEmployees =
+    selectableEmployees.length > 0 ? selectableEmployees : activeEmployees;
 
   useEffect(() => {
-    if (activeEmployees.length === 0) {
+    if (crewEmployees.length === 0) {
       setSelectedEmployeeId("");
       return;
     }
 
     setSelectedEmployeeId((current) =>
-      current && activeEmployees.some((employee) => employee.id === current)
+      current && crewEmployees.some((employee) => employee.id === current)
         ? current
-        : activeEmployees[0].id
+        : crewEmployees[0].id
     );
-  }, [activeEmployees]);
+  }, [crewEmployees]);
 
   useEffect(() => {
     if (!selectedEmployeeId) {
@@ -506,110 +264,6 @@ function Team() {
     };
   }, [api, selectedEmployeeId]);
 
-  function updateRole(
-    departmentId: string,
-    role: RoleField,
-    personId: string | null
-  ) {
-    setDraftDepartments((current) => {
-      if (!personId) {
-        return normalizeDraftDepartments(
-          current.map((department) =>
-            department.id === departmentId
-              ? { ...department, [role]: null }
-              : department
-          )
-        );
-      }
-
-      return assignPersonToRole(current, personId, departmentId, role);
-    });
-  }
-
-  function removeRoleOccupant(departmentId: string, role: RoleField) {
-    setDraftDepartments((current) =>
-      normalizeDraftDepartments(
-        current.map((department) =>
-          department.id === departmentId
-            ? { ...department, [role]: null }
-            : department
-        )
-      )
-    );
-  }
-
-  function removeDepartmentMember(departmentId: string, personId: string) {
-    setDraftDepartments((current) =>
-      normalizeDraftDepartments(
-        current.map((department) =>
-          department.id === departmentId
-            ? removePersonFromDepartment(department, personId)
-            : department
-        )
-      )
-    );
-  }
-
-  function applyAssignmentSelection(personId: string, value: string) {
-    const assignment = parseAssignmentValue(value);
-
-    if (!assignment) {
-      setDraftDepartments((current) => unassignPerson(current, personId));
-      return;
-    }
-
-    setDraftDepartments((current) =>
-      assignment.role === "member"
-        ? movePersonToDepartment(current, personId, assignment.departmentId)
-        : assignPersonToRole(
-            current,
-            personId,
-            assignment.departmentId,
-            assignment.role
-          )
-    );
-  }
-
-  async function handleSaveOrgChart() {
-    if (!orgChart) return;
-    if (duplicateDepartmentCount > 0 || openRoleCount > 0) {
-      setOrgMessage(
-        "Error: Resolve duplicate department names and missing leadership roles before saving."
-      );
-      return;
-    }
-    setOrgSaving(true);
-    setOrgMessage(null);
-    try {
-      const result = await api.applyOrgChartMapping(
-        draftDepartments.map((department) => ({
-          departmentId: department.id,
-          headPersonId: department.headPersonId,
-          teamLeadPersonId: department.teamLeadPersonId,
-          memberPersonIds: department.memberPersonIds,
-        }))
-      );
-      setOrgMessage(result);
-      const refreshed = await api.getOrgChart();
-      const normalized = normalizeDraftDepartments(refreshed.departments);
-      setOrgChart(refreshed);
-      setDraftDepartments(normalized);
-      setDepartmentOrder(normalized.map((department) => department.id));
-    } catch (err) {
-      setOrgMessage(`Error: ${String(err)}`);
-    } finally {
-      setOrgSaving(false);
-    }
-  }
-
-  function handleResetOrgChart() {
-    if (!orgChart) return;
-    const normalized = normalizeDraftDepartments(orgChart.departments);
-    setDraftDepartments(normalized);
-    setDepartmentOrder(normalized.map((department) => department.id));
-    setOrgMessage("Draft reset to live Huly state");
-  }
-
   if (loading) {
     return (
       <div>
@@ -621,292 +275,89 @@ function Team() {
         <div style={styles.card}>
           <SkeletonTable rows={5} cols={6} />
         </div>
-        <div style={styles.card}>
-          <SkeletonTable rows={3} cols={2} />
-        </div>
       </div>
     );
   }
 
-  const people = orgChart?.people ?? [];
-  const peopleById = new Map(people.map((person) => [person.personId, person]));
-  const departmentById = new Map(
-    draftDepartments.map((department) => [department.id, department])
+  const activeProfiles = vaultProfiles.filter((profile) => profile.active);
+  const visibleProfiles = activeProfiles.filter((profile) =>
+    profileMatchesSearch(profile, rosterSearch)
   );
-  const assignedDepartmentByPerson = new Map<string, string>();
-
-  for (const department of draftDepartments) {
-    for (const personId of department.memberPersonIds) {
-      if (!assignedDepartmentByPerson.has(personId)) {
-        assignedDepartmentByPerson.set(personId, department.id);
-      }
-    }
+  const latestVaultSourceAt = activeProfiles.reduce<string | null>((latest, profile) => {
+    if (!profile.sourceLastModifiedAt) return latest;
+    if (!latest) return profile.sourceLastModifiedAt;
+    return profile.sourceLastModifiedAt > latest ? profile.sourceLastModifiedAt : latest;
+  }, null);
+  const departmentMap = new Map<string, VaultTeamProfileView[]>();
+  for (const profile of visibleProfiles) {
+    const key = (profile.department ?? "Unassigned").trim() || "Unassigned";
+    const current = departmentMap.get(key) ?? [];
+    current.push(profile);
+    departmentMap.set(key, current);
   }
-
-  const unassignedPeople = people.filter(
-    (person) => !assignedDepartmentByPerson.has(person.personId)
-  );
-
-  const visibleDirectoryPeople = [...people]
-    .filter((person) => personMatchesSearch(person, peopleSearch))
-    .sort((left, right) => {
-      const leftUnassigned = assignedDepartmentByPerson.has(left.personId) ? 1 : 0;
-      const rightUnassigned = assignedDepartmentByPerson.has(right.personId) ? 1 : 0;
-      return (
-        leftUnassigned - rightUnassigned ||
-        Number(right.active) - Number(left.active) ||
-        left.name.localeCompare(right.name)
-      );
-    });
-
-  const visibleUnassignedPeople = visibleDirectoryPeople.filter(
-    (person) => !assignedDepartmentByPerson.has(person.personId)
-  );
-
-  const liveDraftSignature = JSON.stringify(
-    normalizeDraftDepartments(orgChart?.departments ?? [])
-  );
-  const currentDraftSignature = JSON.stringify(
-    normalizeDraftDepartments(draftDepartments)
-  );
-  const hasDraftChanges = liveDraftSignature !== currentDraftSignature;
-  const assignedCount = people.length - unassignedPeople.length;
-  const directoryPeople =
-    directoryMode === "unassigned" ? visibleUnassignedPeople : visibleDirectoryPeople;
-
-  const autoFillLeadershipRoles = () => {
-    setDraftDepartments((current) =>
-      normalizeDraftDepartments(
-        current.map((department) => {
-          if (department.name.toLowerCase() === "organization") {
-            return department;
-          }
-
-          const candidateIds = dedupe(department.memberPersonIds).filter(
-            (personId) => peopleById.get(personId)?.active
-          );
-
-          if (candidateIds.length === 0) {
-            return department;
-          }
-
-          let headPersonId = department.headPersonId;
-          let teamLeadPersonId = department.teamLeadPersonId;
-
-          if (!headPersonId) {
-            headPersonId = candidateIds[0];
-          }
-
-          if (!teamLeadPersonId) {
-            teamLeadPersonId =
-              candidateIds.find((personId) => personId !== headPersonId) ??
-              candidateIds[0];
-          }
-
-          return {
-            ...department,
-            headPersonId,
-            teamLeadPersonId,
-            memberPersonIds: dedupe([
-              ...department.memberPersonIds,
-              ...(headPersonId ? [headPersonId] : []),
-              ...(teamLeadPersonId ? [teamLeadPersonId] : []),
-            ]),
-          };
-        })
-      )
-    );
-    setTeamActionMessage(
-      "AUTO-FILLED MISSING LEADERSHIP ROLES USING ACTIVE DEPARTMENT MEMBERS."
-    );
-  };
-
-  const unassignInactiveCrew = () => {
-    setDraftDepartments((current) =>
-      normalizeDraftDepartments(
-        current.map((department) => ({
-          ...department,
-          memberPersonIds: department.memberPersonIds.filter(
-            (personId) => peopleById.get(personId)?.active
-          ),
-          headPersonId:
-            department.headPersonId && peopleById.get(department.headPersonId)?.active
-              ? department.headPersonId
-              : null,
-          teamLeadPersonId:
-            department.teamLeadPersonId &&
-            peopleById.get(department.teamLeadPersonId)?.active
-              ? department.teamLeadPersonId
-              : null,
-        }))
-      )
-    );
-    setTeamActionMessage("UNASSIGNED INACTIVE CREW FROM ROLE AND MEMBER MAPPINGS.");
-  };
-
-  const departmentNameGroups = new Map<string, number>();
-  for (const department of draftDepartments) {
-    const key = department.name.trim().toLowerCase();
-    departmentNameGroups.set(key, (departmentNameGroups.get(key) ?? 0) + 1);
-  }
-  const duplicateDepartmentCount = [...departmentNameGroups.values()].filter(
-    (count) => count > 1
-  ).length;
-  const inactiveAssignedCount = people.filter(
-    (person) =>
-      assignedDepartmentByPerson.has(person.personId) && !person.active
-  ).length;
-  const openRoleCount = draftDepartments.reduce((count, department) => {
-    if (department.name.toLowerCase() === "organization") {
-      return count;
-    }
-    const missingHead = department.headPersonId ? 0 : 1;
-    const missingLead = department.teamLeadPersonId ? 0 : 1;
-    return count + missingHead + missingLead;
-  }, 0);
-  const departmentHealthSummaries = summarizeDepartmentHealth(departments);
-
-  const orderedDepartments = departmentOrder
-    .map((departmentId) => departmentById.get(departmentId))
-    .filter((department): department is OrgDepartmentMappingView => Boolean(department));
-  const departmentNameTotals = new Map<string, number>();
-  for (const department of orderedDepartments) {
-    const key = department.name.trim().toLowerCase();
-    departmentNameTotals.set(key, (departmentNameTotals.get(key) ?? 0) + 1);
-  }
-  const departmentNameOrdinal = new Map<string, number>();
-  const departmentDisplayNames = new Map<string, string>();
-  for (const department of orderedDepartments) {
-    const key = department.name.trim().toLowerCase();
-    const ordinal = (departmentNameOrdinal.get(key) ?? 0) + 1;
-    departmentNameOrdinal.set(key, ordinal);
-    const total = departmentNameTotals.get(key) ?? 1;
-    const suffix = total > 1 ? ` ${ordinal}` : "";
-    departmentDisplayNames.set(
-      department.id,
-      `${department.name.toUpperCase()}${suffix}`
-    );
-  }
-  const assignablePeople = [...people].sort(
-    (left, right) =>
-      Number(right.active) - Number(left.active) ||
-      left.name.localeCompare(right.name)
-  );
-  const rosterAssignmentOptions = orderedDepartments.flatMap((department) => [
-    {
-      value: encodeAssignmentValue(department.id, "member"),
-      label: `${departmentDisplayNames.get(department.id) ?? department.name.toUpperCase()} • MEMBER`,
-    },
-    {
-      value: encodeAssignmentValue(department.id, "headPersonId"),
-      label: `${departmentDisplayNames.get(department.id) ?? department.name.toUpperCase()} • HEAD`,
-    },
-    {
-      value: encodeAssignmentValue(department.id, "teamLeadPersonId"),
-      label: `${departmentDisplayNames.get(department.id) ?? department.name.toUpperCase()} • TEAM LEAD`,
-    },
-  ]);
-  const directoryEntries: DirectoryEntry[] = directoryPeople.map((person) => {
-    const assignedDepartmentId = assignedDepartmentByPerson.get(person.personId);
-    const assignedDepartment = assignedDepartmentId
-      ? departmentById.get(assignedDepartmentId)
-      : null;
-    return {
-      person,
-      accent: assignedDepartment
-        ? departmentAccent(assignedDepartment.name)
-        : "var(--lcars-yellow)",
-      assignmentSummary: describeAssignment(
-        draftDepartments,
-        person.personId,
-        departmentDisplayNames
+  const rosterDepartments = [...departmentMap.entries()]
+    .map(([name, profiles]) => ({
+      name,
+      profiles: [...profiles].sort((left, right) =>
+        left.displayName.localeCompare(right.displayName)
       ),
-      assignmentValue: currentAssignmentValue(draftDepartments, person.personId),
-    };
-  });
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const unmappedProfiles = activeProfiles.filter((profile) => !profile.employeeId).length;
+  const mappedProfiles = activeProfiles.filter((profile) => profile.employeeId).length;
 
-  const validationIssues: ValidationIssue[] = [];
-  if (duplicateDepartmentCount > 0) {
-    validationIssues.push({
-      id: "duplicate-department-names",
-      title: "DUPLICATE DEPARTMENT NAMES",
-      detail:
-        "MULTIPLE DEPARTMENTS SHARE THE SAME NAME. DISAMBIGUATE IN HULY OR RESET THIS DRAFT BEFORE SAVING.",
-      blocking: true,
-      actionLabel: "RESET DRAFT",
-      onAction: handleResetOrgChart,
-    });
+  const monthlyHoursByEmployeeName = new Map(
+    monthlyHours.map((row) => [row.employeeName.toLowerCase(), row])
+  );
+  const departmentCapacityMap = new Map<string, DepartmentCapacitySummary>();
+  for (const profile of activeProfiles) {
+    if (!profile.employeeId) continue;
+    const employee = employeeById.get(profile.employeeId);
+    if (!employee) continue;
+    const departmentName = (profile.department ?? "Unassigned").trim() || "Unassigned";
+    const current =
+      departmentCapacityMap.get(departmentName) ?? {
+        name: departmentName,
+        memberCount: 0,
+        totalHours: 0,
+        quotaTotal: 0,
+      };
+    const monthlyRow = monthlyHoursByEmployeeName.get(employee.name.toLowerCase());
+    current.memberCount += 1;
+    current.totalHours += monthlyRow?.actualHours ?? 0;
+    current.quotaTotal += employee.monthlyQuotaHours;
+    departmentCapacityMap.set(departmentName, current);
   }
-  if (openRoleCount > 0) {
-    validationIssues.push({
-      id: "missing-leadership-roles",
-      title: "MISSING REQUIRED LEADERSHIP ROLES",
-      detail:
-        "EACH DEPARTMENT NEEDS A HEAD AND TEAM LEAD (EXCEPT ORGANIZATION). AUTO-FILL CAN ASSIGN FROM ACTIVE MEMBERS.",
-      blocking: true,
-      actionLabel: "AUTO-FILL ROLES",
-      onAction: autoFillLeadershipRoles,
-    });
-  }
-  if (inactiveAssignedCount > 0) {
-    validationIssues.push({
-      id: "inactive-assigned",
-      title: "INACTIVE CREW STILL ASSIGNED",
-      detail:
-        "INACTIVE PEOPLE ARE MAPPED TO A ROLE OR MEMBER SLOT. REMOVE THEM TO AVOID STALE ASSIGNMENTS.",
-      blocking: false,
-      actionLabel: "UNASSIGN INACTIVE",
-      onAction: unassignInactiveCrew,
-    });
-  }
-  const canSaveOrgChart =
-    hasDraftChanges &&
-    !orgSaving &&
-    validationIssues.every((issue) => !issue.blocking);
+  const departmentCapacity = [...departmentCapacityMap.values()].sort((left, right) =>
+    left.name.localeCompare(right.name)
+  );
 
-  const validationStats = [
-    {
-      label: "DUPLICATE DEPARTMENTS",
-      value: duplicateDepartmentCount,
-      color:
-        duplicateDepartmentCount > 0 ? "var(--lcars-yellow)" : "var(--lcars-green)",
-    },
-    {
-      label: "INACTIVE ASSIGNED",
-      value: inactiveAssignedCount,
-      color:
-        inactiveAssignedCount > 0 ? "var(--lcars-yellow)" : "var(--lcars-green)",
-    },
-    {
-      label: "OPEN LEADERSHIP ROLES",
-      value: openRoleCount,
-      color: openRoleCount > 0 ? "var(--lcars-orange)" : "var(--lcars-green)",
-    },
-  ];
+  const monthlyCapacityRows = crewEmployees
+    .map((employee) => {
+      const monthlyRow =
+        monthlyHoursByEmployeeName.get(employee.name.toLowerCase()) ?? null;
+      const profile = profileByEmployeeId.get(employee.id) ?? null;
+      return {
+        employee,
+        monthlyRow,
+        profile,
+      };
+    })
+    .sort((left, right) => left.employee.name.localeCompare(right.employee.name));
 
-  const orgWorkspaceStyle = {
-    ...styles.orgWorkspace,
-    gridTemplateColumns: isCompactLayout
-      ? "1fr"
-      : (styles.orgWorkspace.gridTemplateColumns as string),
-    gap: isNarrowLayout ? 14 : (styles.orgWorkspace.gap as number),
-  };
-  const orgButtonRowStyle = {
-    ...styles.buttonRow,
-    alignItems: isNarrowLayout ? "stretch" : styles.buttonRow.alignItems,
-    gap: isNarrowLayout ? 8 : styles.buttonRow.gap,
-  };
-  const orgCanvasStyle = {
-    ...styles.orgCanvas,
-    overflowX: isNarrowLayout ? "auto" : styles.orgCanvas.overflowX,
-  };
-  const bentoGridStyle = {
-    ...styles.bentoGrid,
+  const rosterGridStyle = {
+    ...styles.rosterGrid,
     gridTemplateColumns: isMobileLayout
       ? "1fr"
       : isNarrowLayout
         ? "repeat(auto-fit, minmax(240px, 1fr))"
-        : (styles.bentoGrid.gridTemplateColumns as string),
+        : (styles.rosterGrid.gridTemplateColumns as string),
+  };
+  const statsGridStyle = {
+    ...styles.statsGrid,
+    gridTemplateColumns: isMobileLayout
+      ? "repeat(2, minmax(0, 1fr))"
+      : (styles.statsGrid.gridTemplateColumns as string),
   };
   const departmentGridStyle = {
     ...styles.departmentGrid,
@@ -916,7 +367,7 @@ function Team() {
   };
   const monthlyHoursTableStyle = {
     ...styles.table,
-    minWidth: isMobileLayout ? 760 : 900,
+    minWidth: isMobileLayout ? 860 : 980,
   };
 
   return (
@@ -927,11 +378,17 @@ function Team() {
         <div style={styles.statusBanner}>
           <div>
             <div style={styles.statusBannerLabel}>
-              {refreshing ? "SYNCING SQLITE CACHE" : "TEAM CACHE"}
+              {refreshing ? "SYNCING OPS OVERLAYS" : "TEAM STATUS"}
             </div>
             {snapshotMessage ? (
               <div style={styles.statusBannerText}>{snapshotMessage}</div>
             ) : null}
+            <div style={styles.statusBannerText}>
+              Roster source: Obsidian vault
+              {latestVaultSourceAt
+                ? ` · latest note ${formatSnapshotTimestamp(latestVaultSourceAt)}`
+                : ""}
+            </div>
           </div>
           {cacheUpdatedAt ? (
             <div style={styles.statusBannerMeta}>
@@ -940,20 +397,18 @@ function Team() {
           ) : null}
         </div>
       )}
-      {teamActionMessage ? (
-        <div style={styles.actionBanner}>{teamActionMessage}</div>
-      ) : null}
+      {vaultError ? <div style={styles.errorBanner}>{vaultError}</div> : null}
 
       <div style={styles.subrouteNav}>
         <NavLink
-          to="/team/mapping"
+          to="/team/roster"
           end
           style={({ isActive }) => ({
             ...styles.subrouteLink,
             ...(isActive ? styles.subrouteLinkActive : null),
           })}
         >
-          MAPPING
+          ROSTER
         </NavLink>
         <NavLink
           to="/team/capacity"
@@ -978,133 +433,159 @@ function Team() {
       </div>
 
       <Routes>
-        <Route index element={<Navigate to="mapping" replace />} />
+        <Route index element={<Navigate to="roster" replace />} />
         <Route
-          path="mapping"
+          path="roster"
           element={
-            <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
-              <h2 style={styles.sectionTitle}>ORG CHART MAPPING</h2>
-              <div style={styles.sectionDivider} />
-
-              {!orgChart ? (
-                <p style={styles.emptyText}>
-                  {orgMessage
-                    ? orgMessage.toUpperCase()
-                    : "HULY ORG CHART DATA IS NOT AVAILABLE"}
-                </p>
-              ) : (
-                <>
-                  <div style={styles.orgTopBar}>
-                    <div style={styles.orgStatGrid}>
-                      <div style={styles.orgStatCard}>
-                        <div style={styles.orgStatValue}>{draftDepartments.length}</div>
-                        <div style={styles.orgStatLabel}>DEPARTMENTS</div>
-                      </div>
-                      <div style={styles.orgStatCard}>
-                        <div style={styles.orgStatValue}>{assignedCount}</div>
-                        <div style={styles.orgStatLabel}>ASSIGNED CREW</div>
-                      </div>
-                      <div style={styles.orgStatCard}>
-                        <div style={styles.orgStatValue}>{unassignedPeople.length}</div>
-                        <div style={styles.orgStatLabel}>UNASSIGNED</div>
-                      </div>
-                    </div>
-
-                    <div style={orgButtonRowStyle}>
-                      <button
-                        onClick={handleSaveOrgChart}
-                        disabled={!canSaveOrgChart}
-                        style={{
-                          ...styles.primaryButton,
-                          opacity: canSaveOrgChart ? 1 : 0.5,
-                        }}
-                      >
-                        {orgSaving ? "SAVING..." : "SAVE ORG CHART"}
-                      </button>
-                      <button
-                        onClick={handleResetOrgChart}
-                        disabled={!hasDraftChanges || orgSaving}
-                        style={{
-                          ...styles.ghostButton,
-                          opacity: !hasDraftChanges || orgSaving ? 0.5 : 1,
-                        }}
-                      >
-                        RESET DRAFT
-                      </button>
-                      {orgMessage && (
-                        <span
-                          style={{
-                            ...styles.label,
-                            color: orgMessage.startsWith("Error")
-                              ? "var(--lcars-red)"
-                              : "var(--lcars-green)",
-                          }}
-                        >
-                          {orgMessage.toUpperCase()}
-                        </span>
-                      )}
-                    </div>
-
-                    <div style={styles.helperText}>
-                      USE THE ASSIGN DROPDOWNS TO PLACE PEOPLE INTO A DEPARTMENT ROLE.
-                      THE ROSTER CONTROL CAN SET MEMBER, HEAD, OR TEAM LEAD, AND EACH
-                      DEPARTMENT CARD HAS DIRECT ROLE PICKERS FOR QUICK ADJUSTMENTS.
-                    </div>
+            <>
+              <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <h2 style={styles.sectionTitle}>VAULT ROSTER</h2>
+                    <p style={styles.helperText}>
+                      Team identity, role, department, and onboarding state come
+                      directly from the Obsidian `50-team/*.md` notes. The old
+                      assignment workflow is intentionally removed from this surface.
+                    </p>
                   </div>
-
-                  <div style={orgWorkspaceStyle}>
-                    <DirectoryPanel
-                      searchValue={peopleSearch}
-                      onSearchChange={setPeopleSearch}
-                      mode={directoryMode}
-                      onModeChange={setDirectoryMode}
-                      unassignedCount={visibleUnassignedPeople.length}
-                      visibleCount={visibleDirectoryPeople.length}
-                      showingCount={directoryEntries.length}
-                      totalCount={people.length}
-                      entries={directoryEntries}
-                      assignmentOptions={rosterAssignmentOptions}
-                      onAssignmentChange={applyAssignmentSelection}
-                      validationBar={
-                        <ValidationBar
-                          stats={validationStats}
-                          issues={validationIssues}
-                          footer={
-                            validationIssues.some((issue) => issue.blocking) ? (
-                              <div style={styles.saveGateHint}>
-                                RESOLVE BLOCKING ISSUES BEFORE SAVING.
-                              </div>
-                            ) : null
-                          }
-                        />
-                      }
+                  <div style={styles.searchWrap}>
+                    <label style={styles.searchLabel}>Filter roster</label>
+                    <input
+                      value={rosterSearch}
+                      onChange={(event) => setRosterSearch(event.target.value)}
+                      placeholder="Search role, department, project, tag..."
+                      style={styles.input}
                     />
+                  </div>
+                </div>
+                <div style={styles.sectionDivider} />
 
-                    <div style={orgCanvasStyle}>
-                      <div style={bentoGridStyle}>
-                        {orderedDepartments.map((department) => (
-                          <DepartmentCard
-                            key={department.id}
-                            department={department}
-                            displayName={
-                              departmentDisplayNames.get(department.id) ??
-                              department.name.toUpperCase()
-                            }
-                            accent={departmentAccent(department.name)}
-                            assignablePeople={assignablePeople}
-                            peopleById={peopleById}
-                            isCompactLayout={isCompactLayout}
-                            onUpdateRole={updateRole}
-                            onRemoveRoleOccupant={removeRoleOccupant}
-                            onRemoveDepartmentMember={removeDepartmentMember}
-                          />
-                        ))}
+                <div style={statsGridStyle}>
+                  <div style={styles.statCard}>
+                    <div style={styles.statValue}>{activeProfiles.length}</div>
+                    <div style={styles.statLabel}>ACTIVE NOTES</div>
+                  </div>
+                  <div style={styles.statCard}>
+                    <div style={styles.statValue}>{mappedProfiles}</div>
+                    <div style={styles.statLabel}>MAPPED TO APP</div>
+                  </div>
+                  <div style={styles.statCard}>
+                    <div style={styles.statValue}>{rosterDepartments.length}</div>
+                    <div style={styles.statLabel}>DEPARTMENTS</div>
+                  </div>
+                  <div style={styles.statCard}>
+                    <div style={styles.statValue}>{unmappedProfiles}</div>
+                    <div style={styles.statLabel}>UNMAPPED NOTES</div>
+                  </div>
+                </div>
+              </div>
+
+              {rosterDepartments.length === 0 ? (
+                <div style={styles.card}>
+                  <p style={styles.emptyText}>
+                    {vaultError
+                      ? "TEAM VAULT COULD NOT BE READ."
+                      : "NO ACTIVE TEAM MEMBER NOTES WERE FOUND IN THE OBSIDIAN VAULT."}
+                  </p>
+                </div>
+              ) : (
+                rosterDepartments.map((department) => (
+                  <div
+                    key={department.name}
+                    style={{ ...styles.card, borderLeftColor: "var(--lcars-peach)" }}
+                  >
+                    <div style={styles.departmentHeader}>
+                      <div>
+                        <div style={styles.departmentTitle}>
+                          {department.name.toUpperCase()}
+                        </div>
+                        <div style={styles.departmentCaption}>
+                          {department.profiles.length} active roster note
+                          {department.profiles.length === 1 ? "" : "s"}
+                        </div>
                       </div>
                     </div>
+                    <div style={styles.sectionDivider} />
+                    <div style={rosterGridStyle}>
+                      {department.profiles.map((profile) => {
+                        const selectable = Boolean(profile.employeeId);
+                        return (
+                          <button
+                            key={profile.sourceRelativePath}
+                            type="button"
+                            disabled={!selectable}
+                            onClick={() => {
+                              if (!profile.employeeId) return;
+                              setSelectedEmployeeId(profile.employeeId);
+                              navigate("/team/crew");
+                            }}
+                            style={{
+                              ...styles.rosterCard,
+                              opacity: selectable ? 1 : 0.72,
+                              cursor: selectable ? "pointer" : "default",
+                            }}
+                          >
+                            <div style={styles.rosterIdentity}>
+                              <Avatar name={profile.displayName} size={34} />
+                              <div style={{ minWidth: 0 }}>
+                                <div style={styles.rosterName}>
+                                  {profile.displayName}
+                                </div>
+                                <div style={styles.rosterMeta}>
+                                  {profile.role ?? "Role not specified"}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div style={styles.pillRow}>
+                              <span style={styles.departmentPill}>
+                                {(profile.department ?? "Unassigned").toUpperCase()}
+                              </span>
+                              {profile.probation ? (
+                                <span style={styles.rolePill}>
+                                  {profile.probation.toUpperCase()}
+                                </span>
+                              ) : null}
+                              {!profile.employeeId ? (
+                                <span style={styles.warningPill}>UNMAPPED</span>
+                              ) : null}
+                            </div>
+
+                            {truncateSummary(profile.summaryMarkdown) ? (
+                              <div style={styles.rosterSummary}>
+                                {truncateSummary(profile.summaryMarkdown)}
+                              </div>
+                            ) : null}
+
+                            {profile.primaryProjects.length > 0 ? (
+                              <div style={styles.metaList}>
+                                <span style={styles.metaLabel}>Projects</span>
+                                <span style={styles.metaValue}>
+                                  {profile.primaryProjects.join(", ")}
+                                </span>
+                              </div>
+                            ) : null}
+
+                            {profile.onboardingStage.length > 0 ? (
+                              <div style={styles.metaList}>
+                                <span style={styles.metaLabel}>Onboarding</span>
+                                <span style={styles.metaValue}>
+                                  {profile.onboardingStage.join(", ")}
+                                </span>
+                              </div>
+                            ) : null}
+
+                            <div style={styles.rosterFooter}>
+                              {profile.sourceRelativePath}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                </>
+                ))
               )}
-            </div>
+            </>
           }
         />
 
@@ -1113,66 +594,43 @@ function Team() {
           element={
             <>
               <div style={{ ...styles.card, borderLeftColor: "var(--lcars-peach)" }}>
-                <h2 style={styles.sectionTitle}>DEPARTMENT STRUCTURE</h2>
+                <h2 style={styles.sectionTitle}>DEPARTMENT CAPACITY</h2>
+                <p style={styles.helperText}>
+                  Department groupings come from the vault roster; monthly hours
+                  and quota remain live operational overlays.
+                </p>
                 <div style={styles.sectionDivider} />
-                {departmentHealthSummaries.length === 0 ? (
-                  <p style={styles.emptyText}>NO DEPARTMENT DATA AVAILABLE</p>
+                {departmentCapacity.length === 0 ? (
+                  <p style={styles.emptyText}>
+                    NO MAPPED VAULT ROSTER NOTES ARE AVAILABLE FOR CAPACITY.
+                  </p>
                 ) : (
                   <div style={departmentGridStyle}>
-                    {departmentHealthSummaries.map((dept) => (
+                    {departmentCapacity.map((department) => (
                       <div
-                        key={dept.id}
+                        key={department.name}
                         style={{
                           ...lcarsPageStyles.subtleCard,
                           borderLeftColor: "var(--lcars-peach)",
                         }}
                       >
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "flex-start",
-                            marginBottom: 12,
-                          }}
-                        >
+                        <div style={styles.capacityHeader}>
                           <div>
-                            <div
-                              style={{
-                                fontFamily: "'Orbitron', sans-serif",
-                                fontSize: 12,
-                                fontWeight: 600,
-                                color: "var(--lcars-orange)",
-                                letterSpacing: "1px",
-                              }}
-                            >
-                              {dept.name.toUpperCase()}
+                            <div style={styles.capacityTitle}>
+                              {department.name.toUpperCase()}
                             </div>
-                            <div
-                              style={{
-                                fontSize: 11,
-                                color: "var(--lcars-lavender)",
-                                marginTop: 2,
-                              }}
-                            >
-                              {dept.headName
-                                ? `HEAD: ${dept.headName.toUpperCase()}`
-                                : "NO HEAD ASSIGNED"}
+                            <div style={styles.capacityCaption}>
+                              {department.memberCount} mapped crew
                             </div>
                           </div>
-                          <div
-                            style={{
-                              fontFamily: "'JetBrains Mono', monospace",
-                              fontSize: 11,
-                              color: "var(--lcars-lavender)",
-                              background: "rgba(153, 153, 204, 0.1)",
-                              padding: "2px 8px",
-                              borderRadius: "0 10px 10px 0",
-                            }}
-                          >
-                            {dept.memberCount} CREW
+                          <div style={styles.capacityBadge}>
+                            {department.memberCount} CREW
                           </div>
                         </div>
-                        <ProgressBar current={dept.totalHours} total={dept.quotaTotal} />
+                        <ProgressBar
+                          current={department.totalHours}
+                          total={department.quotaTotal}
+                        />
                       </div>
                     ))}
                   </div>
@@ -1182,7 +640,7 @@ function Team() {
               <div style={{ ...styles.card, borderLeftColor: "var(--lcars-tan)" }}>
                 <h2 style={styles.sectionTitle}>MONTHLY HOURS & REMOTE VISIBILITY</h2>
                 <div style={styles.sectionDivider} />
-                {monthlyHours.length === 0 ? (
+                {monthlyCapacityRows.length === 0 ? (
                   <p style={styles.emptyText}>
                     NO MONTHLY HOURS DATA. SYNC CLOCKIFY + HULY FIRST.
                   </p>
@@ -1192,6 +650,8 @@ function Team() {
                       <thead>
                         <tr>
                           <th style={styles.th}>CREW MEMBER</th>
+                          <th style={styles.th}>DEPARTMENT</th>
+                          <th style={styles.th}>ROLE</th>
                           <th style={styles.th}>ACTUAL HOURS</th>
                           <th style={styles.th}>EXPECTED HOURS</th>
                           <th style={styles.th}>STATUS</th>
@@ -1201,74 +661,68 @@ function Team() {
                         </tr>
                       </thead>
                       <tbody>
-                        {monthlyHours.map((row) => {
+                        {monthlyCapacityRows.map(({ employee, monthlyRow, profile }) => {
+                          const status = monthlyRow?.status ?? "under";
                           const statusColor =
-                            row.status === "under"
+                            status === "under"
                               ? "var(--lcars-red)"
-                              : row.status === "over"
+                              : status === "over"
                                 ? "var(--lcars-yellow)"
                                 : "var(--lcars-green)";
                           const statusLabel =
-                            row.status === "under"
+                            status === "under"
                               ? "UNDER (<120H)"
-                              : row.status === "over"
+                              : status === "over"
                                 ? "OVER (>180H)"
                                 : "NORMAL";
                           return (
-                            <tr key={row.employeeName}>
+                            <tr key={employee.id}>
                               <td style={styles.td}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                  <Avatar name={row.employeeName} size={22} />
-                                  <span style={{ color: "var(--lcars-tan)" }}>{row.employeeName}</span>
-                                  {row.onLeave && (
-                                    <span
-                                      style={{
-                                        fontFamily: "'Orbitron', sans-serif",
-                                        fontSize: 8,
-                                        fontWeight: 600,
-                                        color: "var(--lcars-yellow)",
-                                        border: "1px solid var(--lcars-yellow)",
-                                        padding: "1px 6px",
-                                        borderRadius: 2,
-                                        letterSpacing: "1px",
-                                      }}
-                                    >
-                                      ON LEAVE
-                                    </span>
-                                  )}
+                                <div style={styles.tableIdentity}>
+                                  <Avatar name={employee.name} size={22} />
+                                  <span style={{ color: "var(--lcars-tan)" }}>
+                                    {employee.name}
+                                  </span>
                                 </div>
                               </td>
-                              <td style={styles.tdMono}>{row.actualHours.toFixed(1)}h</td>
-                              <td style={styles.tdMono}>{row.expectedHours.toFixed(1)}h</td>
-                              <td style={{ ...styles.td, color: statusColor, fontWeight: 600, fontSize: 11 }}>
+                              <td style={styles.td}>
+                                {profile?.department ?? "--"}
+                              </td>
+                              <td style={styles.td}>
+                                {profile?.role ?? "--"}
+                              </td>
+                              <td style={styles.tdMono}>
+                                {(monthlyRow?.actualHours ?? 0).toFixed(1)}h
+                              </td>
+                              <td style={styles.tdMono}>
+                                {(monthlyRow?.expectedHours ?? employee.monthlyQuotaHours).toFixed(1)}
+                                h
+                              </td>
+                              <td
+                                style={{
+                                  ...styles.td,
+                                  color: statusColor,
+                                  fontWeight: 600,
+                                  fontSize: 11,
+                                }}
+                              >
                                 {statusLabel}
                               </td>
                               <td style={styles.td}>
-                                {row.isRemote ? (
-                                  <span
-                                    style={{
-                                      fontFamily: "'Orbitron', sans-serif",
-                                      fontSize: 8,
-                                      fontWeight: 600,
-                                      color: "var(--lcars-cyan)",
-                                      border: "1px solid var(--lcars-cyan)",
-                                      padding: "1px 6px",
-                                      borderRadius: 2,
-                                      letterSpacing: "1px",
-                                    }}
-                                  >
-                                    REMOTE
-                                  </span>
+                                {monthlyRow?.isRemote ? (
+                                  <span style={styles.remotePill}>REMOTE</span>
                                 ) : (
-                                  <span style={{ color: "var(--text-quaternary)", fontSize: 11 }}>ONSITE</span>
+                                  <span style={styles.tableMuted}>ONSITE</span>
                                 )}
                               </td>
-                              <td style={styles.tdMono}>{row.timezone ?? "--"}</td>
+                              <td style={styles.tdMono}>
+                                {monthlyRow?.timezone ?? "--"}
+                              </td>
                               <td style={styles.td}>
-                                {row.onLeave ? (
-                                  <span style={{ color: "var(--lcars-yellow)", fontWeight: 600, fontSize: 11 }}>YES</span>
+                                {monthlyRow?.onLeave ? (
+                                  <span style={styles.leavePill}>YES</span>
                                 ) : (
-                                  <span style={{ color: "var(--text-quaternary)", fontSize: 11 }}>NO</span>
+                                  <span style={styles.tableMuted}>NO</span>
                                 )}
                               </td>
                             </tr>
@@ -1291,12 +745,12 @@ function Team() {
                 <h2 style={styles.sectionTitle}>CREW PROFILE</h2>
                 <div style={styles.sectionDivider} />
                 <p style={styles.helperText}>
-                  FOCUSED VIEW FOR STANDUPS, LEAVE, WORK HOURS, MESSAGE ACTIVITY, AND
-                  INDIVIDUAL SCHEDULE SIGNALS.
+                  Vault profile, KPI snapshot, and live operational signals for one
+                  crew member.
                 </p>
               </div>
               <EmployeeSummaryPanel
-                employees={activeEmployees}
+                employees={crewEmployees}
                 selectedEmployeeId={selectedEmployeeId}
                 onSelectEmployee={setSelectedEmployeeId}
                 summary={employeeSummary}
@@ -1306,587 +760,307 @@ function Team() {
             </>
           }
         />
-        <Route path="*" element={<Navigate to="mapping" replace />} />
+        <Route path="*" element={<Navigate to="roster" replace />} />
       </Routes>
     </div>
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
+const styles: Record<string, CSSProperties> = {
   pageTitle: lcarsPageStyles.pageTitle,
   pageTitleBar: lcarsPageStyles.pageTitleBar,
+  card: lcarsPageStyles.card,
+  sectionTitle: lcarsPageStyles.sectionTitle,
+  helperText: {
+    ...lcarsPageStyles.helperText,
+    maxWidth: 680,
+    marginBottom: 0,
+  },
+  sectionDivider: lcarsPageStyles.sectionDivider,
+  input: lcarsPageStyles.input,
+  emptyText: lcarsPageStyles.emptyText,
   statusBanner: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    flexWrap: "wrap" as const,
+    flexWrap: "wrap",
     gap: 16,
     marginBottom: 20,
     padding: "12px 16px",
-    background: "var(--bg-console-soft)",
-    border: "1px solid rgba(153, 153, 204, 0.16)",
-    borderLeft: "8px solid var(--lcars-cyan)",
-    borderRadius: "0 18px 18px 0",
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+    borderLeft: "4px solid var(--lcars-cyan)",
+    background: "rgba(0, 0, 0, 0.22)",
+    borderRadius: 8,
   },
   statusBannerLabel: {
     fontFamily: "'Orbitron', sans-serif",
-    fontSize: 10,
+    fontSize: 11,
+    letterSpacing: "0.16em",
     color: "var(--lcars-cyan)",
-    letterSpacing: "1.6px",
-    textTransform: "uppercase" as const,
     marginBottom: 4,
   },
   statusBannerText: {
-    fontSize: 12,
+    fontSize: 13,
     color: "var(--lcars-tan)",
-    lineHeight: 1.5,
   },
   statusBannerMeta: {
     fontFamily: "'JetBrains Mono', monospace",
-    fontSize: 11,
+    fontSize: 12,
     color: "var(--lcars-lavender)",
-    whiteSpace: "nowrap" as const,
   },
-  actionBanner: {
+  errorBanner: {
     marginBottom: 20,
     padding: "10px 14px",
-    background: "var(--bg-console-soft)",
-    border: "1px solid rgba(0, 204, 255, 0.18)",
-    borderLeft: "8px solid var(--lcars-cyan)",
-    color: "var(--lcars-tan)",
-    fontSize: 12,
-    lineHeight: 1.5,
-    borderRadius: "0 16px 16px 0",
+    borderLeft: "4px solid var(--lcars-red)",
+    background: "rgba(102, 34, 34, 0.2)",
+    color: "var(--lcars-yellow)",
+    borderRadius: 8,
+    fontSize: 13,
   },
   subrouteNav: {
     display: "flex",
-    gap: 8,
-    flexWrap: "wrap" as const,
-    marginBottom: 16,
+    gap: 12,
+    flexWrap: "wrap",
+    marginBottom: 18,
   },
   subrouteLink: {
+    padding: "10px 14px",
+    borderRadius: 999,
     border: "1px solid rgba(153, 153, 204, 0.22)",
     color: "var(--lcars-lavender)",
     fontFamily: "'Orbitron', sans-serif",
-    fontSize: 10,
-    letterSpacing: "1px",
+    fontSize: 11,
+    letterSpacing: "0.12em",
     textDecoration: "none",
-    padding: "8px 12px",
-    borderRadius: "0 12px 12px 0",
-    background: "rgba(153, 153, 204, 0.08)",
+    background: "rgba(255, 255, 255, 0.02)",
   },
   subrouteLinkActive: {
-    borderColor: "var(--lcars-cyan)",
-    color: "var(--lcars-cyan)",
-    background: "rgba(0, 204, 255, 0.12)",
-    boxShadow: "inset 0 0 0 1px rgba(0, 204, 255, 0.14)",
+    color: "#08111f",
+    background: "var(--lcars-cyan)",
+    borderColor: "transparent",
+    boxShadow: "0 0 20px rgba(0, 204, 255, 0.22)",
   },
-  saveGateHint: {
-    borderLeft: "3px solid var(--lcars-red)",
-    background: "rgba(46, 20, 20, 0.45)",
-    borderTop: "1px solid rgba(255, 77, 109, 0.28)",
-    borderRight: "1px solid rgba(255, 77, 109, 0.28)",
-    borderBottom: "1px solid rgba(255, 77, 109, 0.28)",
-    borderRadius: "0 12px 12px 0",
-    color: "var(--lcars-red)",
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 10,
-    letterSpacing: "1px",
-    textTransform: "uppercase" as const,
-    padding: "8px 10px",
-  },
-  card: lcarsPageStyles.card,
-  sectionTitle: lcarsPageStyles.sectionTitle,
-  sectionHeaderRow: {
+  sectionHeader: {
     display: "flex",
-    alignItems: "flex-start",
     justifyContent: "space-between",
-    flexWrap: "wrap" as const,
+    alignItems: "flex-start",
+    gap: 16,
+    flexWrap: "wrap",
+  },
+  searchWrap: {
+    minWidth: 260,
+    flex: "0 0 320px",
+  },
+  searchLabel: {
+    ...lcarsPageStyles.metricLabel,
+    marginBottom: 6,
+  },
+  statsGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+    gap: 12,
+  },
+  statCard: {
+    ...lcarsPageStyles.subtleCard,
+    borderLeftColor: "var(--lcars-cyan)",
+    minHeight: 88,
+  },
+  statValue: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 28,
+    color: "var(--lcars-cyan)",
+    marginBottom: 6,
+  },
+  statLabel: {
+    fontSize: 11,
+    color: "var(--lcars-lavender)",
+    letterSpacing: "0.1em",
+  },
+  departmentHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
     gap: 16,
   },
-  sectionHelperText: {
-    ...lcarsPageStyles.helperText,
-    marginBottom: 8,
+  departmentTitle: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "var(--lcars-orange)",
+    letterSpacing: "0.12em",
   },
-  sectionDivider: lcarsPageStyles.sectionDivider,
-  field: {
+  departmentCaption: {
+    marginTop: 4,
+    fontSize: 12,
+    color: "var(--lcars-lavender)",
+  },
+  rosterGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+    gap: 14,
+  },
+  rosterCard: {
+    ...lcarsPageStyles.subtleCard,
+    borderLeftColor: "var(--lcars-peach)",
+    width: "100%",
+    textAlign: "left",
+    background: "rgba(7, 10, 24, 0.88)",
+    color: "inherit",
+    border: "1px solid rgba(153, 153, 204, 0.14)",
+  },
+  rosterIdentity: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
     marginBottom: 14,
   },
-  label: {
-    display: "block",
+  rosterName: {
     fontFamily: "'Orbitron', sans-serif",
-    fontSize: 10,
-    color: "var(--lcars-lavender)",
-    marginBottom: 6,
-    letterSpacing: "1.5px",
-    textTransform: "uppercase" as const,
+    fontSize: 14,
+    color: "var(--lcars-tan)",
+    letterSpacing: "0.04em",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
   },
-  input: lcarsPageStyles.input,
-  editorGrid: {
+  rosterMeta: {
+    marginTop: 4,
+    color: "var(--lcars-lavender)",
+    fontSize: 12,
+    lineHeight: 1.5,
+  },
+  pillRow: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap",
+    marginBottom: 12,
+  },
+  departmentPill: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    letterSpacing: "0.12em",
+    padding: "4px 8px",
+    borderRadius: 999,
+    background: "rgba(255, 153, 0, 0.12)",
+    color: "var(--lcars-orange)",
+    border: "1px solid rgba(255, 153, 0, 0.2)",
+  },
+  rolePill: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    letterSpacing: "0.12em",
+    padding: "4px 8px",
+    borderRadius: 999,
+    background: "rgba(0, 204, 255, 0.12)",
+    color: "var(--lcars-cyan)",
+    border: "1px solid rgba(0, 204, 255, 0.2)",
+  },
+  warningPill: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    letterSpacing: "0.12em",
+    padding: "4px 8px",
+    borderRadius: 999,
+    background: "rgba(255, 204, 0, 0.12)",
+    color: "var(--lcars-yellow)",
+    border: "1px solid rgba(255, 204, 0, 0.2)",
+  },
+  rosterSummary: {
+    fontSize: 12,
+    color: "var(--text-secondary)",
+    lineHeight: 1.6,
+    marginBottom: 12,
+  },
+  metaList: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gridTemplateColumns: "92px 1fr",
+    gap: 10,
+    alignItems: "start",
+    marginBottom: 8,
+  },
+  metaLabel: {
+    fontSize: 11,
+    color: "var(--lcars-lavender)",
+    textTransform: "uppercase",
+    letterSpacing: "0.08em",
+  },
+  metaValue: {
+    fontSize: 12,
+    color: "var(--lcars-tan)",
+    lineHeight: 1.5,
+  },
+  rosterFooter: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTop: "1px solid rgba(153, 153, 204, 0.12)",
+    fontSize: 11,
+    color: "var(--text-quaternary)",
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  departmentGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+    gap: 14,
+  },
+  capacityHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
     gap: 12,
-    marginBottom: 18,
-    alignItems: "end",
+    marginBottom: 12,
+  },
+  capacityTitle: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "var(--lcars-orange)",
+    letterSpacing: "0.1em",
+  },
+  capacityCaption: {
+    marginTop: 2,
+    fontSize: 11,
+    color: "var(--lcars-lavender)",
+  },
+  capacityBadge: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-lavender)",
+    background: "rgba(153, 153, 204, 0.1)",
+    padding: "2px 8px",
+    borderRadius: "0 10px 10px 0",
+  },
+  tableScrollWrap: {
+    overflowX: "auto",
   },
   table: lcarsPageStyles.table,
   th: lcarsPageStyles.th,
   td: lcarsPageStyles.td,
-  tdMono: lcarsPageStyles.tdMono,
-  emptyText: lcarsPageStyles.emptyText,
-  buttonRow: lcarsPageStyles.buttonRow,
-  primaryButton: lcarsPageStyles.primaryButton,
-  ghostButton: lcarsPageStyles.ghostButton,
-  helperText: lcarsPageStyles.helperText,
-  inlineNote: {
-    color: "var(--lcars-lavender)",
-    fontSize: 11,
-    lineHeight: 1.45,
+  tdMono: {
+    ...lcarsPageStyles.td,
+    fontFamily: "'JetBrains Mono', monospace",
   },
-  inlineActionRow: {
+  tableIdentity: {
     display: "flex",
     alignItems: "center",
-    gap: 10,
-    flexWrap: "wrap" as const,
+    gap: 8,
   },
-  inlineActionButton: {
-    background: "transparent",
-    border: "1px solid rgba(153, 153, 204, 0.24)",
-    color: "var(--lcars-lavender)",
+  remotePill: {
     fontFamily: "'Orbitron', sans-serif",
-    fontSize: 9,
-    letterSpacing: "1px",
-    padding: "5px 8px",
-    cursor: "pointer",
+    fontSize: 8,
+    fontWeight: 600,
+    color: "var(--lcars-cyan)",
+    border: "1px solid var(--lcars-cyan)",
+    padding: "1px 6px",
+    borderRadius: 2,
+    letterSpacing: "0.1em",
   },
-  rowMetaText: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 9,
-    color: "var(--lcars-lavender)",
-    letterSpacing: "1px",
-  },
-  yearToolbar: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    flexWrap: "wrap" as const,
-    marginBottom: 16,
-  },
-  yearToolbarLabel: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 10,
-    color: "var(--lcars-orange)",
-    letterSpacing: "1.4px",
-    textTransform: "uppercase" as const,
-  },
-  yearCalendarGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-    gap: 12,
-    marginTop: 18,
-  },
-  monthCard: {
-    background: "var(--bg-console-soft)",
-    border: "1px solid rgba(153, 153, 204, 0.14)",
-    padding: 14,
-    minHeight: 150,
-    borderRadius: "0 18px 18px 0",
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
-  },
-  monthCardHeader: {
-    fontFamily: "'Orbitron', sans-serif",
+  leavePill: {
+    color: "var(--lcars-yellow)",
+    fontWeight: 600,
     fontSize: 11,
-    color: "var(--lcars-orange)",
-    letterSpacing: "1.4px",
-    marginBottom: 10,
-    textTransform: "uppercase" as const,
   },
-  monthCardEmpty: {
+  tableMuted: {
     color: "var(--text-quaternary)",
     fontSize: 11,
-    fontFamily: "'Orbitron', sans-serif",
-    letterSpacing: "1px",
-    textTransform: "uppercase" as const,
-  },
-  monthHolidayList: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 8,
-  },
-  monthHolidayItem: {
-    display: "flex",
-    alignItems: "baseline",
-    gap: 8,
-  },
-  monthHolidayDate: {
-    color: "var(--lcars-cyan)",
-    fontFamily: "'JetBrains Mono', monospace",
-    fontSize: 11,
-    whiteSpace: "nowrap" as const,
-  },
-  monthHolidayTitle: {
-    color: "var(--lcars-tan)",
-    fontSize: 12,
-    lineHeight: 1.4,
-  },
-  orgTopBar: {
-    marginBottom: 20,
-  },
-  orgStatGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-    gap: 12,
-    marginBottom: 16,
-  },
-  orgStatCard: {
-    ...lcarsPageStyles.subtleCard,
-    borderLeftColor: "var(--lcars-orange)",
-    padding: 14,
-  },
-  orgStatValue: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 24,
-    color: "var(--lcars-orange)",
-    letterSpacing: "1px",
-  },
-  orgStatLabel: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 10,
-    color: "var(--lcars-lavender)",
-    letterSpacing: "1.5px",
-    marginTop: 4,
-  },
-  orgWorkspace: {
-    display: "grid",
-    gridTemplateColumns: "320px minmax(0, 1fr)",
-    gap: 18,
-    alignItems: "start",
-  },
-  teamRail: {
-    position: "sticky" as const,
-    top: 0,
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 14,
-    background: "var(--bg-console-soft)",
-    border: "1px solid rgba(153, 153, 204, 0.12)",
-    padding: 16,
-    borderRadius: "0 18px 18px 0",
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
-  },
-  teamRailHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "baseline",
-    gap: 8,
-  },
-  teamRailTitle: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 11,
-    color: "var(--lcars-orange)",
-    letterSpacing: "1.5px",
-  },
-  teamRailMeta: {
-    fontSize: 10,
-    color: "var(--lcars-lavender)",
-    letterSpacing: "1px",
-  },
-  leftRailList: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 8,
-    maxHeight: 420,
-    overflowY: "auto" as const,
-    paddingRight: 4,
-  },
-  directoryModeRow: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 8,
-  },
-  directoryModeButton: {
-    background: "rgba(153, 153, 204, 0.08)",
-    border: "1px solid rgba(153, 153, 204, 0.22)",
-    color: "var(--lcars-lavender)",
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 9,
-    letterSpacing: "1px",
-    padding: "8px 10px",
-    textAlign: "center" as const,
-    cursor: "pointer",
-  },
-  directoryModeButtonActive: {
-    borderColor: "var(--lcars-cyan)",
-    color: "var(--lcars-cyan)",
-    background: "rgba(0, 204, 255, 0.12)",
-    boxShadow: "inset 0 0 0 1px rgba(0, 204, 255, 0.14)",
-  },
-  validationStrip: {
-    display: "grid",
-    gridTemplateColumns: "1fr",
-    gap: 6,
-    padding: "10px 12px",
-    border: "1px solid rgba(153, 153, 204, 0.18)",
-    borderRadius: "0 14px 14px 0",
-    background: "rgba(12, 12, 26, 0.78)",
-  },
-  validationItem: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 8,
-  },
-  validationLabel: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 9,
-    letterSpacing: "1.1px",
-    color: "var(--lcars-lavender)",
-  },
-  validationValue: {
-    fontFamily: "'JetBrains Mono', monospace",
-    fontSize: 11,
-    fontWeight: 600,
-  },
-  orgCanvas: {
-    minWidth: 0,
-    overflowX: "hidden" as const,
-  },
-  bentoGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-    gap: 16,
-    alignItems: "start",
-  },
-  bentoCard: {
-    background: "var(--bg-console-soft)",
-    border: "1px solid rgba(153, 153, 204, 0.14)",
-    padding: 16,
-    minHeight: 260,
-    borderRadius: "0 20px 20px 0",
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
-  },
-  bentoCardWide: {
-    gridColumn: "span 2",
-  },
-  bentoHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: 12,
-    marginBottom: 14,
-  },
-  bentoHeaderMeta: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-  },
-  bentoMetaPill: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 9,
-    color: "var(--lcars-lavender)",
-    border: "1px solid rgba(153, 153, 204, 0.24)",
-    padding: "3px 8px",
-    letterSpacing: "1px",
-  },
-  orgDepartmentTitle: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 12,
-    fontWeight: 700,
-    color: "var(--lcars-orange)",
-    letterSpacing: "1.5px",
-  },
-  orgDepartmentMeta: {
-    fontSize: 11,
-    color: "var(--lcars-lavender)",
-    marginTop: 4,
-    letterSpacing: "0.6px",
-  },
-  roleGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-    gap: 12,
-    marginBottom: 12,
-  },
-  rolePanel: {
-    background: "rgba(18, 18, 34, 0.92)",
-    border: "1px solid rgba(153, 153, 204, 0.18)",
-    padding: 12,
-    minHeight: 92,
-    borderRadius: "0 14px 14px 0",
-  },
-  memberPanel: {
-    background: "rgba(18, 18, 34, 0.92)",
-    border: "1px solid rgba(153, 153, 204, 0.18)",
-    padding: 12,
-    minHeight: 128,
-    borderRadius: "0 14px 14px 0",
-  },
-  dropZoneLabelRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 8,
-  },
-  roleSelect: {
-    ...lcarsPageStyles.input,
-    marginBottom: 10,
-    height: 38,
-    fontSize: 11,
-    padding: "8px 10px",
-  },
-  roleActionButton: {
-    background: "transparent",
-    border: "none",
-    color: "var(--lcars-lavender)",
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 9,
-    letterSpacing: "1px",
-    cursor: "pointer",
-    padding: 0,
-  },
-  dropPlaceholder: {
-    minHeight: 54,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    textAlign: "center" as const,
-    color: "var(--text-quaternary)",
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 10,
-    lineHeight: 1.5,
-    letterSpacing: "1px",
-    textTransform: "uppercase" as const,
-  },
-  memberGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-    gap: 8,
-  },
-  crewCard: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    background: "rgba(26, 26, 46, 0.92)",
-    padding: "10px 12px",
-    minWidth: 0,
-    borderRadius: "0 14px 14px 0",
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
-  },
-  crewCardCompact: {
-    padding: "8px 10px",
-  },
-  crewCardTitleRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    flexWrap: "wrap" as const,
-    marginBottom: 2,
-  },
-  crewCardName: {
-    color: "var(--lcars-tan)",
-    fontSize: 13,
-    fontWeight: 500,
-    minWidth: 0,
-  },
-  crewCardMeta: {
-    color: "var(--lcars-lavender)",
-    fontSize: 11,
-    lineHeight: 1.45,
-    wordBreak: "break-word" as const,
-  },
-  crewCardActions: {
-    display: "flex",
-    flexDirection: "column" as const,
-    alignItems: "flex-end",
-    gap: 8,
-    width: "min(220px, 100%)",
-  },
-  crewCardActionsTight: {
-    display: "flex",
-    alignItems: "flex-end",
-    gap: 8,
-  },
-  cardRemoveButton: {
-    background: "transparent",
-    border: "none",
-    color: "var(--lcars-lavender)",
-    fontSize: 18,
-    lineHeight: 1,
-    cursor: "pointer",
-    padding: 0,
-  },
-  directoryCrewCard: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 8,
-    background: "rgba(26, 26, 46, 0.92)",
-    padding: "10px 12px",
-    minWidth: 0,
-    borderRadius: "0 14px 14px 0",
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
-  },
-  directoryIdentityRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    minWidth: 0,
-  },
-  directoryIdentityText: {
-    minWidth: 0,
-    flex: 1,
-  },
-  directoryCrewName: {
-    color: "var(--lcars-tan)",
-    fontSize: 13,
-    fontWeight: 600,
-    letterSpacing: "0.2px",
-    whiteSpace: "nowrap" as const,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  },
-  directoryCrewMeta: {
-    color: "var(--lcars-lavender)",
-    fontSize: 10,
-    letterSpacing: "0.4px",
-    marginTop: 2,
-    whiteSpace: "nowrap" as const,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  },
-  directoryAssignmentRow: {
-    display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr)",
-    gap: 6,
-  },
-  directoryAssignmentPill: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 9,
-    letterSpacing: "1px",
-    textTransform: "uppercase" as const,
-    padding: "3px 8px",
-    border: "1px solid",
-    width: "fit-content",
-  },
-  directorySelect: {
-    ...lcarsPageStyles.input,
-    width: "100%",
-    height: 34,
-    padding: "6px 8px",
-    marginBottom: 0,
-    fontSize: 10,
-  },
-  departmentGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-    gap: 12,
-  },
-  tableScrollWrap: {
-    overflowX: "auto" as const,
-    border: "1px solid rgba(153, 153, 204, 0.08)",
-    borderRadius: "0 14px 14px 0",
-    background: "rgba(0, 0, 0, 0.12)",
   },
 };
 

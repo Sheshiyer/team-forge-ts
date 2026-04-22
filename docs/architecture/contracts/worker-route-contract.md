@@ -43,6 +43,11 @@ This document freezes the public and internal HTTP contract for the TeamForge Wo
 | `GET` | `/v1/remote-config` | feature flags and rollout config |
 | `GET` | `/v1/projects` | canonical projects |
 | `PUT` | `/v1/projects/:projectId` | update project metadata |
+| `GET` | `/v1/client-profiles` | canonical client profiles |
+| `GET` | `/v1/client-profiles/:clientId` | one canonical client profile |
+| `PUT` | `/v1/client-profiles/:clientId` | upsert one canonical client profile |
+| `GET` | `/v1/onboarding-flows` | canonical onboarding flows |
+| `PUT` | `/v1/onboarding-flows` | replace canonical onboarding flows for one workspace |
 | `GET` | `/v1/project-mappings` | read mapping state |
 | `PUT` | `/v1/project-mappings/:projectId` | upsert mapping |
 | `GET` | `/v1/project-mappings/:projectId/control-plane` | read operator control-plane detail |
@@ -120,6 +125,156 @@ Expected metadata fields:
 - `visibility`
 
 It should not be the primary route for replacing link records or artifact graphs.
+
+### `GET /v1/client-profiles`
+
+This route returns canonical client-profile rows for one workspace.
+
+Supported query params:
+
+- `workspace_id`
+- `active`
+
+Each row should be shaped for TeamForge client enrichment and may include:
+
+- `clientId`
+- `clientName`
+- `engagementModel`
+- `industry`
+- `primaryContact`
+- `projectIds`
+- `stakeholders`
+- `strategicFit`
+- `risks`
+- `resourceLinks`
+- `active`
+- `onboarded`
+- provenance timestamps
+
+### `GET /v1/client-profiles/:clientId`
+
+This route returns one canonical client profile.
+
+Required query params:
+
+- `workspace_id`
+
+The payload should be shaped for detail-page enrichment and include:
+
+- the full client profile row
+- any lightweight project-link metadata needed for the project/client join
+
+### `PUT /v1/client-profiles/:clientId`
+
+This route upserts one canonical client profile for one workspace.
+
+Expected request fields:
+
+- `workspaceId`
+- `clientName`
+- `engagementModel`
+- optional `industry`
+- optional `primaryContact`
+- optional `active`
+- optional `onboarded`
+- optional `projectIds`
+- optional `stakeholders`
+- optional `strategicFit`
+- optional `risks`
+- optional `resourceLinks`
+- optional `tags`
+- optional `sourcePath`
+
+The route may also accept a nested `clientProfile` object with the same fields.
+
+Required headers:
+
+- `Authorization: Bearer <token>` where the token currently matches the Worker
+  service secret used by the parity/import path
+
+The success payload should return the normalized written record in the same
+detail-oriented shape used by `GET /v1/client-profiles/:clientId`.
+
+### `GET /v1/onboarding-flows`
+
+This route returns canonical onboarding flows and tasks for one workspace.
+
+Supported query params:
+
+- `workspace_id`
+- `audience` (`client` or `employee`)
+- `status`
+
+Each flow payload should include:
+
+- `flow`
+- `tasks`
+
+Each flow row must be able to express:
+
+- stable `flowId`
+- `audience`
+- `workspaceId`
+- `status`
+- `owner`
+- `startsOn`
+- `subjectId`
+- `subjectName`
+- `primaryContact` for client flows
+- `manager` / `department` / `joinedOn` for employee flows
+
+### `PUT /v1/onboarding-flows`
+
+This route replaces the onboarding-flow set for one workspace atomically.
+
+Expected request fields:
+
+- `workspaceId`
+- `flows`
+
+The route must reject requests that omit `flows` / `onboardingFlows` instead of
+treating them as an empty replacement set.
+
+Required headers:
+
+- `Authorization: Bearer <token>` where the token currently matches the Worker
+  service secret used by the parity/import path
+
+Each flow entry must be able to express:
+
+- `flowId`
+- `audience` (`client` or `employee`)
+- optional `status`
+- optional `owner`
+- optional `startsOn`
+- optional `clientId`
+- optional `memberId`
+- optional `projectIds`
+- optional `primaryContact`
+- optional `workspaceReady`
+- optional `manager`
+- optional `department`
+- optional `joinedOn`
+- optional `sourcePath`
+- `tasks`
+
+Each task entry must be able to express:
+
+- `taskId`
+- `title`
+- optional `completed`
+- optional `completedAt`
+- optional `resourceCreated`
+- optional `notes`
+- optional `position`
+
+The success payload should return:
+
+- `flows`
+- `total`
+
+where each returned flow is in the same normalized `flow + tasks` shape used by
+`GET /v1/onboarding-flows`.
 
 ### `GET /v1/project-mappings`
 

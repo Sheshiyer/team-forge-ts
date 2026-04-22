@@ -68,6 +68,7 @@ function Projects() {
   const [projects, setProjects] = useState<ExecutionProjectView[]>([]);
   const [executionLoading, setExecutionLoading] = useState(true);
   const [executionError, setExecutionError] = useState<string | null>(null);
+  const [executionSourceError, setExecutionSourceError] = useState<string | null>(null);
 
   const [teamforgeProjects, setTeamforgeProjects] = useState<TeamforgeProjectGraph[]>([]);
   const [registryLoading, setRegistryLoading] = useState(true);
@@ -81,13 +82,16 @@ function Projects() {
 
   const loadExecution = useCallback(async (): Promise<boolean> => {
     try {
-      setProjects(await api.getExecutionProjects());
+      const response = await api.getExecutionProjects();
+      setProjects(response.projects);
+      setExecutionSourceError(response.sourceError);
       setExecutionError(null);
       setExecutionLoading(false);
       return true;
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Could not load execution projects.";
+      setProjects([]);
+      setExecutionSourceError(null);
+      const message = describeInvokeError(error, "Could not load execution projects.");
       setExecutionError(message);
       setExecutionLoading(false);
       return false;
@@ -118,6 +122,7 @@ function Projects() {
     try {
       const graphs = await api.getTeamforgeProjects();
       setTeamforgeProjects(graphs);
+      setControlMessage(null);
       setSelectedProjectId((current) => {
         if (current && graphs.some((graph) => graph.project.id === current)) {
           return current;
@@ -125,7 +130,7 @@ function Projects() {
         return graphs[0]?.project.id ?? null;
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not load TeamForge registry.";
+      const message = describeInvokeError(error, "Could not load TeamForge registry.");
       setControlMessage(message);
     } finally {
       setRegistryLoading(false);
@@ -145,7 +150,7 @@ function Projects() {
       setDraft(buildDraft(detail));
       setControlMessage(null);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not load TeamForge control plane.";
+      const message = describeInvokeError(error, "Could not load TeamForge control plane.");
       setControlMessage(message);
       setControlPlane(null);
     } finally {
@@ -263,7 +268,7 @@ function Projects() {
       }
       setControlMessage("Project registry saved.");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not save TeamForge registry.";
+      const message = describeInvokeError(error, "Could not save TeamForge registry.");
       setControlMessage(message);
     } finally {
       setSavingRegistry(false);
@@ -305,10 +310,10 @@ function Projects() {
               ? "Project sync resumed."
               : action === "retry"
                 ? "Project sync retried."
-                : "Project action applied.",
+          : "Project action applied.",
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Project action failed.";
+      const message = describeInvokeError(error, "Project action failed.");
       setControlMessage(message);
     } finally {
       setRunningAction(null);
@@ -367,13 +372,19 @@ function Projects() {
               EXECUTION DATA FAILED TO LOAD. RETRYING IN THE BACKGROUND. {executionError}
             </div>
           )}
+          {!executionError && executionSourceError && (
+            <div style={styles.message}>
+              TEAMFORGE REGISTRY REFRESH FAILED. SHOWING CACHED OR LOCAL EXECUTION DATA.{" "}
+              {executionSourceError}
+            </div>
+          )}
           {executionLoading ? (
             <div style={styles.summaryRow}>
               <SkeletonCard />
               <SkeletonCard />
               <SkeletonCard />
             </div>
-          ) : (
+          ) : executionError ? null : (
             <div style={styles.summaryRow}>
               <div style={{ ...styles.summaryCard, borderLeftColor: "var(--lcars-orange)" }}>
                 <div style={styles.summaryLabel}>TOTAL HOURS</div>
@@ -405,9 +416,18 @@ function Projects() {
           <div style={styles.card}>
             {executionLoading ? (
               <SkeletonTable rows={5} cols={5} />
+            ) : executionError ? (
+              <p style={styles.emptyText}>
+                EXECUTION VIEW UNAVAILABLE. {executionError}
+              </p>
+            ) : executionSourceError && projects.length === 0 ? (
+              <p style={styles.emptyText}>
+                NO CACHED EXECUTION PROJECTS ARE AVAILABLE YET. {executionSourceError}
+              </p>
             ) : projects.length === 0 ? (
               <p style={styles.emptyText}>
-                NO EXECUTION PROJECTS FOUND. SYNC GITHUB PLANS IN SETTINGS.
+                NO EXECUTION PROJECTS FOUND. LINK TEAMFORGE PROJECTS TO GITHUB REPOS OR
+                CLOCKIFY PROJECTS IN THE CONTROL PLANE TO POPULATE THIS DERIVED VIEW.
               </p>
             ) : (
               <table style={styles.table}>
@@ -566,6 +586,95 @@ function Projects() {
                       </button>
                       <div style={styles.statusPill}>
                         {(controlPlane?.policyState.syncState ?? "active").toUpperCase()}
+                      </div>
+                    </div>
+
+                    {selectedProject.clientProfile && (
+                      <div style={styles.readOnlyCard}>
+                        <div style={styles.sectionLabel}>VAULT CLIENT CONTEXT</div>
+                        <div style={styles.readOnlyGrid}>
+                          <div>
+                            <div style={styles.fieldLabel}>CLIENT</div>
+                            <div style={styles.readOnlyValue}>
+                              {selectedProject.clientProfile.clientName}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={styles.fieldLabel}>ENGAGEMENT</div>
+                            <div style={styles.readOnlyValue}>
+                              {selectedProject.clientProfile.engagementModel ?? "—"}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={styles.fieldLabel}>PRIMARY CONTACT</div>
+                            <div style={styles.readOnlyValue}>
+                              {selectedProject.clientProfile.primaryContact ?? "—"}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={styles.fieldLabel}>PROFILE COMPLETENESS</div>
+                            <div style={styles.readOnlyValue}>
+                              {selectedProject.clientProfile.profileCompleteness.toFixed(0)}%
+                            </div>
+                          </div>
+                        </div>
+                        <div style={styles.readOnlyStack}>
+                          <div>
+                            <div style={styles.fieldLabel}>STRATEGIC FIT</div>
+                            <div style={styles.readOnlyValue}>
+                              {selectedProject.clientProfile.strategicFit.length > 0
+                                ? selectedProject.clientProfile.strategicFit.join(", ")
+                                : "—"}
+                            </div>
+                          </div>
+                          <div>
+                            <div style={styles.fieldLabel}>RISKS</div>
+                            <div style={styles.readOnlyValue}>
+                              {selectedProject.clientProfile.risks.length > 0
+                                ? selectedProject.clientProfile.risks.join(", ")
+                                : "—"}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={styles.readOnlyCard}>
+                      <div style={styles.sectionLabel}>VAULT ARTIFACT RAIL</div>
+                      <div style={styles.readOnlyStack}>
+                        {ARTIFACT_GROUPS.map((group) => {
+                          const artifacts = selectedProject.artifacts.filter((artifact) =>
+                            group.types.some((type) => type === artifact.artifactType),
+                          );
+                          if (artifacts.length === 0) return null;
+                          return (
+                            <div key={group.key}>
+                              <div style={styles.fieldLabel}>
+                                {group.label} ({artifacts.length})
+                              </div>
+                              <div style={styles.artifactList}>
+                                {artifacts.map((artifact) => (
+                                  <a
+                                    key={artifact.id}
+                                    href={artifact.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={styles.artifactLink}
+                                  >
+                                    {artifact.title}
+                                  </a>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {selectedProject.artifacts.filter((artifact) =>
+                          artifact.artifactType.startsWith("vault-"),
+                        ).length === 0 && (
+                          <div style={styles.emptyText}>
+                            NO IMPORTED VAULT ARTIFACTS YET.
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -984,6 +1093,25 @@ function blankToNull(value: string | null | undefined) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function describeInvokeError(error: unknown, fallback: string) {
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
+  }
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string" &&
+    error.message.trim().length > 0
+  ) {
+    return error.message;
+  }
+  return fallback;
+}
+
 function truncateInline(value: string | null) {
   if (!value) return "—";
   return value.length > 120 ? `${value.slice(0, 120)}...` : value;
@@ -993,6 +1121,14 @@ function truncatePayload(value: string | null) {
   if (!value) return "—";
   return value.length > 280 ? `${value.slice(0, 280)}...` : value;
 }
+
+const ARTIFACT_GROUPS = [
+  { key: "brief", label: "PROJECT BRIEF", types: ["vault-project-brief"] },
+  { key: "technical-spec", label: "TECHNICAL SPEC", types: ["vault-technical-spec"] },
+  { key: "design", label: "DESIGN", types: ["vault-design-doc"] },
+  { key: "research", label: "RESEARCH", types: ["vault-research-doc"] },
+  { key: "closeout", label: "CLOSEOUT", types: ["vault-closeout-doc"] },
+] as const;
 
 function formatShortDate(value: string) {
   const date = new Date(value);
@@ -1170,6 +1306,40 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 10,
     letterSpacing: "0.9px",
     fontFamily: "'Orbitron', sans-serif",
+  },
+  readOnlyCard: {
+    background: "rgba(153, 153, 204, 0.04)",
+    border: "1px solid rgba(153, 153, 204, 0.12)",
+    padding: 14,
+    marginBottom: 14,
+  },
+  readOnlyGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+    gap: 12,
+    marginBottom: 12,
+  },
+  readOnlyStack: {
+    display: "grid",
+    gap: 12,
+  },
+  readOnlyValue: {
+    color: "var(--lcars-tan)",
+    fontSize: 12,
+    lineHeight: 1.5,
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  artifactList: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 6,
+    marginTop: 6,
+  },
+  artifactLink: {
+    color: "var(--lcars-cyan)",
+    fontSize: 11,
+    fontFamily: "'JetBrains Mono', monospace",
+    textDecoration: "none",
   },
   registryForm: {
     display: "grid",

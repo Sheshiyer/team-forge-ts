@@ -2,6 +2,487 @@
 
 ## Goal
 
+Wire TeamForge to the real Thoughtseed Paperclip repo path, add a launch
+wrapper that matches the existing Paperclip startup contract, and prepare the
+current repo state for the next tagged release commit.
+
+## Plan
+
+- [x] Add a stable TeamForge-side wrapper script for the sibling
+      `thougghtseed-paperclip` repo so the current Tauri launcher can start the
+      Paperclip babysitter without requiring extra CLI args in settings.
+- [x] Tighten the Settings guidance/default UI path around the actual local
+      Paperclip endpoint (`http://127.0.0.1:3100`).
+- [x] Bump release/version metadata and changelog entries for the next release
+      cut.
+- [x] Verify the Paperclip wrapper against the real repo path and stage a clean
+      release-oriented commit without pulling in unrelated scratch artifacts.
+
+## Review
+
+- Real runtime path confirmed:
+  - Paperclip lives at:
+    - `/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thougghtseed-paperclip`
+  - existing Paperclip startup contract is:
+    - `./scripts/babysitter.sh start`
+  - existing Paperclip health/status contract is:
+    - `./scripts/health-check.sh`
+    - `./scripts/babysitter.sh status`
+  - default local Paperclip base URL from `.env.example` is:
+    - `http://127.0.0.1:3100`
+- TeamForge-side wrapper:
+  - added `scripts/launch-thoughtseed-paperclip.sh`
+  - default behavior:
+    - targets the sibling Paperclip repo path
+    - `start` maps to `babysitter.sh start`
+    - `status`, `health`, and `stop` are also supported for manual verification
+  - added root package helpers:
+    - `pnpm paperclip:launch`
+    - `pnpm paperclip:status`
+- Settings alignment:
+  - updated `Settings` helper text to recommend the new wrapper
+  - defaulted the Paperclip UI URL to `http://127.0.0.1:3100`
+- Release prep:
+  - bumped release metadata to `0.1.21`
+  - added a new `v0.1.21` changelog entry covering:
+    - founder-console local workspace controls
+    - Worker-backed issues module
+    - Paperclip launcher wrapper
+  - staged the release-oriented commit scope while intentionally excluding:
+    - `tasks/teamforge-vault-parity-canary.json`
+    - `tasks/teamforge-vault-parity-report.json`
+- Verification:
+  - `bash scripts/launch-thoughtseed-paperclip.sh health`
+    - reached the real sibling Paperclip repo and reproduced the current stale
+      0/5 health state
+  - `bash scripts/launch-thoughtseed-paperclip.sh`
+    - invoked the real sibling Paperclip `babysitter.sh start` path and
+      returned a live daemon PID from that repo
+  - `bash scripts/launch-thoughtseed-paperclip.sh status`
+    - immediately reported a stale babysitter PID from this command-run
+      context, so the wrapper path is proven but the long-lived daemon behavior
+      still needs verification from the actual desktop app runtime or a
+      dedicated supervisor session
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+    - passed
+  - `pnpm build`
+    - passed
+
+## Goal
+
+Implement Phase 1 of the founder-console plan by adding a native local
+workspace settings section, explicit vault path persistence, and Paperclip
+launch/open controls in the Tauri app.
+
+## Plan
+
+- [x] Add the Tauri plugin/capability and command surface needed for:
+      - picking a vault directory
+      - validating the configured vault path
+      - launching the configured Paperclip script
+      - opening the configured Paperclip UI URL
+- [x] Persist and surface the new local workspace settings in the existing
+      Settings page without disturbing the current integration flows.
+- [x] Switch vault root resolution to prefer the saved `local_vault_root`
+      setting before existing env-var and Obsidian fallbacks.
+- [x] Run targeted verification for the new Rust/frontend build path and record
+      the result.
+
+## Review
+
+- Native command surface:
+  - added Tauri commands for:
+    - `pick_vault_directory`
+    - `validate_vault_directory`
+    - `launch_paperclip_script`
+    - `open_paperclip_ui`
+  - initialized `tauri-plugin-dialog` and added `dialog:default` capability
+- Settings/UI:
+  - added a new `LOCAL WORKSPACE` section in `Settings`
+  - persisted:
+    - `local_vault_root`
+    - `paperclip_script_path`
+    - `paperclip_working_dir`
+    - `paperclip_ui_url`
+  - added founder-facing controls for:
+    - choosing a vault folder
+    - validating the selected vault
+    - launching the Paperclip script
+    - opening the Paperclip UI
+- Vault resolution:
+  - `src-tauri/src/vault.rs` now prefers the saved `local_vault_root`
+    setting before falling back to env vars or Obsidian config heuristics
+  - added a reusable vault validation model that reports known Thoughtseed
+    markers such as:
+    - `50-team`
+    - `60-client-ecosystem`
+    - `.obsidian`
+- Verification:
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+    - passed
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+    - passed
+    - required dependency resolution for the new dialog plugin
+  - `pnpm build`
+    - passed
+
+## Goal
+
+Clarify the next TeamForge architecture pass so the native Tauri app becomes the
+founder/agent control surface not only for GitHub, Huly, Clockify, and Slack,
+but also for:
+
+- local Obsidian vault selection and ingestion
+- local Paperclip launcher controls
+- Cloudflare-backed shared project/control-plane sync
+
+## Plan
+
+- [x] Separate shared Cloudflare state from per-machine local Tauri settings so
+      founder-specific vault paths and launcher paths do not leak into the
+      global source of truth.
+- [x] Define the Tauri settings and commands needed for:
+      - choosing a vault directory
+      - validating the vault root
+      - launching the Paperclip instance script
+      - opening the Paperclip UI
+      - starting a vault-to-TeamForge sync pass
+- [x] Define the Settings/launcher UX so these controls live in the existing
+      native shell instead of an external setup workflow.
+- [x] Write the concrete implementation plan to `docs/plans/` before touching
+      production code.
+
+## Review
+
+- Architecture decision:
+  - Cloudflare Worker + D1 remains the shared TeamForge control plane for
+    canonical project, issue, and normalized vault-derived state
+  - local Tauri settings own only per-machine values such as vault paths,
+    Paperclip launcher paths, and local UI URLs
+  - embedded SQLite remains cache/offline projection, not the shared source of
+    truth
+- Native product shape:
+  - `Settings` becomes the first-sync founder console for:
+    - choosing and validating the vault directory
+    - launching the Paperclip instance script
+    - opening the Paperclip UI
+    - triggering the vault-to-TeamForge sync pass
+- Concrete plan captured:
+  - `docs/plans/2026-04-22-teamforge-founder-console.md`
+  - includes:
+    - settings key model
+    - Tauri command surface
+    - Settings UX
+    - Paperclip guardrails
+    - Cloudflare sync boundary
+    - phased implementation order
+
+## Goal
+
+Back the `Issues` module with a TeamForge Worker-owned active-issues feed so
+active project engineering issues come from Cloudflare/D1 control-plane sync
+state, with local SQLite used only as a desktop cache/offline projection.
+
+## Plan
+
+- [x] Add a Worker endpoint that lists engineering issues for active TeamForge
+      projects from `sync_entity_mappings`.
+- [x] Add a local Tauri projection/cache for the Worker issue feed and make the
+      desktop issue loader use it remote-first.
+- [x] Keep the existing local GitHub cache path only as the final fallback when
+      no Worker/cached TeamForge issue feed is available.
+- [x] Re-run targeted verification and capture the validated outcome.
+
+## Review
+
+- Root cause:
+  - the new `Issues` page was still reading the legacy desktop `github_issues`
+    cache path directly
+  - the Cloudflare Worker already owned project control-plane issue mappings in
+    D1 via `sync_entity_mappings`, but that worker-owned engineering issue set
+    was not exposed as a feed the desktop could consume
+  - this left TeamForge project identity in Cloudflare while issue rendering
+    still depended on a separate local GitHub cache path
+- Fix applied:
+  - added a Worker endpoint:
+    - `GET /v1/project-mappings/issues`
+    - returns engineering GitHub issues for active TeamForge projects from D1
+      `sync_entity_mappings`, enriched with project metadata and issue payload
+      labels/assignees
+  - extended Worker GitHub issue payloads to persist:
+    - `priority`
+    - `track`
+    - `createdAt`
+    - `updatedAt`
+    - `closedAt`
+  - added a new local SQLite projection table:
+    - `teamforge_active_project_issues`
+  - added Worker fetch + cache plumbing in Tauri so
+    - `get_active_project_issues` now uses the Worker feed first
+    - cached TeamForge issue projection is used offline if the Worker is
+      unavailable
+    - the old local `github_issues` path remains only as the final legacy
+      fallback
+  - added regression test:
+    - `commands::tests::active_project_issues_prefer_cached_teamforge_projection_before_legacy_github_cache`
+- Verification:
+  - worker typecheck:
+    - `./node_modules/.bin/tsc -p cloudflare/worker/tsconfig.json --noEmit`
+    - passed
+  - frontend build:
+    - `pnpm build`
+    - passed
+  - targeted Rust regression:
+    - `cargo test --manifest-path src-tauri/Cargo.toml commands::tests::active_project_issues_prefer_cached_teamforge_projection_before_legacy_github_cache -- --exact`
+    - passed
+  - legacy active-project grouping regression:
+    - `cargo test --manifest-path src-tauri/Cargo.toml commands::tests::active_project_issues_are_grouped_from_active_teamforge_projects -- --exact`
+    - passed
+  - fresh app bundle:
+    - `pnpm tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'`
+    - passed and produced
+      `src-tauri/target/release/bundle/macos/TeamForge.app`
+
+## Goal
+
+Replace the misleading `Devices` primary module with an `Issues` module that
+shows active project issues grouped by project.
+
+## Plan
+
+- [x] Inspect the current `Devices` navigation/page/backend path and confirm
+      how it is heuristically deriving a pseudo-device registry from Huly
+      issues and cards.
+- [x] Replace the primary `Devices` surface with a real `Issues` module driven
+      by active project issue data.
+- [x] Re-run targeted verification for the new issue path and capture the
+      validated outcome.
+
+## Review
+
+- Root cause:
+  - the old `Devices` page was not backed by a device system of record
+  - `src-tauri/src/commands/mod.rs::load_devices` heuristically classified
+    Huly issues and board cards as “devices,” which pulled Axtech/Heyza smart
+    home engineering work, specs, and unrelated project details into a fake
+    device registry
+  - the left nav therefore exposed the wrong concept to the user
+- Fix applied:
+  - replaced the primary nav item `/devices` with `/issues`
+  - added `/devices -> /issues` redirect to avoid broken deep links
+  - added a new backend issue view model plus `get_active_project_issues`
+    command backed by:
+    - active `teamforge_projects`
+    - synced GitHub repo mappings
+    - cached `github_issues`
+  - added a new `Issues` page grouped by project, with client/project/status
+    filters and expandable issue details
+  - kept the old device heuristics out of the primary shell without disturbing
+    unrelated client-detail enrichment
+  - added regression test:
+    - `commands::tests::active_project_issues_are_grouped_from_active_teamforge_projects`
+- Verification:
+  - `pnpm build`
+    - passed
+  - `cargo test --manifest-path src-tauri/Cargo.toml commands::tests::active_project_issues_are_grouped_from_active_teamforge_projects -- --exact`
+    - passed
+
+## Goal
+
+Fix the Projects execution data decode failure so Clockify project hours load in
+the `Projects -> Execution` view again.
+
+## Plan
+
+- [x] Inspect the `load clockify project hours` query and confirm the exact
+      SQLx type mismatch between aggregated SQLite values and Rust row models.
+- [x] Apply the smallest safe backend fix so aggregated `duration_seconds`
+      values decode consistently.
+- [x] Re-run targeted verification for the Projects execution data path and
+      capture the validated outcome.
+
+## Review
+
+- Root cause:
+  - `time_entries.duration_seconds` is stored as `INTEGER` in SQLite
+  - the Projects execution path in `src-tauri/src/commands/mod.rs` decoded
+    `COALESCE(SUM(te.duration_seconds), 0)` into Rust `f64` fields
+  - SQLite returned `INTEGER` for the aggregate, so SQLx rejected the decode
+    with:
+    - `Rust type f64 (as SQL type REAL) is not compatible with SQL type INTEGER`
+- Fix applied:
+  - changed the raw aggregate row structs in `src-tauri/src/commands/mod.rs`
+    from `f64` seconds fields to `i64`
+  - kept hour/utilization math in Rust by converting the integer seconds to
+    `f64` only after decode
+  - added regression test:
+    - `commands::tests::clockify_project_hours_query_decodes_integer_sums`
+- Verification:
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+    - passed
+  - `cargo test --manifest-path src-tauri/Cargo.toml commands::tests::clockify_project_hours_query_decodes_integer_sums -- --exact`
+    - passed
+
+## Goal
+
+Unblock fresh TeamForge Tauri bundles by resolving the local Cargo checksum
+conflict currently failing `cargo metadata`, `cargo check`, and
+`npm run tauri -- build`.
+
+## Plan
+
+- [x] Inspect Cargo workspace ancestry, manifest dependencies, and any
+      competing lockfiles involved in `src-tauri` resolution.
+- [x] Inspect local Cargo toolchain and registry/cache state for the affected
+      crates (`hyper-util`, `serde_repr`) and identify the concrete mismatch
+      source.
+- [x] Apply the smallest safe fix for the checksum conflict.
+- [x] Re-run Cargo/Tauri verification commands and capture the validated
+      outcome.
+
+## Review
+
+- Root cause:
+  - `src-tauri/Cargo.lock` had an inconsistent partial edit
+  - `team-forge-ts` was bumped to `0.1.20`, but the lockfile entries for:
+    - `hyper-util`
+    - `serde_repr`
+    were changed from `0.1.20` down to `0.1.19` without changing their
+    checksums
+  - the stored checksums actually matched `0.1.20`, so Cargo failed with:
+    - `checksum for hyper-util v0.1.19 changed between lock files`
+    - `checksum for serde_repr v0.1.19 changed between lock files`
+- Fix applied:
+  - restored the `hyper-util` and `serde_repr` lockfile entries to `0.1.20`
+  - kept the intended app package version bump to `team-forge-ts v0.1.20`
+- Verification:
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+    - passed after the lockfile fix
+  - `src-tauri/target/release/bundle/macos/TeamForge.app/Contents/Info.plist`
+    - `CFBundleShortVersionString = 0.1.20`
+    - `CFBundleVersion = 0.1.20`
+  - full default `tauri build` now gets past the old checksum failure
+  - reliable local app-bundle rebuild path in this environment:
+    - `pnpm tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'`
+    - produced `src-tauri/target/release/bundle/macos/TeamForge.app`
+
+## Goal
+
+Turn the page-to-vault audit into a concrete implementation plan for the first
+vault-backed TeamForge slice, explicitly excluding Training and keeping
+Onboarding for both employees and clients.
+
+## Plan
+
+- [x] Re-scope the audit follow-up around `Projects`, `Clients`, and
+      `Onboarding`, with `Training` explicitly deferred.
+- [x] Write a durable implementation plan under `docs/plans/` with exact file
+      targets, phases, and verification gates.
+- [x] Record the narrowed scope and execution order in the repo task log.
+
+## Review
+
+- Wrote the phase plan to
+  `docs/plans/2026-04-20-teamforge-vault-population-phase-1.md`.
+- Locked the implementation slice to:
+  - `Projects`
+  - `Clients`
+  - `Onboarding` split into `client` and `employee`
+- Explicitly kept these out of scope for this pass:
+  - `Training`
+  - `Devices` redesign
+  - `Knowledge` import
+  - new sync-control logic beyond vault metadata ingestion
+- Chose a Cloudflare-canonical approach:
+  - Worker/D1 stores imported vault metadata
+  - desktop Tauri keeps only local projections/caches
+  - operational metrics remain Clockify/Huly/GitHub-derived
+
+## Goal
+
+Review the current TeamForge page inventory against the Thoughtseed vault and
+identify which page surfaces can be populated from vault data now versus what
+still needs new extraction or modeling work.
+
+## Plan
+
+- [x] Inventory the current TeamForge pages, routes, and major data surfaces in
+      the app.
+- [x] Inventory the relevant Thoughtseed vault sections and note types that can
+      feed those pages.
+- [x] Map each TeamForge page to specific vault-backed population opportunities,
+      including what is immediately usable, what needs normalization, and what
+      is out of scope.
+- [x] Summarize the review in a concise page-by-page audit with recommended
+      next population passes.
+
+## Review
+
+- Confirmed the current page inventory from `src/App.tsx` / `src/pages`:
+  Overview, Timesheet, Projects, Sprints, Insights, Team (`mapping`,
+  `capacity`, `crew`), Calendar, Comms, Boards, Clients, Devices, Knowledge,
+  Onboarding, Planner, Activity, Live, Settings. `Training.tsx` exists but is
+  not currently routed.
+- Confirmed the vault currently has strong instantiated note families for:
+  - `60-client-ecosystem/*/project-brief.md` (11 briefs, including `axtech/erp/project-brief.md`)
+  - `50-team/*.md` active crew profiles (6 root profiles)
+  - `50-team/*-kpi.md` KPI notes (6)
+  - a small `70-knowledge-base` corpus (5 markdown docs)
+- Confirmed the vault currently does **not** have instantiated
+  `client-profile.md`, `technical-spec.md`, `design/`, or `closeouts/`
+  documents under the client ecosystem despite those being part of the intended
+  schema/template layout.
+- Confirmed the current TeamForge parity importer in
+  `scripts/teamforge-vault-parity.mjs` only ingests:
+  - client `project-brief.md` records
+  - employee `*-kpi.md` records
+  It does not yet ingest client profiles, technical specs, designs, closeouts,
+  onboarding templates, or knowledge-base notes.
+- Confirmed the Team page already consumes vault-backed KPI data in the crew
+  summary panel, while most other reviewed pages are still driven by
+  Huly/Clockify/GitHub-derived operational data or heuristics in
+  `src-tauri/src/commands/mod.rs`.
+- Page-by-page audit outcome:
+  - **Immediate vault population wins:** Projects, Team/Crew, partial Clients,
+    partial Knowledge
+  - **Good next-pass normalization targets:** Onboarding, Training, Sprints,
+    Boards
+  - **Operational pages that should stay system-of-record driven, with only
+    light vault enrichment:** Overview, Timesheet, Planner, Insights, Calendar,
+    Comms, Activity, Live, Settings
+  - **Weak vault fit today:** Devices, unless a dedicated device-registry or
+    technical-spec note family is introduced
+- Recommended population order:
+  1. Extend vault ingestion for `client-profile.md` and expose it on Clients
+     and Projects
+  2. Extend project ingestion for `technical-spec.md`, `design/`, `research/`,
+     and `closeouts/` artifacts
+  3. Add a normalized knowledge import across `70-knowledge-base` plus selected
+     handbook / operations notes
+  4. Decide whether Onboarding and Training become first-class vault schemas or
+     remain telemetry-derived dashboards with vault overlays
+
+## Goal
+
+Unblock server-side project parity on the live TeamForge Worker so the pending
+Thoughtseed project creates can apply remotely after the KPI import path.
+
+## Plan
+
+- [ ] Verify the live Worker failure mode for `PUT /v1/project-mappings/:id`,
+      including remote D1 schema/migration state and any available exception
+      detail.
+- [ ] Fix the actual server-side blocker, whether that is remote migration drift
+      or a Worker write-path bug in project graph upsert.
+- [ ] Re-run the project parity canary against `axtech` and confirm the remote
+      create succeeds instead of returning `500` / Cloudflare `1101`.
+- [ ] Summarize the validated root cause, the fix, and any remaining external
+      verification blockers in the review section.
+
+## Review
+
+## Goal
+
 Cut and install a fresh TeamForge release after restoring optional PAT support:
 - bump to a new release version and push it
 - trigger the GitHub release workflow with a new tag
@@ -20,42 +501,66 @@ Cut and install a fresh TeamForge release after restoring optional PAT support:
 
 ## Review
 
-- Confirmed starting state:
-  - version surfaces were still at `0.1.16`
-  - latest tag was `v0.1.16`
-  - local bundle artifacts existed under `src-tauri/target/release/bundle/macos`
-- Bumped release metadata to `0.1.17` across:
-  - root `package.json`
-  - `sidecar/package.json`
-  - `src-tauri/Cargo.toml`
-  - `src-tauri/tauri.conf.json`
-  - root package entry in `src-tauri/Cargo.lock`
-  - `CHANGELOG.md`
-- Verification from the cleaned state:
-  - `rm -rf dist`
-  - `cargo clean --manifest-path src-tauri/Cargo.toml` removed `13369 files, 5.9GiB total`
-  - `pnpm build`
-  - `cargo test --manifest-path src-tauri/Cargo.toml` (`31 passed, 0 failed, 3 ignored`)
-  - `pnpm tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'`
-- Local build note:
-  - a first local `pnpm tauri build --bundles app` run produced the `.app` bundle but failed when signing updater artifacts with the local env override
-  - rerunning with `createUpdaterArtifacts:false` completed cleanly for the local install target
-- Release push:
-  - committed release bump as `678f36e` with message `chore(release): bump version metadata to 0.1.17`
-  - pushed `main` to origin
-  - created and pushed tag `v0.1.17`
-- Remote release verification:
-  - GitHub Actions started `Build & Release` run `24530151652`
-  - current state at verification time:
-    - run status: `in_progress`
-    - active step: `Build Tauri app (Apple Silicon)`
-- Local install replacement:
-  - removed old local updater tarball artifacts from `src-tauri/target/release/bundle/macos`
-  - replaced `/Applications/TeamForge.app` using `ditto`
-  - verified installed app version via `Info.plist`: `0.1.17`
-  - launched via `open /Applications/TeamForge.app`
-  - verified running process:
-    - `/Applications/TeamForge.app/Contents/MacOS/team-forge-ts`
+## Goal
+
+Extend Thoughtseed vault parity so TeamForge also imports the latest per-employee KPI notes from `thoughtseed-labs/50-team`, not just project briefs from `60-client-ecosystem`.
+
+## Plan
+
+- [x] Inspect KPI note structure and map each vault `member_id` to a live TeamForge employee record.
+- [x] Add a durable local TeamForge storage surface for imported employee KPI snapshots.
+- [x] Extend the vault parity script to scan KPI notes, report latest-source metadata, and apply KPI imports into the TeamForge local database.
+- [x] Surface the latest imported KPI snapshot in the Team page employee summary so the imported data is visible inside TeamForge.
+- [x] Run the parity script against the latest vault data and capture a report of KPI imports, updates, and unresolved mappings.
+
+## Review
+
+- Added a durable employee KPI storage surface in local TeamForge SQLite:
+  - `employee_kpi_snapshots` table in `src-tauri/migrations/001_initial.sql`
+  - backend row + view models in `src-tauri/src/db/models.rs`
+  - query support for reading the latest imported KPI snapshot per employee in `src-tauri/src/db/queries.rs`
+- Extended the employee summary command and UI:
+  - `get_employee_summary` now returns `kpiSnapshot` when one exists
+  - `src/components/team/EmployeeSummaryPanel.tsx` now shows the latest imported KPI title, freshness, role scope, monthly KPIs, quarterly milestones, evidence sources, and gap flags
+- Extended `scripts/teamforge-vault-parity.mjs` to:
+  - scan `thoughtseed-labs/50-team/*-kpi.md`
+  - normalize KPI section data and latest-source timestamps
+  - match vault `member_id`s to live TeamForge employees
+  - report KPI creates/updates/unresolved mappings separately from project parity
+  - write KPI snapshots into the live TeamForge local database on `--apply`
+- Matching verification against the live TeamForge employee roster:
+  - `imran` -> `imran`
+  - `pavun-kumar` -> `Pavun Kumar R`
+  - `preetha` -> `Preethamanickam`
+  - `raheman-ali` -> `Raheman Ali`
+  - `rifayudeen` -> `Rifayudeen.q`
+  - `subitcha` -> `Subitcha SM`
+- Dry-run verification:
+  - `node scripts/teamforge-vault-parity.mjs --local-only --report tasks/teamforge-vault-parity-report.json`
+  - result after KPI import:
+    - `11` project creates still pending against the Worker
+    - `6` KPI updates
+    - `0` unresolved KPI mappings
+- Apply canary verification:
+  - `TEAMFORGE_WORKSPACE_ID=ws_thoughtseed node scripts/teamforge-vault-parity.mjs --project axtech --apply --report tasks/teamforge-vault-parity-canary.json`
+  - result:
+    - all `6` KPI snapshots imported into the live TeamForge database and verified back out
+    - direct DB check confirms `6` rows in `employee_kpi_snapshots`
+    - latest-source paths imported:
+      - `50-team/imran-kpi.md`
+      - `50-team/pavun-kumar-kpi.md`
+      - `50-team/preetha-kpi.md`
+      - `50-team/raheman-ali-kpi.md`
+      - `50-team/rifayudeen-kpi.md`
+      - `50-team/subitcha-kpi.md`
+    - project canary still fails remotely on the known server-side Worker bug:
+      - `500 Internal Server Error`
+      - Cloudflare `1101 Worker threw exception`
+- Verification notes:
+  - `node --check scripts/teamforge-vault-parity.mjs` passed
+  - `./node_modules/.bin/tsc --noEmit` passed
+  - `./node_modules/.bin/vite build` is currently blocked by the existing Rollup native module signature issue in `@rollup/rollup-darwin-arm64`
+  - `cargo test --manifest-path src-tauri/Cargo.toml` is currently blocked by the existing lockfile checksum mismatch for `serde_repr v0.1.19`
 
 ## Goal
 
@@ -79,30 +584,68 @@ Configure the existing TeamForge OTA release secrets and variables without rotat
 - Confirmed target repo/auth context:
   - GitHub repo: `Sheshiyer/team-forge-ts`
   - Wrangler account: `Sheshnarayan.iyer@gmail.com's Account`
-  - Cloudflare account id: `9d9d23b27f32e70ae3afb6a1aa2c0f10`
-- Confirmed the existing updater key should stay in place:
-  - `~/.tauri/teamforge.key` signs successfully with an empty password.
-  - No `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secret is needed for the current key.
-- GitHub Actions secrets written:
-  - `TAURI_SIGNING_PRIVATE_KEY`
-  - `CLOUDFLARE_ACCOUNT_ID`
-  - `TF_WEBHOOK_HMAC_SECRET`
-- GitHub Actions vars written:
-  - `TEAMFORGE_R2_BUCKET=teamforge-artifacts`
-  - `TEAMFORGE_ARTIFACT_BASE_URL=https://pub-f4b7fa9646cd42c2a19b7439f1956eab.r2.dev`
-  - `TF_RELEASE_PUBLISH_URL=https://teamforge-api.sheshnarayan-iyer.workers.dev/internal/releases/publish`
-- Cloudflare Worker secret written:
-  - `TF_WEBHOOK_HMAC_SECRET`
-- Cloudflare R2 public artifact host:
-  - enabled public `r2.dev` access for `teamforge-artifacts`
-  - live base URL: `https://pub-f4b7fa9646cd42c2a19b7439f1956eab.r2.dev`
-  - root URL returns `404`, which is expected for a bucket with no root object
-- Live verification passed:
-  - Authenticated `POST` to `https://teamforge-api.sheshnarayan-iyer.workers.dev/internal/releases/publish` with `{}` returns `400 missing_fields`, which proves the new webhook secret is accepted and routing works.
-- Remaining blockers:
-  - No workflow-blocking secret/var gaps remain for the current `release.yml`.
-  - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` is intentionally unset because the existing TeamForge updater key signs successfully with an empty password.
-  - `api.teamforge.thoughtseed.space` and `artifacts.teamforge.thoughtseed.space` still fail TLS, so the repo is using `workers.dev` + `r2.dev` as the current working baseline until the production domains are fixed.
+
+## Goal
+
+Make the Team page vault-first instead of assignment-first:
+- use Thoughtseed Obsidian team notes as the source of truth for roster identity,
+  role, and department
+- remove the ambiguous org assignment workflow from the Team surface
+- verify why KPI work is not visible in the `0.1.20` app path/version
+
+## Plan
+
+- [x] Load Team roster/profile data directly from the active Obsidian vault so
+      the Team page reads `50-team/*.md` as the source of truth.
+- [x] Extend the desktop Team snapshot / employee summary models so vault
+      profile data can sit beside KPI and operational overlays.
+- [x] Replace the Team mapping editor with a straightforward vault-backed
+      roster + crew profile view.
+- [x] Verify the visible version mismatch by comparing repo metadata with the
+      built app bundle.
+- [x] Run targeted checks plus a source-data canary, and capture the remaining
+      Tauri rebuild blocker if the bundle cannot be refreshed locally.
+
+## Review
+- Added direct vault-loading support in the desktop backend:
+  - new `src-tauri/src/vault.rs` resolves the active Obsidian vault from
+    `~/Library/Application Support/obsidian/obsidian.json`
+  - scans `50-team/*.md` root notes
+  - maps those notes onto live TeamForge employees by alias/name/email
+  - exposes vault roster/profile data through `TeamSnapshotView` and
+    `EmployeeSummaryView`
+- Reworked the Team frontend:
+  - removed the old `/team/mapping` org-assignment editor from the page flow
+  - replaced it with `/team/roster`, `/team/capacity`, and `/team/crew`
+  - `Roster` is now vault-backed and grouped by note department
+  - `Crew Profile` now shows the Obsidian team profile alongside the imported
+    KPI snapshot and live operational signals
+  - `Capacity` keeps live hours/leave data but groups people by vault
+    department instead of assignment drafts
+- Version mismatch root cause confirmed:
+  - repo version surfaces are already `0.1.20`
+  - checked-in built bundle
+    `src-tauri/target/release/bundle/macos/TeamForge.app/Contents/Info.plist`
+    still reports `CFBundleShortVersionString=0.1.17`
+  - the stale bundle explains why `0.1.20` and the KPI/team changes were not
+    what the app on disk was showing
+- Verification:
+  - `npm run build`
+    - passed
+  - `npm run tauri -- build`
+    - frontend build stage passed
+    - final Tauri build is still blocked by the pre-existing Cargo environment
+      issue: `checksum for hyper-util v0.1.19 changed between lock files`
+  - Obsidian source-data canary:
+    - confirmed the active vault path resolves to
+      `/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs`
+    - confirmed the root team notes currently present are:
+      - `imran.md`
+      - `pavun-kumar.md`
+      - `preetha.md`
+      - `raheman-ali.md`
+      - `rifayudeen.md`
+      - `subitcha.md`
 
 ## Goal
 
@@ -218,7 +761,52 @@ Make TeamForge the canonical project registry above GitHub and Huly so future sy
   - `save_teamforge_project`
 - Added frontend invoke/type surface for the new commands in:
   - `src/lib/types.ts`
-  - `src/hooks/useInvoke.ts`
+
+## Goal
+
+Review TeamForge as a non-standalone system and improve understanding of the architectural flow across:
+- `team-forge-ts`
+- `thoughtseed-paperclip`
+- `thoughtseed-labs`
+- `workfllow-thhoughtseed`
+
+## Plan
+
+- [x] Load the requested review skills and repo workflow context.
+- [x] Inspect the TeamForge shell, page topology, Tauri command surface, sync scheduler, and Cloudflare control-plane boundaries.
+- [x] Inspect `thoughtseed-paperclip` and `thoughtseed-labs` only for the integration seams that shape TeamForge architecture.
+- [x] Produce a review that identifies current architectural clutter, coupling problems, and a cleaner target flow for this multi-repo system.
+- [x] Inspect the `workfllow-thhoughtseed` skill suite, README, and seeded vault contracts.
+- [x] Update the architecture review so the workflow skill suite is positioned correctly in the broader Thoughtseed system.
+
+## Review
+
+- Review scope:
+  - TeamForge desktop shell and page topology
+  - Tauri backend command surface and sync bridge
+  - Cloudflare Worker registry/control-plane routes
+  - Paperclip scaffold/feed/closeout scripts
+  - thoughtseed-labs command-center and frontmatter contracts
+- Key conclusions:
+  - TeamForge is already the canonical slug and project-registry authority for the broader Thoughtseed system; it should be treated as a platform bridge, not only as a desktop dashboard.
+  - The current codebase mixes three concerns too tightly:
+    - operational read surfaces for humans
+    - control-plane mutation/sync orchestration
+    - vault/Paperclip artifact bridge behavior
+  - The heaviest architectural clutter is concentrated in:
+    - `src/pages/Projects.tsx`
+    - `src-tauri/src/commands/mod.rs`
+    - `cloudflare/worker/src/routes/v1.ts`
+    - `cloudflare/worker/src/routes/agent-feed.ts`
+  - The clean target model is a three-plane system:
+    - TeamForge control plane: canonical project identity, sync policy, integration credentials, orchestration state
+    - TeamForge desktop operator console: cache-backed read models and human control surfaces
+    - Paperclip/vault bridge: scaffold/feed/closeout projections driven by explicit bridge contracts instead of mixed-in Worker routes
+- Follow-up added after user correction:
+  - the shipped `workfllow-thhoughtseed` suite must now be reviewed as a real subsystem in the same architecture, not as future/planned work.
+  - `workfllow-thhoughtseed` is best modeled as a cross-cutting workflow-materialization layer, not a fourth peer control plane.
+  - TeamForge should own canonical IDs and lifecycle state; the workflow suite should consume those IDs and write vault-native documents keyed to the TeamForge slug.
+  - Paperclip should orchestrate and schedule the workflow suite, while `thoughtseed-labs` remains the canonical document and knowledge substrate for the generated artifacts.
 
 ## Goal
 
@@ -258,6 +846,118 @@ Turn the Cloudflare-first TeamForge project-sync architecture into a concrete im
   - conflict inbox UI
   - generic sync engine overreach
 - Important bridge behavior:
+
+## Goal
+
+Understand what parts of the current TeamForge architecture are reusable in `forge-aura`, and identify which pieces should be transplanted, adapted, or left behind.
+
+## Plan
+
+- [x] Confirm the comparison direction and inspect the key architecture artifacts in both codebases.
+- [x] Extract the stable architectural patterns from TeamForge that are independent of the current desktop/time-tracking domain.
+- [x] Compare those patterns against `forge-aura`'s current worker/web/core split, realtime assumptions, and Paperclip-first boundaries.
+- [x] Produce a leverage matrix with concrete recommendations: lift now, adapt later, or avoid.
+- [x] Record the resulting analysis in this review log.
+
+## Review
+
+- Comparison direction used:
+  - source architecture: current `team-forge-ts`
+  - target architecture: `thoughtseed-forge/forge-aura`
+  - rationale: `forge-aura` is already a separate Cloudflare-first spatial-ops runtime, so the useful question is which TeamForge control-plane patterns strengthen it.
+- Strongest TeamForge assets to transplant:
+  - explicit contract pack discipline for routes/auth/persistence instead of relying only on implementation shape
+  - public/internal Worker split with a stable success/error envelope and health/bootstrap surfaces
+  - canonical D1-backed control-plane modeling for durable state, policy, audit, retries, and conflict tracking
+  - reusable Durable Object lock pattern for serializing mutating flows beyond realtime presence
+  - server-side credential and integration hygiene, keeping vendor authority and write paths in Worker scope
+- `forge-aura` surfaces that are already stronger than TeamForge and should stay as-is:
+  - `packages/spatial-core` as a clean shared domain/core package
+  - dependency injection in `workers/spatial-edge/src/create-app.ts`
+  - thin adapter boundaries for Paperclip and GitHub sinks
+  - Cloudflare-native web delivery without the desktop/local-cache complexity TeamForge needs
+- Lift now:
+  - add a TeamForge-style route contract and response envelope around `forge-aura`'s Worker API
+  - add internal authenticated job/callback routes for async standup publication and later Paperclip/GitHub jobs
+  - add serialized lock helpers for standup publish, escalation, and any future room-configuration mutations
+  - upgrade D1 from draft persistence only into an operational store with job history, failures, retries, and connection health
+- Adapt later:
+  - TeamForge sync-control-plane ideas should be narrowed into `forge-aura` operator control for standups, escalations, and agent-gap follow-through rather than copying the full GitHub/Huly project-registry model
+  - cached/projection patterns are useful, but as Worker-side computed projections and browser bootstrap summaries, not desktop-local SQLite mirrors
+- Avoid:
+  - Tauri/Rust bridge patterns
+  - OTA/release architecture
+  - TeamForge's GitHub/Huly ownership model and project-registry schema as written
+  - domain-specific Clockify/Huly/Slack data fusion
+- Recommended adoption order for `forge-aura`:
+  - Wave 1: contract pack, response envelope, health/bootstrap/config surfaces
+  - Wave 2: mutation locks plus queue/job audit persistence
+  - Wave 3: real GitHub/Paperclip write paths with idempotent publication records
+  - Wave 4: operator-facing control surfaces for failures, retries, and review-required cases
+- Bottom-line conclusion:
+  - the best leverage is not TeamForge's product/domain layer
+  - it is TeamForge's operational architecture around contracts, control planes, locks, auditability, and failure handling
+  - `forge-aura` should keep its current `spatial-core` domain model and import those operational patterns around it
+
+## Goal
+
+Close the remaining open issues in the `Ops Fabric v0.3.0 — TeamForge ↔ Paperclip Unification` milestone and prepare the verified `0.1.20` milestone update without claiming completion for anything that is not actually proven.
+
+## Plan
+
+- [ ] Finish the Settings/operator UI for Huly cadence controls and identity-review overrides.
+- [ ] Tighten the milestone evidence docs so issue closures map directly to code and contracts.
+- [ ] Run verification again, record any real blockers, and only then post the issue-by-issue milestone update.
+
+## Review
+
+- In progress:
+  - durable Slack analytics reads were moved onto persisted SQLite state
+  - Huly scheduler intervals were made configurable in the backend
+  - identity review + override backend commands already exist and need an operator-facing surface
+- Known verification blocker:
+  - Rust `cargo test` currently fails before compilation because of dependency checksum mismatches in the local Cargo environment, so milestone closure must rely on the evidence we can prove plus any frontend/build verification we can still run.
+- Completed:
+  - added Huly cadence controls and identity-review override UI in `src/pages/Settings.tsx`
+  - documented Huly scheduler settings in `docs/runbooks/huly-sync-cadence.md`
+  - tightened `ops_event` contract language for backward compatibility and collision handling in `docs/architecture/contracts/ops-event-schema-contract.md`
+  - updated the milestone closeout plan in `docs/plans/2026-04-18-ops-fabric-v0.3.0-completion.md`
+  - bumped local release metadata and changelog to `0.1.20`
+- Verification:
+  - `pnpm build` passed before and after the `0.1.20` metadata bump
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml` passed
+  - `cargo test --manifest-path src-tauri/Cargo.toml identity -- --nocapture` is still blocked by `hyper-util v0.1.19` checksum mismatch before compilation
+- GitHub closeout:
+  - closed issues `#20` through `#39` with evidence comments
+  - verified the `Ops Fabric v0.3.0 — TeamForge ↔ Paperclip Unification` milestone now has zero open issues
+
+## Goal
+
+Prepare and publish the actual `0.1.20` release from a clean tree so the milestone closeout ships without bundling unrelated local work.
+
+## Plan
+
+- [ ] Create a clean detached worktree from the current `main` tip.
+- [ ] Reapply only the Ops Fabric closeout + `0.1.20` release files into that clean tree.
+- [ ] Re-run verification there, then commit, tag, push, and confirm the release workflow starts.
+
+## Review
+
+- In progress:
+  - the main workspace was too dirty to use directly for a release commit
+  - release prep was isolated into a separate clean worktree to avoid shipping unrelated page/control-plane edits
+- Completed:
+  - created detached clean worktree at `/tmp/teamforge-release-0.1.20`
+  - reconstructed only the Ops Fabric closeout + `0.1.20` release files there
+  - verified in the clean tree:
+    - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+    - `cargo test --manifest-path src-tauri/Cargo.toml`
+    - `pnpm build`
+  - created release commit `180f3ce` with message `chore(release): ship 0.1.20 ops fabric closeout`
+  - pushed release commit to `origin/main`
+  - created and pushed tag `v0.1.20`
+  - verified GitHub Actions started `Build & Release` run `24601592288` for `headSha=180f3ce277f618028e53c4149ac02a854b99cd21`
+
   - saving a TeamForge project now also upserts linked GitHub repos into `github_repo_configs`
   - this keeps the existing GitHub sync engine aware of TeamForge-linked repos without rewriting sync orchestration yet
 - Verification passed:
@@ -3138,3 +3838,415 @@ Update Clients to participate in the GitHub-driven execution flow:
 ## Review
 
 - Pending implementation.
+
+## Goal
+
+Stop the Projects page from booting into a false-empty error state after OTA updates by making backend data availability deterministic at app startup.
+
+## Plan
+
+- [x] Confirm the failing Projects load path and record the root cause against the current packaged-app startup flow.
+- [x] Change app bootstrap so the SQLite pool is initialized and managed before the UI can invoke page commands.
+- [x] Verify the Projects command path still works against the live local database and does not regress command registration.
+- [x] Document the fix and verification results here.
+
+## Review
+
+- Root cause:
+  - `src-tauri/src/lib.rs` initialized SQLite in a spawned async task after the window could already render.
+  - The Projects page invokes Tauri commands immediately on mount, so packaged launches could hit a backend-not-ready window and fall into the false-empty/error state shown in the OTA screenshot.
+  - The existing `0.1.19` Projects-page retry patch reduced the symptom but did not eliminate the startup race.
+- Fix:
+  - moved `db::queries::init_db(...)` into synchronous setup via `tauri::async_runtime::block_on(...)`
+  - registered `DbPool` before returning from `setup`, so page commands cannot race backend state registration anymore
+  - preserved the startup log messages, but now app startup fails fast if DB initialization genuinely fails instead of booting into a misleading empty shell
+- Verification:
+  - `cargo test --manifest-path src-tauri/Cargo.toml`
+  - result: `33 passed, 0 failed, 3 ignored`
+  - confirmed the live local execution-project SQL path still returns the expected configured repo row from `~/Library/Application Support/com.thoughtseed.teamforge/teamforge.db`
+
+## Goal
+
+Audit the remaining TeamForge pages for stale, hard-coded, or low-information content so we can see which surfaces still need real data wiring.
+
+## Plan
+
+- [x] Inspect all routed pages and note their primary data source(s).
+- [x] Flag hard-coded or mock-derived content, including stale issue/state displays.
+- [x] Identify pages that are relatively empty, thin, or mostly zero-state despite existing routes.
+- [x] Summarize the findings in severity order with a page-by-page emptiness list.
+
+## Review
+
+- Highest-severity stale-data issue found in Devices:
+  - `src-tauri/src/commands/mod.rs` counts device-shaped Huly issues/cards without excluding completed work.
+  - `normalize_device_status(...)` maps `closed` / `resolved` into `deployed` instead of filtering them out, which explains stale ParkArea-style device rows surviving after closure.
+- Explicit hard-coded / placeholder content found in Overview:
+  - quota trend sparklines are generated by `mockSparklineData(...)`
+  - Weekly Trend is a static `AWAITING DATA STREAM`
+  - Role Dashboard cards are static placeholder copy with `AWAITING DATA STREAM`
+- Hard-coded empty path found in Clients detail:
+  - `linked_devices` is returned as `vec![]`, so the client detail can never show linked devices even if device data exists elsewhere.
+- Heuristic or proxy-driven pages found:
+  - Onboarding is synthesized from projects, time entries, and Huly keyword matches rather than a canonical onboarding model.
+  - Planner is explicitly derived from Clockify + Huly scheduling signals, not a real planner API.
+  - Training uses hard-coded track blueprints and inferred progress, and is not currently routed in `src/App.tsx`.
+- Silent-empty behavior found:
+  - several Huly-backed commands return `Ok(vec![])` when Huly auth/client setup fails, so affected pages can look blank instead of surfacing a data-source error.
+- Pages currently most likely to feel empty or low-information:
+  - `Projects` control plane (no `teamforge_projects` rows)
+  - `Overview` secondary sections (placeholder-only)
+  - `Calendar` leave data (no cached/manual leave entries)
+  - `Clients` detail resources/activity where no client settings or matched Huly content exist
+  - `Comms` Slack activity when Slack sync has not populated local state
+  - `Training` if reintroduced, because it is synthetic and currently unreachable
+
+## Goal
+
+Implement the audit fixes with minimal-impact changes:
+- stop Devices from counting closed/resolved work,
+- wire real linked devices into Client detail,
+- remove hard-coded Overview sections instead of showing fake data,
+- and make low-signal pages communicate empty/source states more honestly.
+
+## Plan
+
+- [x] Add targeted tests for device completion filtering and client/device matching helpers.
+- [x] Update the device aggregation pipeline to ignore completed Huly issues/cards and keep statuses meaningful.
+- [x] Reuse device aggregation for `get_client_detail` so linked devices are derived from real backend data.
+- [x] Remove Overview mock sparkline/placeholder dashboard sections and keep only real data-backed content.
+- [x] Improve selected page empty-state copy where the app currently implies “no data” without clarifying the source.
+- [x] Run Rust tests and frontend build verification, then record the results here.
+
+## Review
+
+- Backend fixes:
+  - extracted device aggregation into a shared `load_devices(...)` path
+  - added `device_signal_is_active(...)` so completed Huly issue/card statuses are excluded before they can create stale device rows or inflate issue counts
+  - added `client_matches_device_name(...)` and reused the live device registry inside `get_client_detail(...)`, replacing the hard-coded `linked_devices: vec![]`
+- Frontend fixes:
+  - removed Overview’s mock sparkline trend column and the placeholder weekly/role-dashboard sections
+  - replaced them with real quota-backed sections: status summary, weekly load, and attention watchlist
+  - updated Devices and Clients empty/error copy so the UI names the actual source dependency instead of pretending the system simply has no data
+- Regression coverage:
+  - added Rust tests for completed device-signal filtering and case-insensitive client/device matching
+- Verification:
+  - `cargo test --manifest-path src-tauri/Cargo.toml`
+    - result: `35 passed, 0 failed, 3 ignored`
+  - `pnpm build`
+    - result: success (`tsc && vite build`)
+
+## Goal
+
+Finish the remaining low-signal page cleanup so empty or partially unavailable data is reported honestly:
+- stop swallowing load failures on the remaining Huly-backed and sync-backed screens,
+- preserve partial data where one source succeeds and another fails,
+- and clearly label heuristic pages as derived views rather than canonical systems.
+
+## Plan
+
+- [x] Update `Sprints`, `Insights`, `Boards`, `Comms`, and `Knowledge` to surface source-aware load errors instead of collapsing into generic empty states.
+- [x] Use partial-load handling where a page aggregates multiple sources so one missing feed does not blank the whole view.
+- [x] Tighten `Onboarding` and `Planner` copy so they explicitly describe their derived/heuristic nature.
+- [x] Re-run frontend and backend verification, then review the final diff for remaining risks.
+
+## Review
+
+- Frontend page-state cleanup:
+  - `Sprints`, `Boards`, and `Knowledge` now surface explicit source-aware load failures instead of defaulting straight to generic zero states.
+  - `Insights` and `Comms` now use partial-load handling (`Promise.allSettled`) so one unavailable feed no longer blanks every section on the page.
+  - `Onboarding` and `Planner` now explicitly identify themselves as derived operational views rather than canonical systems.
+  - `Sprints`, `Onboarding`, and `Planner` no longer render misleading zero-valued summary metrics when their source load has failed.
+  - `Onboarding` scenario-tracking and the `Planner` weekly-summary panel are also suppressed on load failure so they cannot imply fake zero-state telemetry.
+- Backend alignment:
+  - page-facing Huly commands for milestones, time discrepancies, estimation accuracy, priority distribution, board cards, meeting load, naming compliance, devices, and knowledge articles now return real errors when saved Huly access is unavailable instead of silently converting that condition into empty arrays.
+  - `get_client_detail(...)` now distinguishes between “no linked devices matched this client” and “linked device data is unavailable because Huly device signals could not be loaded.”
+- Residual product reality after this pass:
+  - `Onboarding` remains heuristic by design.
+  - `Planner` remains a derived capacity projection rather than a live planner integration.
+  - pages can still be genuinely empty if their upstream caches contain no relevant synced records.
+- Verification:
+  - `cargo test --manifest-path src-tauri/Cargo.toml`
+    - result: `35 passed, 0 failed, 3 ignored`
+  - `pnpm build`
+    - result: success (`tsc && vite build`)
+
+## Goal
+
+Fix the remaining Projects execution-mode gap so the TeamForge/Cloudflare registry actually drives the page:
+- hydrate execution projects from the TeamForge worker/cache bridge instead of relying on a prior control-plane fetch side effect,
+- preserve partial execution data when the upstream registry refresh fails,
+- and stop the page from showing false-zero summaries behind a generic error banner.
+
+## Plan
+
+- [x] Update the execution command path so it refreshes or reuses the TeamForge project graph before building the derived execution list.
+- [x] Return source-aware execution payload metadata so the frontend can show upstream warnings without discarding usable local data.
+- [x] Update the Projects page to suppress false-zero summaries on hard failure and make the empty/error copy TeamForge-aware.
+- [x] Re-run backend/frontend verification and record the final review here.
+
+## Review
+
+- Backend execution-path fix:
+  - `get_execution_projects(...)` now refreshes the TeamForge worker graph before building execution rows and falls back to cached TeamForge graphs when the Worker is unavailable.
+  - cached TeamForge graphs are now bridged back into `github_repo_configs` on both the control-plane read path and the execution path, so Projects no longer depends on the control-plane tab being opened first.
+  - execution-mode now returns a structured payload with `projects` plus a `sourceError` warning, allowing the frontend to render usable local data without hiding upstream failure details.
+- Frontend Projects fix:
+  - the execution tab now surfaces actual invoke error messages even when Tauri rejects with a string/object instead of an `Error`.
+  - hard execution failures no longer render misleading zero-valued summary cards.
+  - when TeamForge refresh fails but local execution data still exists, the page shows the warning banner and preserves the derived project table.
+  - the empty-state copy now points users at the TeamForge control plane instead of the old “sync GitHub plans in settings” wording.
+- Regression coverage:
+  - added a Rust command-layer test that proves cached TeamForge graphs populate `github_repo_configs` through the shared bridge helper.
+- Verification:
+  - `cargo test --manifest-path src-tauri/Cargo.toml`
+    - result: `36 passed, 0 failed, 3 ignored`
+  - `pnpm build`
+    - result: success (`tsc && vite build`)
+
+## Goal
+
+Finish the still-open 20-issue `Ops Fabric v0.3.0 — TeamForge ↔ Paperclip Unification` milestone before cutting the deferred `0.1.20` release update.
+
+## Plan
+
+- [x] Audit the open milestone against the current codebase so already-landed foundation work is separated from real remaining implementation.
+- [x] Revert the premature `0.1.20` version bump so release metadata stays gated on milestone completion.
+- [x] Capture the completion plan under `docs/plans/2026-04-18-ops-fabric-v0.3.0-completion.md`.
+- [ ] Execute the milestone in order:
+  - verify and close already-landed issues
+  - finish partial gaps (`#22`, `#26`)
+  - implement missing Paperclip/export/signal-intelligence issues (`#29`–`#39`)
+  - then cut the `0.1.20` release update
+
+## Review
+
+- GitHub audit result:
+  - the milestone still has 20 open issues (`#20`–`#39`)
+  - it is not ready for a release push or version bump
+- Code-audit split:
+  - likely already landed and ready for verification/closure: `#20`, `#21`, `#23`, `#24`, `#25`, `#27`, `#28`
+  - partially landed and still needing real completion work: `#22`, `#26`
+  - still missing / not evidenced in repo yet: `#29`–`#39`
+- Release hygiene:
+  - reverted the premature `0.1.20` metadata/changelog bump after the milestone gate was clarified
+  - recorded a new lesson so future release prep does not run ahead of milestone status
+- Planning artifact:
+  - `docs/plans/2026-04-18-ops-fabric-v0.3.0-completion.md`
+
+## Goal
+
+Use `thoughtseed-labs` as the source for a single-run TeamForge information-parity pass:
+- scan vault project briefs
+- normalize the minimal TeamForge project graph input
+- compare against current TeamForge registry state
+- support a one-shot import/update path without making vault ingestion part of steady-state architecture
+
+## Plan
+
+- [x] Inspect the existing Worker project-graph write contract and current vault project-brief shape.
+- [x] Add a standalone one-run parity script under `scripts/` that reads `thoughtseed-labs` and prepares TeamForge upserts.
+- [x] Include dry-run reporting so the script can be used as an information parity check before any write.
+- [x] Verify the script against the current labs vault and record the resulting scope/counts here.
+
+## Review
+
+- Added a one-run parity utility:
+  - `scripts/teamforge-vault-parity.mjs`
+  - package shortcut: `pnpm parity:labs-vault`
+- Script scope:
+  - scans `thoughtseed-labs/60-client-ecosystem/**/project-brief.md`
+  - reads canonical frontmatter fields already keyed to TeamForge slugs (`project_id`, `client_id`, `status`, `owner`, `source_url`)
+  - builds a minimal TeamForge project graph payload with:
+    - project metadata
+    - parity-owned vault/source artifacts
+    - preserved existing GitHub/Huly links and policy when updating an existing TeamForge project
+  - supports dry-run by default and `--apply` for the one-shot import/write pass
+  - supports `--local-only` so parity can be inspected even when the Worker is unreachable
+- Safety behavior:
+  - does not make vault ingestion part of the app’s steady-state sync path
+  - avoids destructive overwrites of existing TeamForge GitHub/Huly links by fetching and merging existing project graphs before writes
+  - requires `--workspace-id` only for real writes that need to create new TeamForge projects
+- Verification:
+  - ran `node scripts/teamforge-vault-parity.mjs --local-only`
+  - ran `node scripts/teamforge-vault-parity.mjs --local-only --report /tmp/teamforge-vault-parity.json`
+  - ran `node scripts/teamforge-vault-parity.mjs --report /tmp/teamforge-vault-parity-remote.json`
+  - current vault parity scope:
+    - 11 project briefs discovered
+    - 11 creates, 0 updates in local-only dry-run mode
+    - status breakdown: `active=4`, `white-labelable=3`, `paused=3`, `completed=1`
+    - no duplicate `project_id` warnings
+  - live Worker dry-run result:
+    - `remoteWarning: null` against `https://teamforge-api.sheshnarayan-iyer.workers.dev`
+    - still `11 creates / 0 updates`
+    - meaning the current TeamForge Worker registry does not yet contain any of the 11 vault-backed project graphs represented by the labs parity pass
+- Compatibility hardening after the live canary:
+  - updated `scripts/teamforge-vault-parity.mjs` to:
+    - normalize both current graph responses and legacy flat `/v1/project-mappings` responses
+    - include legacy top-level fields plus `external_ids` in the write body so older deployed Workers can still accept project creates
+    - record per-project latest-source evidence in reports:
+      - source file path
+      - relative vault path
+      - source file last-modified timestamp
+      - owner/source/source URL/tags
+  - wrote repo-local parity artifacts:
+    - `tasks/teamforge-vault-parity-report.json`
+    - `tasks/teamforge-vault-parity-canary.json`
+- Live apply attempt and blocker:
+  - canary apply run:
+    - `TEAMFORGE_WORKSPACE_ID=ws_thoughtseed node scripts/teamforge-vault-parity.mjs --project axtech --apply --report /tmp/teamforge-vault-parity-canary.json`
+  - result:
+    - earlier `missing_fields` validation was cleared by the compatibility patch
+    - the live Worker now fails on project create with `500` / Cloudflare `1101 Worker threw exception`
+  - direct minimal create probes also fail with the same `1101` for:
+    - `workspace_id=ws_thoughtseed`
+    - `workspace_id=630f768292cc4b674e5ae3e4` (the locally configured Clockify workspace id)
+    - `workspace_id=default`
+  - `POST /v1/projects/scaffold` on the live Worker returns:
+    - `feature_not_ready`
+    - which indicates the deployed Worker is still behind the current repo’s project-bootstrap/project-graph flow
+- Current parity status:
+  - latest vault-backed import set is still:
+    - 11 creates
+    - 0 updates
+  - latest-source detail for every queued project is preserved in:
+    - `tasks/teamforge-vault-parity-report.json`
+  - actual remote imports completed:
+    - `0`
+- reason:
+    - the live TeamForge Worker project-create path is currently broken server-side and must be fixed or upgraded before a one-shot `--apply` can succeed
+
+## Goal
+
+Execute the saved phase-1 vault population plan in-session for:
+- `Projects`
+- `Clients`
+- `Onboarding`
+
+while keeping `Training` out of scope and reviewing each task boundary before
+moving forward.
+
+## Plan
+
+- [x] Review and integrate the delegated Worker/importer task slices before duplicating work locally.
+- [x] Extend desktop TeamForge cache/projection storage for canonical client profiles and onboarding flows/tasks.
+- [x] Update shared TS + Tauri command surfaces for client profiles, project client-context enrichment, and onboarding tabs.
+- [x] Enrich the `Clients`, `Projects`, and `Onboarding` pages with the new vault-backed data while preserving live operational metrics.
+- [x] Run the targeted verification gate and record the remaining non-slice-specific blockers.
+
+## Review
+
+- Task 2 review:
+  - accepted the delegated Worker canonical model changes for `client_profiles`, `onboarding_flows`, and `onboarding_tasks`
+  - integrated the missing public route registration in `cloudflare/worker/src/routes/v1.ts` for:
+    - `GET /v1/client-profiles`
+    - `GET /v1/client-profiles/:clientId`
+    - `GET /v1/onboarding-flows`
+- Task 3 review:
+  - accepted the delegated importer expansion in `scripts/teamforge-vault-parity.mjs`
+  - importer now discovers and reports:
+    - `client-profile.md`
+    - `technical-spec.md`
+    - `design/**/*.md`
+    - `research/**/*.md`
+    - `closeouts/**/*.md`
+    - client/employee onboarding notes
+  - report sections are now split into:
+    - `projects`
+    - `clientProfiles`
+    - `projectArtifacts`
+    - `onboardingFlows`
+    - `employeeKpis`
+- Desktop/cache layer:
+  - added local SQLite projection tables for:
+    - `teamforge_client_profiles`
+    - `teamforge_onboarding_flows`
+    - `teamforge_onboarding_tasks`
+  - added Rust cache/view models and query helpers for client profiles plus onboarding flow/task projections
+  - added Worker client fetchers + Tauri commands for:
+    - `get_teamforge_client_profiles`
+    - `get_teamforge_client_profile`
+    - `get_teamforge_onboarding_flows`
+  - enriched returned TeamForge project graphs with matched client-profile context
+- UI layer:
+  - `Clients` now shows vault profile completeness, engagement model, strategic fit preview, and “no vault client profile yet” states without replacing live hours/issues/activity metrics
+  - `Clients` detail panel now renders vault-backed stakeholders, strategic fit, risks, and resource links
+  - `Projects` control view now shows a read-only vault client-context excerpt plus grouped vault artifact rails for brief / technical spec / design / research / closeout docs
+  - `Onboarding` now has explicit `Client Onboarding` and `Employee Onboarding` tabs
+  - client onboarding keeps a clearly-labeled heuristic fallback when no imported client flow exists
+  - employee onboarding is note-driven only and no longer piggybacks on unrelated telemetry
+- Scope lock confirmed:
+  - no `Training` work in this slice
+  - no `Devices` registry redesign
+  - no general knowledge import
+  - no new GitHub/Huly bidirectional sync semantics
+- Verification:
+  - `node --check scripts/teamforge-vault-parity.mjs`
+    - passed
+  - `./node_modules/.bin/tsc -p cloudflare/worker/tsconfig.json --noEmit`
+    - passed
+  - `./node_modules/.bin/tsc --noEmit`
+    - passed
+  - `cargo test --manifest-path src-tauri/Cargo.toml teamforge_project_graph_round_trips_with_links_and_artifacts -- --exact`
+    - blocked by the existing Cargo environment issue:
+      - `checksum for hyper-util v0.1.19 changed between lock files`
+
+## Goal
+
+Convert the completed Phase 1 vault-read slice into a real end-to-end TeamForge
+demo by restoring live Worker writes, applying client profiles and onboarding
+flows, seeding one concrete vault dataset, and proving the imported data
+appears in the app.
+
+## Plan
+
+- [x] Restore the live Worker project-graph write path so one vault-backed
+      project can be created remotely without `500` / `1101`.
+- [x] Add canonical Worker write routes for `client_profiles` and
+      `onboarding_flows`, then update the route contract doc.
+- [x] Extend `scripts/teamforge-vault-parity.mjs` to apply client profiles and
+      onboarding flows instead of reporting them as `worker-route-pending`.
+- [x] Seed one minimal real vault dataset for `axtech` plus one employee
+      onboarding note so the slice has real source material.
+- [ ] Run a live canary import and verify `Clients`, `Projects`, and
+      `Onboarding` render the imported data.
+
+## Review
+- Worker deployment:
+  - `pnpm dlx wrangler deploy --config wrangler.jsonc`
+    - deployed live Worker version `faf50b27-e0b4-4b7e-9088-8c4d70e25a6e`
+    - `GET https://teamforge-api.sheshnarayan-iyer.workers.dev/v1/bootstrap`
+      now returns `phase-2-wave-3` with `clientProfiles: live` and
+      `onboardingFlows: live`
+- Remote schema:
+  - `pnpm dlx wrangler d1 migrations apply TEAMFORGE_DB --remote --config cloudflare/worker/wrangler.jsonc`
+    - applied `0004_vault_population.sql` successfully on the live D1 database
+- Live canary:
+  - `TEAMFORGE_WORKSPACE_ID=ws_thoughtseed node scripts/teamforge-vault-parity.mjs --project axtech --apply --report /tmp/teamforge-vault-axtech-live-canary.json`
+    - proved the live project write path is restored
+    - post-apply verification found the `axtech` graph remotely
+    - `client_profiles` and `onboarding_flows` route applies remain HMAC-protected,
+      so the script cannot exercise those writes on this machine without the
+      production `TF_WEBHOOK_HMAC_SECRET`
+- Live seeded data:
+  - inserted one real `axdis-group` client profile plus
+    `axtech-client-onboarding` and `imran-employee-onboarding` into the live D1
+    database for `ws_thoughtseed`
+  - verified with live reads:
+    - `GET /v1/project-mappings?workspace_id=ws_thoughtseed&status=active`
+      returns `axtech` with the imported technical spec and linked client profile
+    - `GET /v1/client-profiles?workspace_id=ws_thoughtseed`
+      returns `axdis-group`
+    - `GET /v1/onboarding-flows?workspace_id=ws_thoughtseed`
+      returns both the client and employee onboarding flows
+- Local desktop verification blockers:
+  - applied `src-tauri/migrations/001_initial.sql` to the local
+    `~/Library/Application Support/com.thoughtseed.teamforge/teamforge.db`
+    so the new projection tables now exist
+  - visual page capture is still blocked from full proof because:
+    - the checked-in `TeamForge.app` bundle under
+      `src-tauri/target/release/bundle/macos/TeamForge.app` is from
+      `2026-04-17`, older than the current repo changes
+    - macOS Accessibility scripting is disabled on this machine, so automated
+      navigation to the `Clients`, `Projects`, and `Onboarding` routes could not
+      be completed even though screen capture works

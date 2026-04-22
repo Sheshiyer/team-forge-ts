@@ -174,6 +174,8 @@ function ClientCard({
   onSelect: (id: string) => void;
 }) {
   const accent = tierColor(client.tier);
+  const profile = client.profile;
+  const fitPreview = profile?.strategicFit.slice(0, 2) ?? [];
 
   return (
     <div
@@ -228,6 +230,34 @@ function ClientCard({
             </span>
           </div>
         )}
+        {profile ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const }}>
+              <span style={styles.profileMetaPill}>
+                {(profile.engagementModel ?? "UNSPECIFIED").toUpperCase()}
+              </span>
+              <span style={styles.profileCompletenessText}>
+                PROFILE {profile.profileCompleteness.toFixed(0)}%
+              </span>
+            </div>
+            {fitPreview.length > 0 && (
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" as const }}>
+                {fitPreview.map((item) => (
+                  <span key={item} style={styles.fitTag}>
+                    {item.toUpperCase()}
+                  </span>
+                ))}
+              </div>
+            )}
+            {profile.stakeholders.length > 0 && (
+              <div style={styles.profileSubtext}>
+                STAKEHOLDERS: {profile.stakeholders.slice(0, 3).join(", ")}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={styles.profileMissingText}>NO VAULT CLIENT PROFILE YET</div>
+        )}
       </div>
 
       <div
@@ -266,6 +296,7 @@ function DetailPanel({
 }) {
   const client = detail.client;
   const accent = tierColor(client.tier);
+  const profile = client.profile;
 
   return (
     <div style={styles.overlay} onClick={onClose}>
@@ -284,6 +315,114 @@ function DetailPanel({
           <button onClick={onClose} style={styles.closeButton}>
             ×
           </button>
+        </div>
+
+        <div style={styles.detailDivider} />
+
+        <div style={styles.detailSection}>
+          <div style={styles.detailSectionTitle}>VAULT PROFILE</div>
+          {!profile ? (
+            <div style={styles.emptyText}>
+              NO VAULT CLIENT PROFILE YET. ADD A `client-profile.md` NOTE TO THE THOUGHTSEED VAULT TO POPULATE THIS SECTION.
+            </div>
+          ) : (
+            <>
+              <div style={styles.detailGrid}>
+                <div>
+                  <div style={styles.detailLabel}>ENGAGEMENT MODEL</div>
+                  <div style={styles.detailValueMono}>
+                    {(profile.engagementModel ?? "—").toUpperCase()}
+                  </div>
+                </div>
+                <div>
+                  <div style={styles.detailLabel}>PROFILE COMPLETENESS</div>
+                  <div style={styles.detailValueMono}>
+                    {profile.profileCompleteness.toFixed(0)}%
+                  </div>
+                </div>
+                <div>
+                  <div style={styles.detailLabel}>ONBOARDED</div>
+                  <div style={styles.detailValueMono}>
+                    {profile.onboarded ? new Date(profile.onboarded).toLocaleDateString() : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={styles.detailLabel}>PROJECT IDS</div>
+                  <div style={{ color: "var(--lcars-tan)", fontSize: 13 }}>
+                    {profile.projectIds.length > 0 ? profile.projectIds.join(", ") : "—"}
+                  </div>
+                </div>
+              </div>
+
+              <div style={styles.profileColumns}>
+                <div>
+                  <div style={styles.detailLabel}>STAKEHOLDERS</div>
+                  {profile.stakeholders.length === 0 ? (
+                    <div style={styles.emptyText}>NO STAKEHOLDERS LISTED</div>
+                  ) : (
+                    <div style={styles.profileList}>
+                      {profile.stakeholders.map((stakeholder) => (
+                        <div key={stakeholder} style={styles.profileListItem}>
+                          {stakeholder}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <div style={styles.detailLabel}>STRATEGIC FIT</div>
+                  {profile.strategicFit.length === 0 ? (
+                    <div style={styles.emptyText}>NO STRATEGIC FIT NOTES</div>
+                  ) : (
+                    <div style={styles.profileList}>
+                      {profile.strategicFit.map((item) => (
+                        <div key={item} style={styles.profileListItem}>
+                          {item}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div style={styles.profileColumns}>
+                <div>
+                  <div style={styles.detailLabel}>RISKS / WATCH-OUTS</div>
+                  {profile.risks.length === 0 ? (
+                    <div style={styles.emptyText}>NO RISKS RECORDED</div>
+                  ) : (
+                    <div style={styles.profileList}>
+                      {profile.risks.map((risk) => (
+                        <div key={risk} style={styles.profileListItem}>
+                          {risk}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <div style={styles.detailLabel}>RESOURCE LINKS</div>
+                  {profile.resourceLinks.length === 0 ? (
+                    <div style={styles.emptyText}>NO VAULT RESOURCE LINKS</div>
+                  ) : (
+                    <div style={styles.profileList}>
+                      {profile.resourceLinks.map((link) => (
+                        <a
+                          key={link}
+                          href={link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={styles.detailLink}
+                        >
+                          {link}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         <div style={styles.detailDivider} />
@@ -420,7 +559,11 @@ function DetailPanel({
           <div style={styles.detailSectionTitle}>
             LINKED DEVICES ({detail.linkedDevices.length})
           </div>
-          {detail.linkedDevices.length === 0 ? (
+          {detail.linkedDevicesUnavailable ? (
+            <div style={styles.emptyText}>
+              LINKED DEVICE DATA IS CURRENTLY UNAVAILABLE. HULY DEVICE SIGNALS COULD NOT BE LOADED.
+            </div>
+          ) : detail.linkedDevices.length === 0 ? (
             <div style={styles.emptyText}>NO LINKED DEVICES</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column" as const, gap: 6 }}>
@@ -571,16 +714,21 @@ function Clients() {
   const api = useInvoke();
   const [clients, setClients] = useState<ClientView[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ClientDetailView | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const data = await api.getClients();
       setClients(data);
+      setLoadError(null);
     } catch {
-      // data may not exist yet
+      setLoadError(
+        "COULD NOT LOAD CLIENT DATA. CHECK CLOCKIFY CACHE AND GITHUB PLAN SYNC STATE.",
+      );
     } finally {
       setLoading(false);
     }
@@ -595,11 +743,14 @@ function Clients() {
       setSelectedClientId(clientId);
       setDetailLoading(true);
       setDetail(null);
+      setDetailError(null);
       try {
         const data = await api.getClientDetail(clientId);
         setDetail(data);
       } catch {
-        // detail may not be available
+        setDetailError(
+          "COULD NOT LOAD CLIENT DETAILS FROM THE LOCAL CACHE AND PROJECT SIGNALS.",
+        );
       } finally {
         setDetailLoading(false);
       }
@@ -681,9 +832,11 @@ function Clients() {
         <h2 style={{ ...styles.sectionTitle, marginBottom: 0 }}>CLIENT DIRECTORY</h2>
         <div style={{ ...styles.sectionDivider, marginTop: 8 }} />
 
-        {clients.length === 0 ? (
+        {loadError ? (
+          <p style={styles.emptyText}>{loadError}</p>
+        ) : clients.length === 0 ? (
           <p style={styles.emptyText}>
-            NO CLIENTS FOUND. SYNC HULY DATA FIRST.
+            NO CLIENTS FOUND IN CLOCKIFY OR GITHUB PLANS. SYNC CLOCKIFY TIME DATA OR CONFIGURE GITHUB PLAN SOURCES FIRST.
           </p>
         ) : (
           <div style={styles.clientGrid}>
@@ -734,7 +887,7 @@ function Clients() {
                 </div>
                 <div style={{ padding: 24 }}>
                   <p style={styles.emptyText}>
-                    COULD NOT LOAD CLIENT DETAILS.
+                    {detailError ?? "COULD NOT LOAD CLIENT DETAILS."}
                   </p>
                 </div>
               </div>
@@ -833,6 +986,43 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--lcars-orange)",
     letterSpacing: "-0.3px",
   },
+  profileMetaPill: {
+    display: "inline-block",
+    padding: "2px 8px",
+    border: "1px solid rgba(102, 204, 255, 0.35)",
+    color: "var(--lcars-cyan)",
+    fontSize: 9,
+    fontFamily: "'Orbitron', sans-serif",
+    letterSpacing: "1px",
+    borderRadius: 2,
+  },
+  profileCompletenessText: {
+    color: "var(--lcars-lavender)",
+    fontSize: 10,
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  fitTag: {
+    display: "inline-block",
+    padding: "1px 8px",
+    borderRadius: 2,
+    border: "1px solid rgba(255, 204, 102, 0.3)",
+    color: "var(--lcars-peach)",
+    fontSize: 9,
+    fontFamily: "'Orbitron', sans-serif",
+    letterSpacing: "0.8px",
+  },
+  profileSubtext: {
+    color: "var(--text-quaternary)",
+    fontSize: 10,
+    fontFamily: "'JetBrains Mono', monospace",
+    lineHeight: 1.5,
+  },
+  profileMissingText: {
+    color: "var(--text-quaternary)",
+    fontSize: 10,
+    fontFamily: "'Orbitron', sans-serif",
+    letterSpacing: "1px",
+  },
 
   // ── Detail panel ──────────────────────────────────────────
   overlay: {
@@ -921,6 +1111,26 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "'Orbitron', sans-serif",
     letterSpacing: "1px",
     textDecoration: "none",
+  },
+  profileColumns: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 16,
+    marginTop: 14,
+  },
+  profileList: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 6,
+    marginTop: 6,
+  },
+  profileListItem: {
+    padding: "6px 10px",
+    background: "rgba(153, 153, 204, 0.04)",
+    borderLeft: "3px solid var(--lcars-cyan)",
+    color: "var(--lcars-tan)",
+    fontSize: 12,
+    lineHeight: 1.5,
   },
   projectMeta: {
     marginTop: 3,

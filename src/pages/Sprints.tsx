@@ -149,16 +149,21 @@ function Sprints() {
   const api = useInvoke();
   const [milestones, setMilestones] = useState<MilestoneView[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedSprint, setSelectedSprint] = useState<string | null>(null);
   const [sprintDetail, setSprintDetail] = useState<SprintDetailView | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const data = await api.getMilestones();
       setMilestones(data);
+      setLoadError(null);
     } catch {
-      // data may not exist yet
+      setLoadError(
+        "COULD NOT LOAD MILESTONES FROM HULY. VERIFY PROJECT SYNC AND HULY CONNECTIVITY.",
+      );
     } finally {
       setLoading(false);
     }
@@ -170,11 +175,15 @@ function Sprints() {
 
   const loadDetail = useCallback(async (sprintId: string) => {
     setDetailLoading(true);
+    setDetailError(null);
     try {
       const detail = await api.getSprintDetail(sprintId);
       setSprintDetail(detail);
     } catch {
       setSprintDetail(null);
+      setDetailError(
+        "COULD NOT LOAD SPRINT DETAIL. BURNDOWN, GOALS, AND CAPACITY REQUIRE HULY MILESTONE DETAIL DATA.",
+      );
     } finally {
       setDetailLoading(false);
     }
@@ -210,17 +219,23 @@ function Sprints() {
       <h1 style={styles.pageTitle}>SPRINTS & MILESTONES</h1>
       <div style={styles.pageTitleBar} />
 
-      <div style={styles.metricsRow}>
-        <MetricCard label="ACTIVE SPRINTS" value={String(activeSprints)} barColor="var(--lcars-orange)" />
-        <MetricCard label="ON TRACK" value={String(onTrack)} barColor="var(--lcars-green)" />
-        <MetricCard label="AVG COMPLETION" value={`${avgCompletion.toFixed(0)}%`} barColor="var(--lcars-cyan)" />
-      </div>
+      {!loadError && (
+        <div style={styles.metricsRow}>
+          <MetricCard label="ACTIVE SPRINTS" value={String(activeSprints)} barColor="var(--lcars-orange)" />
+          <MetricCard label="ON TRACK" value={String(onTrack)} barColor="var(--lcars-green)" />
+          <MetricCard label="AVG COMPLETION" value={`${avgCompletion.toFixed(0)}%`} barColor="var(--lcars-cyan)" />
+        </div>
+      )}
 
       <div style={styles.card}>
         <h2 style={styles.sectionTitle}>MILESTONES</h2>
         <div style={styles.sectionDivider} />
-        {milestones.length === 0 ? (
-          <p style={styles.emptyText}>NO MILESTONES FOUND. SYNC HULY DATA FIRST.</p>
+        {loadError ? (
+          <p style={styles.emptyText}>{loadError}</p>
+        ) : milestones.length === 0 ? (
+          <p style={styles.emptyText}>
+            NO ACTIVE OR PLANNED MILESTONES FOUND IN HULY. SYNC PROJECT MILESTONES TO POPULATE THIS VIEW.
+          </p>
         ) : (
           <table style={styles.table}>
             <thead>
@@ -302,6 +317,8 @@ function Sprints() {
             <div style={styles.sectionDivider} />
             {detailLoading ? (
               <SkeletonCard />
+            ) : detailError ? (
+              <p style={styles.emptyText}>{detailError}</p>
             ) : sprintDetail ? (
               <BurndownChart points={sprintDetail.burndown} />
             ) : (
@@ -317,6 +334,8 @@ function Sprints() {
               <p style={{ color: "var(--lcars-tan)", fontSize: 14, lineHeight: 1.6, marginBottom: 16 }}>
                 {sprintDetail.goal}
               </p>
+            ) : detailError ? (
+              <p style={styles.emptyText}>{detailError}</p>
             ) : (
               <p style={styles.emptyText}>NO SPRINT GOAL SET</p>
             )}
@@ -327,6 +346,8 @@ function Sprints() {
               <p style={{ color: "var(--lcars-lavender)", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
                 {sprintDetail.retroNotes}
               </p>
+            ) : detailError ? (
+              <p style={styles.emptyText}>{detailError}</p>
             ) : (
               <p style={styles.emptyText}>NO RETROSPECTIVE NOTES</p>
             )}
@@ -366,6 +387,8 @@ function Sprints() {
                   })}
                 </tbody>
               </table>
+            ) : detailError ? (
+              <p style={styles.emptyText}>{detailError}</p>
             ) : (
               <p style={styles.emptyText}>NO CAPACITY DATA AVAILABLE</p>
             )}
@@ -394,6 +417,8 @@ function Sprints() {
                   <div style={{ ...styles.metricValue, color: "var(--lcars-lavender)" }}>{sprintDetail.comparison.previousCompletion}%</div>
                 </div>
               </div>
+            ) : detailError ? (
+              <p style={styles.emptyText}>{detailError}</p>
             ) : (
               <p style={styles.emptyText}>NO COMPARISON DATA. REQUIRES PREVIOUS SPRINT.</p>
             )}

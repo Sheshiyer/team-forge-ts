@@ -31,6 +31,22 @@ const PRIORITY_COLORS: Record<string, string> = {
   low: "var(--lcars-blue)",
 };
 
+type InsightLoadErrors = {
+  discrepancies: string | null;
+  accuracy: string | null;
+  priorities: string | null;
+  naming: string | null;
+  standup: string | null;
+};
+
+const EMPTY_LOAD_ERRORS: InsightLoadErrors = {
+  discrepancies: null,
+  accuracy: null,
+  priorities: null,
+  naming: null,
+  standup: null,
+};
+
 function Insights() {
   const api = useInvoke();
   const [discrepancies, setDiscrepancies] = useState<TimeDiscrepancy[]>([]);
@@ -39,26 +55,61 @@ function Insights() {
   const [naming, setNaming] = useState<NamingComplianceStats | null>(null);
   const [standup, setStandup] = useState<StandupReport | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadErrors, setLoadErrors] = useState<InsightLoadErrors>(EMPTY_LOAD_ERRORS);
 
   const load = useCallback(async () => {
-    try {
-      const [d, a, p, n, s] = await Promise.all([
-        api.getTimeDiscrepancies(),
-        api.getEstimationAccuracy(),
-        api.getPriorityDistribution(),
-        api.getNamingCompliance(),
-        api.getStandupReport(),
-      ]);
-      setDiscrepancies(d);
-      setAccuracy(a);
-      setPriorities(p);
-      setNaming(n);
-      setStandup(s);
-    } catch {
-      // data may not exist yet
-    } finally {
-      setLoading(false);
+    const [d, a, p, n, s] = await Promise.allSettled([
+      api.getTimeDiscrepancies(),
+      api.getEstimationAccuracy(),
+      api.getPriorityDistribution(),
+      api.getNamingCompliance(),
+      api.getStandupReport(),
+    ]);
+
+    const nextErrors: InsightLoadErrors = { ...EMPTY_LOAD_ERRORS };
+
+    if (d.status === "fulfilled") {
+      setDiscrepancies(d.value);
+    } else {
+      setDiscrepancies([]);
+      nextErrors.discrepancies =
+        "CLOCKIFY VS HULY TIME COULD NOT BE CALCULATED. VERIFY BOTH SYNC SOURCES.";
     }
+
+    if (a.status === "fulfilled") {
+      setAccuracy(a.value);
+    } else {
+      setAccuracy([]);
+      nextErrors.accuracy =
+        "ESTIMATION ACCURACY COULD NOT LOAD FROM HULY AND CLOCKIFY ISSUE HISTORY.";
+    }
+
+    if (p.status === "fulfilled") {
+      setPriorities(p.value);
+    } else {
+      setPriorities([]);
+      nextErrors.priorities =
+        "PRIORITY DISTRIBUTION COULD NOT LOAD FROM HULY TASK DATA.";
+    }
+
+    if (n.status === "fulfilled") {
+      setNaming(n.value);
+    } else {
+      setNaming(null);
+      nextErrors.naming =
+        "TASK NAMING COMPLIANCE COULD NOT LOAD FROM HULY TASK TITLES.";
+    }
+
+    if (s.status === "fulfilled") {
+      setStandup(s.value);
+    } else {
+      setStandup(null);
+      nextErrors.standup =
+        "STANDUP COMPLIANCE COULD NOT LOAD FROM SLACK OR HULY SIGNALS.";
+    }
+
+    setLoadErrors(nextErrors);
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -84,17 +135,29 @@ function Insights() {
   }
 
   const totalPriority = priorities.reduce((s, p) => s + p.count, 0);
+  const loadErrorCount = Object.values(loadErrors).filter(Boolean).length;
 
   return (
     <div>
       <h1 style={styles.pageTitle}>INSIGHTS</h1>
       <div style={styles.pageTitleBar} />
 
+      {loadErrorCount > 0 && (
+        <div style={styles.noticeCard}>
+          <div style={styles.noticeLabel}>PARTIAL DATA</div>
+          <p style={styles.noticeText}>
+            {loadErrorCount} insight feed{loadErrorCount === 1 ? "" : "s"} could not be loaded. Available sections below are rendered from the sources that did respond.
+          </p>
+        </div>
+      )}
+
       {/* Time Discrepancies */}
       <div style={styles.card}>
         <h2 style={styles.sectionTitle}>CLOCKIFY VS HULY TIME</h2>
         <div style={styles.sectionDivider} />
-        {discrepancies.length === 0 ? (
+        {loadErrors.discrepancies ? (
+          <p style={styles.emptyText}>{loadErrors.discrepancies}</p>
+        ) : discrepancies.length === 0 ? (
           <p style={styles.emptyText}>NO TIME DISCREPANCY DATA AVAILABLE</p>
         ) : (
           <table style={styles.table}>
@@ -149,7 +212,9 @@ function Insights() {
       <div style={styles.card}>
         <h2 style={styles.sectionTitle}>ESTIMATION ACCURACY</h2>
         <div style={styles.sectionDivider} />
-        {accuracy.length === 0 ? (
+        {loadErrors.accuracy ? (
+          <p style={styles.emptyText}>{loadErrors.accuracy}</p>
+        ) : accuracy.length === 0 ? (
           <p style={styles.emptyText}>NO ESTIMATION DATA AVAILABLE</p>
         ) : (
           <table style={styles.table}>
@@ -210,7 +275,9 @@ function Insights() {
       <div style={styles.card}>
         <h2 style={styles.sectionTitle}>PRIORITY DISTRIBUTION</h2>
         <div style={styles.sectionDivider} />
-        {priorities.length === 0 ? (
+        {loadErrors.priorities ? (
+          <p style={styles.emptyText}>{loadErrors.priorities}</p>
+        ) : priorities.length === 0 ? (
           <p style={styles.emptyText}>NO PRIORITY DATA AVAILABLE</p>
         ) : (
           <>
@@ -299,112 +366,124 @@ function Insights() {
       </div>
 
       {/* Naming Convention Compliance (#13) */}
-      {naming && (
-        <div style={styles.card}>
-          <h2 style={styles.sectionTitle}>TASK NAMING COMPLIANCE</h2>
-          <div style={styles.sectionDivider} />
-          <div style={{ display: "flex", gap: 24, marginBottom: 16, flexWrap: "wrap" as const }}>
-            <div style={styles.metricBox}>
-              <div style={styles.metricValue}>{naming.compliancePercent.toFixed(0)}%</div>
-              <div style={styles.metricLabel}>COMPLIANT</div>
+      <div style={styles.card}>
+        <h2 style={styles.sectionTitle}>TASK NAMING COMPLIANCE</h2>
+        <div style={styles.sectionDivider} />
+        {loadErrors.naming ? (
+          <p style={styles.emptyText}>{loadErrors.naming}</p>
+        ) : naming ? (
+          <>
+            <div style={{ display: "flex", gap: 24, marginBottom: 16, flexWrap: "wrap" as const }}>
+              <div style={styles.metricBox}>
+                <div style={styles.metricValue}>{naming.compliancePercent.toFixed(0)}%</div>
+                <div style={styles.metricLabel}>COMPLIANT</div>
+              </div>
+              <div style={styles.metricBox}>
+                <div style={{ ...styles.metricValue, color: "var(--lcars-green)" }}>{naming.compliant}</div>
+                <div style={styles.metricLabel}>FOLLOWING FORMAT</div>
+              </div>
+              <div style={styles.metricBox}>
+                <div style={{ ...styles.metricValue, color: "var(--lcars-red)" }}>{naming.total - naming.compliant}</div>
+                <div style={styles.metricLabel}>NON-COMPLIANT</div>
+              </div>
             </div>
-            <div style={styles.metricBox}>
-              <div style={{ ...styles.metricValue, color: "var(--lcars-green)" }}>{naming.compliant}</div>
-              <div style={styles.metricLabel}>FOLLOWING FORMAT</div>
+            <div style={{ display: "flex", gap: 24, flexWrap: "wrap" as const }}>
+              <div>
+                <div style={styles.subLabel}>BY PROJECT</div>
+                {naming.byProject.map((p) => (
+                  <div key={p.projectCode} style={styles.tagRow}>
+                    <span style={styles.tag}>{p.projectCode}</span>
+                    <span style={styles.tagCount}>{p.count}</span>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <div style={styles.subLabel}>BY TYPE</div>
+                {naming.byType.map((t) => (
+                  <div key={t.typeCode} style={styles.tagRow}>
+                    <span style={styles.tag}>{t.typeCode}</span>
+                    <span style={styles.tagCount}>{t.count}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div style={styles.metricBox}>
-              <div style={{ ...styles.metricValue, color: "var(--lcars-red)" }}>{naming.total - naming.compliant}</div>
-              <div style={styles.metricLabel}>NON-COMPLIANT</div>
+            <div style={{ marginTop: 12, color: "var(--text-quaternary)", fontSize: 11 }}>
+              FORMAT: [PROJECT]-[TYPE]-[COMPONENT]-[ID]: Description
             </div>
-          </div>
-          <div style={{ display: "flex", gap: 24, flexWrap: "wrap" as const }}>
-            <div>
-              <div style={styles.subLabel}>BY PROJECT</div>
-              {naming.byProject.map((p) => (
-                <div key={p.projectCode} style={styles.tagRow}>
-                  <span style={styles.tag}>{p.projectCode}</span>
-                  <span style={styles.tagCount}>{p.count}</span>
-                </div>
-              ))}
-            </div>
-            <div>
-              <div style={styles.subLabel}>BY TYPE</div>
-              {naming.byType.map((t) => (
-                <div key={t.typeCode} style={styles.tagRow}>
-                  <span style={styles.tag}>{t.typeCode}</span>
-                  <span style={styles.tagCount}>{t.count}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div style={{ marginTop: 12, color: "var(--text-quaternary)", fontSize: 11 }}>
-            FORMAT: [PROJECT]-[TYPE]-[COMPONENT]-[ID]: Description
-          </div>
-        </div>
-      )}
+          </>
+        ) : (
+          <p style={styles.emptyText}>NO TASK NAMING DATA AVAILABLE</p>
+        )}
+      </div>
 
       {/* Standup Compliance (#10) */}
-      {standup && (
-        <div style={styles.card}>
-          <h2 style={styles.sectionTitle}>STANDUP COMPLIANCE — {standup.date}</h2>
-          <div style={styles.sectionDivider} />
-          <div style={{ display: "flex", gap: 24, marginBottom: 16, flexWrap: "wrap" as const }}>
-            <div style={styles.metricBox}>
-              <div style={styles.metricValue}>{standup.compliancePercent.toFixed(0)}%</div>
-              <div style={styles.metricLabel}>POSTED TODAY</div>
-            </div>
-            <div style={styles.metricBox}>
-              <div style={{ ...styles.metricValue, color: "var(--lcars-green)" }}>{standup.postedCount}</div>
-              <div style={styles.metricLabel}>POSTED</div>
-            </div>
-            <div style={styles.metricBox}>
-              <div style={{ ...styles.metricValue, color: standup.missingCount > 0 ? "var(--lcars-red)" : "var(--lcars-green)" }}>
-                {standup.missingCount}
+      <div style={styles.card}>
+        <h2 style={styles.sectionTitle}>STANDUP COMPLIANCE{standup ? ` — ${standup.date}` : ""}</h2>
+        <div style={styles.sectionDivider} />
+        {loadErrors.standup ? (
+          <p style={styles.emptyText}>{loadErrors.standup}</p>
+        ) : standup ? (
+          <>
+            <div style={{ display: "flex", gap: 24, marginBottom: 16, flexWrap: "wrap" as const }}>
+              <div style={styles.metricBox}>
+                <div style={styles.metricValue}>{standup.compliancePercent.toFixed(0)}%</div>
+                <div style={styles.metricLabel}>POSTED TODAY</div>
               </div>
-              <div style={styles.metricLabel}>MISSING</div>
+              <div style={styles.metricBox}>
+                <div style={{ ...styles.metricValue, color: "var(--lcars-green)" }}>{standup.postedCount}</div>
+                <div style={styles.metricLabel}>POSTED</div>
+              </div>
+              <div style={styles.metricBox}>
+                <div style={{ ...styles.metricValue, color: standup.missingCount > 0 ? "var(--lcars-red)" : "var(--lcars-green)" }}>
+                  {standup.missingCount}
+                </div>
+                <div style={styles.metricLabel}>MISSING</div>
+              </div>
             </div>
-          </div>
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>CREW MEMBER</th>
-                <th style={styles.th}>STATUS</th>
-                <th style={styles.th}>CHANNEL</th>
-                <th style={styles.th}>POSTED AT</th>
-                <th style={styles.th}>PREVIEW</th>
-              </tr>
-            </thead>
-            <tbody>
-              {standup.entries.map((e) => (
-                <tr key={e.employeeName}>
-                  <td style={styles.td}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <Avatar name={e.employeeName} size={24} />
-                      <span style={{ color: "var(--lcars-orange)" }}>{e.employeeName}</span>
-                    </div>
-                  </td>
-                  <td style={styles.td}>
-                    <span style={{
-                      display: "inline-block",
-                      width: 8,
-                      height: 8,
-                      borderRadius: "50%",
-                      backgroundColor: e.status === "posted" ? "var(--lcars-green)" : "var(--lcars-red)",
-                      marginRight: 6,
-                    }} />
-                    {e.status.toUpperCase()}
-                  </td>
-                  <td style={styles.td}>{e.channel || "—"}</td>
-                  <td style={styles.tdMono}>{e.postedAt ? e.postedAt.slice(11, 16) : "—"}</td>
-                  <td style={{ ...styles.td, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, color: "var(--text-tertiary)", fontSize: 12 }}>
-                    {e.contentPreview ?? "—"}
-                  </td>
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.th}>CREW MEMBER</th>
+                  <th style={styles.th}>STATUS</th>
+                  <th style={styles.th}>CHANNEL</th>
+                  <th style={styles.th}>POSTED AT</th>
+                  <th style={styles.th}>PREVIEW</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </thead>
+              <tbody>
+                {standup.entries.map((e) => (
+                  <tr key={e.employeeName}>
+                    <td style={styles.td}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <Avatar name={e.employeeName} size={24} />
+                        <span style={{ color: "var(--lcars-orange)" }}>{e.employeeName}</span>
+                      </div>
+                    </td>
+                    <td style={styles.td}>
+                      <span style={{
+                        display: "inline-block",
+                        width: 8,
+                        height: 8,
+                        borderRadius: "50%",
+                        backgroundColor: e.status === "posted" ? "var(--lcars-green)" : "var(--lcars-red)",
+                        marginRight: 6,
+                      }} />
+                      {e.status.toUpperCase()}
+                    </td>
+                    <td style={styles.td}>{e.channel || "—"}</td>
+                    <td style={styles.tdMono}>{e.postedAt ? e.postedAt.slice(11, 16) : "—"}</td>
+                    <td style={{ ...styles.td, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const, color: "var(--text-tertiary)", fontSize: 12 }}>
+                      {e.contentPreview ?? "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        ) : (
+          <p style={styles.emptyText}>NO STANDUP DATA AVAILABLE</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -423,6 +502,24 @@ const styles: Record<string, React.CSSProperties> = {
   td: lcarsPageStyles.td,
   tdMono: lcarsPageStyles.tdMono,
   emptyText: lcarsPageStyles.emptyText,
+  noticeCard: {
+    ...lcarsPageStyles.subtleCard,
+    borderLeftColor: "var(--lcars-yellow)",
+    marginBottom: 20,
+  },
+  noticeLabel: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    fontWeight: 600,
+    color: "var(--lcars-yellow)",
+    letterSpacing: "1px",
+    marginBottom: 6,
+    textTransform: "uppercase" as const,
+  },
+  noticeText: {
+    ...lcarsPageStyles.helperText,
+    margin: 0,
+  },
   metricBox: {
     display: "flex",
     flexDirection: "column" as const,

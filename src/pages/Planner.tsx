@@ -79,13 +79,17 @@ function Planner() {
   const api = useInvoke();
   const [slots, setSlots] = useState<PlannerSlotView[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const data = await api.getPlannerCapacity();
       setSlots(data);
+      setLoadError(null);
     } catch {
-      // data may not exist yet
+      setLoadError(
+        "COULD NOT BUILD THE DERIVED PLANNER VIEW. VERIFY CLOCKIFY TIME ENTRIES AND HULY TASK SCHEDULING SIGNALS.",
+      );
     } finally {
       setLoading(false);
     }
@@ -137,42 +141,46 @@ function Planner() {
       <div style={styles.infoBanner}>
         <div style={styles.infoBannerIcon}>◈</div>
         <div style={styles.infoBannerText}>
-          HULY PLANNER API AVAILABILITY IS BEING INVESTIGATED. DATA SHOWN HERE
-          IS DERIVED FROM CLOCKIFY TIME ENTRIES AND HULY TASK SCHEDULING.
+          THIS IS A DERIVED CAPACITY VIEW, NOT HULY&apos;S CANONICAL PLANNER.
+          DATA SHOWN HERE COMBINES CLOCKIFY TIME ENTRIES WITH HULY TASK SCHEDULING SIGNALS.
         </div>
       </div>
 
-      <div style={styles.metricsRow}>
-        <MetricCard
-          label="TEAM CAPACITY"
-          value={`${baseCapacity}h`}
-          barColor="var(--lcars-orange)"
-        />
-        <MetricCard
-          label="AVG UTILIZATION"
-          value={`${avgUtilization.toFixed(0)}%`}
-          barColor="var(--lcars-cyan)"
-        />
-        <MetricCard
-          label="OVER-ALLOCATED"
-          value={String(overAllocated)}
-          barColor="var(--lcars-red)"
-        />
-        <MetricCard
-          label="UNDER-ALLOCATED"
-          value={String(underAllocated)}
-          barColor="var(--lcars-yellow)"
-        />
-      </div>
+      {!loadError && (
+        <div style={styles.metricsRow}>
+          <MetricCard
+            label="TEAM CAPACITY"
+            value={`${baseCapacity}h`}
+            barColor="var(--lcars-orange)"
+          />
+          <MetricCard
+            label="AVG UTILIZATION"
+            value={`${avgUtilization.toFixed(0)}%`}
+            barColor="var(--lcars-cyan)"
+          />
+          <MetricCard
+            label="OVER-ALLOCATED"
+            value={String(overAllocated)}
+            barColor="var(--lcars-red)"
+          />
+          <MetricCard
+            label="UNDER-ALLOCATED"
+            value={String(underAllocated)}
+            barColor="var(--lcars-yellow)"
+          />
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap" as const }}>
         {/* Main capacity table */}
         <div style={{ ...styles.card, flex: "1 1 600px", minWidth: 0 }}>
           <h2 style={styles.sectionTitle}>CAPACITY DASHBOARD</h2>
           <div style={styles.sectionDivider} />
-          {slots.length === 0 ? (
+          {loadError ? (
+            <p style={styles.emptyText}>{loadError}</p>
+          ) : slots.length === 0 ? (
             <p style={styles.emptyText}>
-              NO PLANNER DATA AVAILABLE. SYNC CLOCKIFY AND HULY FIRST.
+              NO DERIVED PLANNER DATA AVAILABLE. SYNC CLOCKIFY TIME AND HULY TASK SCHEDULING TO POPULATE THIS VIEW.
             </p>
           ) : (
             <table style={styles.table}>
@@ -252,85 +260,86 @@ function Planner() {
           )}
         </div>
 
-        {/* Weekly capacity summary card */}
-        <div
-          style={{
-            ...styles.sideCard,
-            flex: "0 0 260px",
-          }}
-        >
-          <h2 style={styles.sectionTitle}>WEEKLY SUMMARY</h2>
-          <div style={styles.sectionDivider} />
+        {!loadError && (
+          <div
+            style={{
+              ...styles.sideCard,
+              flex: "0 0 260px",
+            }}
+          >
+            <h2 style={styles.sectionTitle}>WEEKLY SUMMARY</h2>
+            <div style={styles.sectionDivider} />
 
-          <div style={styles.summaryRow}>
-            <span style={styles.summaryLabel}>TEAM SIZE</span>
-            <span style={styles.summaryValue}>{teamSize}</span>
-          </div>
-          <div style={styles.summaryRow}>
-            <span style={styles.summaryLabel}>BASE CAPACITY</span>
-            <span style={styles.summaryValue}>
-              {teamSize} × 8h = {baseCapacity}h
-            </span>
-          </div>
-          <div style={styles.summaryRow}>
-            <span style={styles.summaryLabel}>SCHEDULED</span>
-            <span style={styles.summaryValue}>
-              {totalScheduled.toFixed(1)}h
-            </span>
-          </div>
-          <div style={styles.summaryRow}>
-            <span style={styles.summaryLabel}>ACTUAL LOGGED</span>
-            <span style={styles.summaryValue}>
-              {totalActual.toFixed(1)}h
-            </span>
-          </div>
-          <div
-            style={{
-              ...styles.summaryRow,
-              borderTop: "1px solid rgba(153, 153, 204, 0.12)",
-              paddingTop: 8,
-              marginTop: 4,
-            }}
-          >
-            <span style={styles.summaryLabel}>MEETINGS</span>
-            <span
+            <div style={styles.summaryRow}>
+              <span style={styles.summaryLabel}>TEAM SIZE</span>
+              <span style={styles.summaryValue}>{teamSize}</span>
+            </div>
+            <div style={styles.summaryRow}>
+              <span style={styles.summaryLabel}>BASE CAPACITY</span>
+              <span style={styles.summaryValue}>
+                {teamSize} × 8h = {baseCapacity}h
+              </span>
+            </div>
+            <div style={styles.summaryRow}>
+              <span style={styles.summaryLabel}>SCHEDULED</span>
+              <span style={styles.summaryValue}>
+                {totalScheduled.toFixed(1)}h
+              </span>
+            </div>
+            <div style={styles.summaryRow}>
+              <span style={styles.summaryLabel}>ACTUAL LOGGED</span>
+              <span style={styles.summaryValue}>
+                {totalActual.toFixed(1)}h
+              </span>
+            </div>
+            <div
               style={{
-                ...styles.summaryValue,
-                color: "var(--lcars-red)",
+                ...styles.summaryRow,
+                borderTop: "1px solid rgba(153, 153, 204, 0.12)",
+                paddingTop: 8,
+                marginTop: 4,
               }}
             >
-              −{totalMeetings}h
-            </span>
-          </div>
-          <div
-            style={{
-              ...styles.summaryRow,
-              borderTop: "1px solid rgba(255, 153, 0, 0.18)",
-              paddingTop: 10,
-              marginTop: 6,
-            }}
-          >
-            <span
+              <span style={styles.summaryLabel}>MEETINGS</span>
+              <span
+                style={{
+                  ...styles.summaryValue,
+                  color: "var(--lcars-red)",
+                }}
+              >
+                −{totalMeetings}h
+              </span>
+            </div>
+            <div
               style={{
-                ...styles.summaryLabel,
-                color: "var(--lcars-orange)",
-                fontWeight: 600,
+                ...styles.summaryRow,
+                borderTop: "1px solid rgba(255, 153, 0, 0.18)",
+                paddingTop: 10,
+                marginTop: 6,
               }}
             >
-              NET AVAILABLE
-            </span>
-            <span
-              style={{
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 20,
-                fontWeight: 700,
-                color: "var(--lcars-orange)",
-              }}
-            >
-              {netAvailable.toFixed(0)}h
-            </span>
+              <span
+                style={{
+                  ...styles.summaryLabel,
+                  color: "var(--lcars-orange)",
+                  fontWeight: 600,
+                }}
+              >
+                NET AVAILABLE
+              </span>
+              <span
+                style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 20,
+                  fontWeight: 700,
+                  color: "var(--lcars-orange)",
+                }}
+              >
+                {netAvailable.toFixed(0)}h
+              </span>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

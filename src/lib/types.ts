@@ -68,6 +68,11 @@ export interface ExecutionProjectView {
   utilization: number;
 }
 
+export interface ExecutionProjectsResponse {
+  projects: ExecutionProjectView[];
+  sourceError: string | null;
+}
+
 export interface TeamforgeProject {
   id: string;
   slug: string;
@@ -116,11 +121,31 @@ export interface TeamforgeProjectArtifact {
   updatedAt: string;
 }
 
+export interface TeamforgeClientProfile {
+  workspaceId: string;
+  clientId: string;
+  clientName: string;
+  engagementModel: string | null;
+  industry: string | null;
+  primaryContact: string | null;
+  projectIds: string[];
+  stakeholders: string[];
+  strategicFit: string[];
+  risks: string[];
+  resourceLinks: string[];
+  active: boolean;
+  onboarded: string | null;
+  createdAt: string;
+  updatedAt: string;
+  profileCompleteness: number;
+}
+
 export interface TeamforgeProjectGraph {
   project: TeamforgeProject;
   githubRepos: TeamforgeProjectGithubRepoLink[];
   hulyLinks: TeamforgeProjectHulyLink[];
   artifacts: TeamforgeProjectArtifact[];
+  clientProfile: TeamforgeClientProfile | null;
 }
 
 export interface TeamforgeProjectSyncPolicy {
@@ -229,6 +254,28 @@ export interface TeamforgeProjectControlPlane {
   journal: TeamforgeSyncJournalEntry[];
   conflicts: TeamforgeSyncConflict[];
   summary: TeamforgeProjectControlPlaneSummary;
+}
+
+export interface VaultDirectoryValidation {
+  path: string;
+  status: "ready" | "warning" | "error";
+  message: string;
+  markers: string[];
+  hasTeamDirectory: boolean;
+  hasClientEcosystemDirectory: boolean;
+  hasObsidianDirectory: boolean;
+}
+
+export interface PaperclipLaunchResult {
+  pid: number;
+  scriptPath: string;
+  commandPath: string;
+  workingDirectory: string | null;
+  launchMode: string;
+}
+
+export interface PaperclipUiOpenResult {
+  url: string;
 }
 
 export interface TeamforgeProjectGithubRepoLinkInput {
@@ -447,10 +494,12 @@ export interface OrgChartView {
 export interface TeamSnapshotView {
   departments: DepartmentView[];
   orgChart: OrgChartView | null;
+  vaultProfiles: VaultTeamProfileView[];
   leaves: LeaveView[];
   holidays: HolidayView[];
   cacheUpdatedAt: string | null;
   hulyError: string | null;
+  vaultError: string | null;
 }
 
 export interface OrgDepartmentUpdateInput {
@@ -534,6 +583,64 @@ export interface EmployeeScheduleEventView {
   space: string | null;
 }
 
+export interface EmployeeKpiSnapshotView {
+  id: string;
+  employeeId: string;
+  memberId: string;
+  title: string;
+  roleTemplate: string | null;
+  roleTemplateFile: string | null;
+  kpiVersion: string;
+  lastReviewed: string | null;
+  reportsTo: string | null;
+  tags: string[];
+  sourceFilePath: string;
+  sourceRelativePath: string;
+  sourceLastModifiedAt: string;
+  roleScopeMarkdown: string | null;
+  monthlyKpis: string[];
+  quarterlyMilestones: string[];
+  yearlyMilestones: string[];
+  crossRoleDependencies: string[];
+  evidenceSources: string[];
+  compensationMilestones: string[];
+  gapFlags: string[];
+  synthesisReviewMarkdown: string | null;
+  bodyMarkdown: string;
+  importedAt: string;
+  updatedAt: string;
+}
+
+export interface VaultTeamProfileView {
+  memberId: string;
+  employeeId: string | null;
+  displayName: string;
+  role: string | null;
+  roleTemplate: string | null;
+  department: string | null;
+  primaryProjects: string[];
+  scope: string[];
+  teamTags: string[];
+  onboardingStage: string[];
+  active: boolean;
+  hiredStatus: string | null;
+  clockifyStatus: string | null;
+  probation: string | null;
+  joined: string | null;
+  contractEffective: string | null;
+  contactEmail: string | null;
+  contactLocation: string | null;
+  signedContractOnFile: string | null;
+  source: string | null;
+  sourceUrl: string | null;
+  importedAt: string | null;
+  summaryMarkdown: string | null;
+  roleScopeMarkdown: string | null;
+  sourceFilePath: string;
+  sourceRelativePath: string;
+  sourceLastModifiedAt: string;
+}
+
 export interface EmployeeSummaryView {
   employee: Employee;
   departmentNames: string[];
@@ -549,6 +656,8 @@ export interface EmployeeSummaryView {
   currentLeave: LeaveView | null;
   upcomingLeaves: LeaveView[];
   upcomingEvents: EmployeeScheduleEventView[];
+  vaultProfile: VaultTeamProfileView | null;
+  kpiSnapshot: EmployeeKpiSnapshotView | null;
 }
 
 // ── Naming convention (#13) ──────────────────────────────────────
@@ -613,6 +722,7 @@ export interface ClientView {
   techStack: string[];
   driveLink: string | null;
   chromeProfile: string | null;
+  profile: TeamforgeClientProfile | null;
 }
 
 export interface ClientDetailView {
@@ -628,11 +738,34 @@ export interface ClientDetailView {
     sourceUrl: string | null;
   }[];
   linkedDevices: { id: string; name: string; platform: string }[];
+  linkedDevicesUnavailable: boolean;
   resources: { name: string; type: string; url: string | null }[];
   recentActivity: ActivityItem[];
 }
 
-// ── Device registry (#6) ─────────────────────────────────────────
+// ── Project issues (#6) ──────────────────────────────────────────
+
+export interface ActiveProjectIssueView {
+  id: string;
+  projectId: string | null;
+  projectName: string;
+  clientName: string | null;
+  repo: string;
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+  milestoneNumber: number | null;
+  labels: string[];
+  assignees: string[];
+  priority: string | null;
+  track: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  closedAt: string | null;
+}
+
+// ── Device registry (#6b) ────────────────────────────────────────
 
 export interface DeviceView {
   id: string;
@@ -738,9 +871,49 @@ export type DashboardRole = "executive" | "pm" | "developer";
 
 // ── Client onboarding (#14) ──────────────────────────────────────
 
+export type OnboardingAudience = "client" | "employee";
+
+export interface TeamforgeOnboardingTask {
+  taskId: string;
+  sortOrder: number;
+  title: string;
+  completed: boolean;
+  completedAt: string | null;
+  resourceCreated: string | null;
+  notes: string | null;
+}
+
+export interface TeamforgeOnboardingFlow {
+  workspaceId: string;
+  flowId: string;
+  audience: OnboardingAudience;
+  status: string;
+  owner: string | null;
+  startsOn: string;
+  subjectId: string;
+  subjectName: string;
+  primaryContact: string | null;
+  manager: string | null;
+  department: string | null;
+  joinedOn: string | null;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+  tasks: TeamforgeOnboardingTask[];
+}
+
 export interface OnboardingFlowView {
-  clientId: string;
-  clientName: string;
+  id: string;
+  audience: OnboardingAudience;
+  source: string;
+  owner: string | null;
+  workspaceId: string | null;
+  subjectId: string;
+  subjectName: string;
+  primaryContact: string | null;
+  manager: string | null;
+  department: string | null;
+  joinedOn: string | null;
   startDate: string;
   completedTasks: number;
   totalTasks: number;
@@ -752,10 +925,12 @@ export interface OnboardingFlowView {
 
 export interface OnboardingTaskView {
   id: string;
+  sortOrder: number;
   title: string;
   completed: boolean;
   completedAt: string | null;
   resourceCreated: string | null;
+  notes: string | null;
 }
 
 // ── Planner integration (#15) ────────────────────────────────────

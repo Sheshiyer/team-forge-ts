@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -6,6 +7,8 @@ use chrono::{Datelike, Local, NaiveDate, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::State;
+use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_shell::ShellExt;
 
 use crate::clockify::client::ClockifyClient;
 use crate::clockify::sync::ClockifySyncEngine;
@@ -28,6 +31,7 @@ use crate::slack::sync::SlackSyncEngine;
 use crate::slack::types::{SlackConversation, SlackMessage, SlackUser};
 use crate::sync::scheduler::SyncScheduler;
 use crate::sync::teamforge_worker;
+use crate::vault;
 use crate::{DbPool, SchedulerState};
 
 const DEFAULT_CLOCKIFY_IGNORED_EMAILS: &str = "thoughtseedlabs@gmail.com";
@@ -749,13 +753,11 @@ pub async fn get_teamforge_projects(
     let pool = &db.0;
     match teamforge_worker::fetch_teamforge_project_graphs(pool).await {
         Ok(graphs) => {
-            queries::replace_teamforge_project_graph_projection(pool, &graphs)
+            cache_and_bridge_teamforge_project_graphs(pool, &graphs).await?;
+            let profiles = load_teamforge_client_profiles(pool)
                 .await
-                .map_err(|e| format!("cache TeamForge project projection: {e}"))?;
-            for graph in &graphs {
-                bridge_teamforge_graph_to_github_configs(pool, graph).await?;
-            }
-            Ok(graphs)
+                .unwrap_or_default();
+            Ok(enrich_teamforge_project_graphs(graphs, &profiles))
         }
         Err(remote_error) => {
             let cached = queries::get_teamforge_project_graphs(pool)
@@ -766,9 +768,221 @@ pub async fn get_teamforge_projects(
                     "load TeamForge projects from Worker: {remote_error}"
                 ))
             } else {
-                Ok(cached)
+                bridge_teamforge_project_graphs(pool, &cached).await?;
+                let profiles = load_teamforge_client_profiles(pool)
+                    .await
+                    .unwrap_or_default();
+                Ok(enrich_teamforge_project_graphs(cached, &profiles))
             }
         }
+    }
+}
+
+fn normalize_teamforge_match_key(value: &str) -> String {
+    slugify_client_name(value).replace('_', "-")
+}
+
+fn client_profile_match_priority(
+    project: &TeamforgeProject,
+    profile: &TeamforgeClientProfileView,
+) -> Option<u8> {
+    let project_slug = normalize_teamforge_match_key(&project.slug);
+    if profile
+        .project_ids
+        .iter()
+        .any(|project_id| normalize_teamforge_match_key(project_id) == project_slug)
+    {
+        return Some(0);
+    }
+
+    let project_client_name = project
+        .client_name
+        .as_deref()
+        .map(normalize_teamforge_match_key);
+    let client_id = normalize_teamforge_match_key(&profile.client_id);
+    let client_name = normalize_teamforge_match_key(&profile.client_name);
+
+    if let Some(project_client_name) = project_client_name {
+        if project_client_name == client_id || project_client_name == client_name {
+            return Some(1);
+        }
+    }
+
+    if project_slug == client_id || project_slug == client_name {
+        return Some(2);
+    }
+
+    None
+}
+
+fn find_matching_client_profile(
+    project: &TeamforgeProject,
+    profiles: &[TeamforgeClientProfileView],
+) -> Option<TeamforgeClientProfileView> {
+    profiles
+        .iter()
+        .filter_map(|profile| {
+            client_profile_match_priority(project, profile).map(|priority| (priority, profile))
+        })
+        .min_by(
+            |(left_priority, left_profile), (right_priority, right_profile)| {
+                left_priority
+                    .cmp(right_priority)
+                    .then_with(|| right_profile.active.cmp(&left_profile.active))
+                    .then_with(|| right_profile.updated_at.cmp(&left_profile.updated_at))
+            },
+        )
+        .map(|(_, profile)| profile.clone())
+}
+
+fn enrich_teamforge_project_graphs(
+    graphs: Vec<TeamforgeProjectGraph>,
+    profiles: &[TeamforgeClientProfileView],
+) -> Vec<TeamforgeProjectGraph> {
+    graphs
+        .into_iter()
+        .map(|mut graph| {
+            graph.client_profile = find_matching_client_profile(&graph.project, profiles);
+            graph
+        })
+        .collect()
+}
+
+async fn load_teamforge_client_profiles(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<TeamforgeClientProfileView>, String> {
+    match teamforge_worker::fetch_teamforge_client_profiles(pool).await {
+        Ok(profiles) => {
+            queries::replace_teamforge_client_profile_projection(pool, &profiles)
+                .await
+                .map_err(|e| format!("cache TeamForge client profiles: {e}"))?;
+            Ok(profiles)
+        }
+        Err(remote_error) => queries::get_teamforge_client_profiles(pool)
+            .await
+            .map_err(|e| format!("load cached TeamForge client profiles after remote failure ({remote_error}): {e}")),
+    }
+}
+
+async fn load_teamforge_client_profile(
+    pool: &sqlx::SqlitePool,
+    client_id: &str,
+) -> Result<Option<TeamforgeClientProfileView>, String> {
+    match teamforge_worker::fetch_teamforge_client_profile(pool, client_id).await {
+        Ok(Some(profile)) => {
+            queries::upsert_teamforge_client_profile_projection(pool, &profile)
+                .await
+                .map_err(|e| format!("cache TeamForge client profile: {e}"))?;
+            Ok(Some(profile))
+        }
+        Ok(None) => Ok(None),
+        Err(_) => queries::get_teamforge_client_profile(pool, client_id)
+            .await
+            .map_err(|e| format!("load cached TeamForge client profile: {e}")),
+    }
+}
+
+async fn load_teamforge_onboarding_flows(
+    pool: &sqlx::SqlitePool,
+    audience: Option<&str>,
+) -> Result<Vec<TeamforgeOnboardingFlowDetail>, String> {
+    match teamforge_worker::fetch_teamforge_onboarding_flows(pool, audience).await {
+        Ok(flows) => {
+            queries::replace_teamforge_onboarding_flow_projection(pool, &flows)
+                .await
+                .map_err(|e| format!("cache TeamForge onboarding flows: {e}"))?;
+            Ok(flows)
+        }
+        Err(remote_error) => queries::get_teamforge_onboarding_flows(pool, audience)
+            .await
+            .map_err(|e| format!("load cached TeamForge onboarding flows after remote failure ({remote_error}): {e}")),
+    }
+}
+
+#[tauri::command]
+pub async fn get_teamforge_client_profiles(
+    db: State<'_, DbPool>,
+) -> Result<Vec<TeamforgeClientProfileView>, String> {
+    load_teamforge_client_profiles(&db.0).await
+}
+
+#[tauri::command]
+pub async fn get_teamforge_client_profile(
+    db: State<'_, DbPool>,
+    client_id: String,
+) -> Result<Option<TeamforgeClientProfileView>, String> {
+    let client_id = client_id.trim();
+    if client_id.is_empty() {
+        return Err("client_id is required".to_string());
+    }
+    load_teamforge_client_profile(&db.0, client_id).await
+}
+
+#[tauri::command]
+pub async fn get_teamforge_onboarding_flows(
+    db: State<'_, DbPool>,
+    audience: Option<String>,
+) -> Result<Vec<TeamforgeOnboardingFlowDetail>, String> {
+    let normalized_audience = audience
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(value) = normalized_audience {
+        if value != "client" && value != "employee" {
+            return Err("audience must be client or employee".to_string());
+        }
+    }
+    load_teamforge_onboarding_flows(&db.0, normalized_audience).await
+}
+
+async fn cache_and_bridge_teamforge_project_graphs(
+    pool: &sqlx::SqlitePool,
+    graphs: &[TeamforgeProjectGraph],
+) -> Result<(), String> {
+    queries::replace_teamforge_project_graph_projection(pool, graphs)
+        .await
+        .map_err(|e| format!("cache TeamForge project projection: {e}"))?;
+    bridge_teamforge_project_graphs(pool, graphs).await
+}
+
+async fn bridge_teamforge_project_graphs(
+    pool: &sqlx::SqlitePool,
+    graphs: &[TeamforgeProjectGraph],
+) -> Result<(), String> {
+    for graph in graphs {
+        bridge_teamforge_graph_to_github_configs(pool, graph).await?;
+    }
+    Ok(())
+}
+
+async fn refresh_teamforge_execution_bridge(pool: &sqlx::SqlitePool) -> Option<String> {
+    match teamforge_worker::fetch_teamforge_project_graphs(pool).await {
+        Ok(graphs) => cache_and_bridge_teamforge_project_graphs(pool, &graphs)
+            .await
+            .err()
+            .map(|error| {
+                format!(
+                    "TeamForge registry refresh succeeded, but the local execution bridge could not be updated. {error}"
+                )
+            }),
+        Err(remote_error) => match queries::get_teamforge_project_graphs(pool).await {
+            Ok(cached) if !cached.is_empty() => {
+                match bridge_teamforge_project_graphs(pool, &cached).await {
+                    Ok(()) => Some(format!(
+                        "TeamForge registry refresh failed; showing cached or locally bridged execution data. {remote_error}"
+                    )),
+                    Err(cache_error) => Some(format!(
+                        "TeamForge registry refresh failed, and the cached TeamForge registry could not be bridged into execution data. remote: {remote_error}; cached bridge: {cache_error}"
+                    )),
+                }
+            }
+            Ok(_) => Some(format!(
+                "TeamForge registry refresh failed, and no cached TeamForge registry is available yet. {remote_error}"
+            )),
+            Err(cache_error) => Some(format!(
+                "TeamForge registry refresh failed, and cached TeamForge projects could not be loaded. remote: {remote_error}; cache: {cache_error}"
+            )),
+        },
     }
 }
 
@@ -1083,6 +1297,79 @@ pub async fn get_settings(db: State<'_, DbPool>) -> Result<HashMap<String, Strin
     Ok(map)
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaperclipLaunchResult {
+    pid: u32,
+    script_path: String,
+    command_path: String,
+    working_directory: Option<String>,
+    launch_mode: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaperclipUiOpenResult {
+    url: String,
+}
+
+fn normalize_local_workspace_setting(key: &str, value: &str) -> String {
+    match key {
+        "local_vault_root"
+        | "paperclip_script_path"
+        | "paperclip_working_dir"
+        | "paperclip_ui_url" => value.trim().to_string(),
+        _ => value.to_string(),
+    }
+}
+
+fn validate_existing_directory(path: &Path, label: &str) -> Result<(), String> {
+    if !path.exists() {
+        return Err(format!("{label} does not exist: {}", path.display()));
+    }
+    if !path.is_dir() {
+        return Err(format!("{label} is not a directory: {}", path.display()));
+    }
+    Ok(())
+}
+
+fn resolve_paperclip_working_directory(value: Option<&str>) -> Result<Option<PathBuf>, String> {
+    let Some(raw) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    let path = PathBuf::from(raw);
+    validate_existing_directory(&path, "Paperclip working directory")?;
+    Ok(Some(path))
+}
+
+fn resolve_paperclip_script_path(
+    script_path: &str,
+    working_directory: Option<&Path>,
+) -> Result<PathBuf, String> {
+    let candidate = PathBuf::from(script_path);
+    if candidate.is_absolute() {
+        return Ok(candidate);
+    }
+
+    if let Some(base_dir) = working_directory {
+        return Ok(base_dir.join(candidate));
+    }
+
+    Err(
+        "Paperclip script path must be absolute or paired with a Paperclip working directory."
+            .to_string(),
+    )
+}
+
+fn paperclip_shell_interpreter(path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    match extension.as_str() {
+        "sh" | "bash" | "zsh" | "command" => Some("/bin/zsh"),
+        _ => None,
+    }
+}
+
 #[tauri::command]
 pub async fn save_setting(db: State<'_, DbPool>, key: String, value: String) -> Result<(), String> {
     let pool = &db.0;
@@ -1098,7 +1385,7 @@ pub async fn save_setting(db: State<'_, DbPool>, key: String, value: String) -> 
     } else if key == "github_repos" {
         normalize_github_repo_list(&value)
     } else {
-        value
+        normalize_local_workspace_setting(&key, &value)
     };
 
     queries::set_setting(pool, &key, &value_to_store)
@@ -1110,6 +1397,134 @@ pub async fn save_setting(db: State<'_, DbPool>, key: String, value: String) -> 
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn pick_vault_directory(app_handle: tauri::AppHandle) -> Result<Option<String>, String> {
+    #[cfg(desktop)]
+    {
+        let folder = app_handle.dialog().file().blocking_pick_folder();
+        let Some(folder) = folder else {
+            return Ok(None);
+        };
+        let path = folder.into_path().map_err(|_| {
+            "Selected folder could not be converted to a local filesystem path".to_string()
+        })?;
+        Ok(Some(path.to_string_lossy().to_string()))
+    }
+
+    #[cfg(not(desktop))]
+    {
+        let _ = app_handle;
+        Err("Vault directory picker is only available on desktop builds".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn validate_vault_directory(
+    path: String,
+) -> Result<vault::VaultDirectoryValidation, String> {
+    Ok(vault::validate_vault_directory(Path::new(path.trim())))
+}
+
+#[tauri::command]
+pub async fn launch_paperclip_script(
+    app_handle: tauri::AppHandle,
+    script_path: String,
+    working_dir: Option<String>,
+) -> Result<PaperclipLaunchResult, String> {
+    let trimmed_script_path = script_path.trim();
+    if trimmed_script_path.is_empty() {
+        return Err("Paperclip script path is required".to_string());
+    }
+
+    let working_directory = resolve_paperclip_working_directory(working_dir.as_deref())?;
+    let resolved_script_path =
+        resolve_paperclip_script_path(trimmed_script_path, working_directory.as_deref())?;
+
+    if !resolved_script_path.exists() {
+        return Err(format!(
+            "Paperclip script does not exist: {}",
+            resolved_script_path.display()
+        ));
+    }
+    if resolved_script_path.is_dir() {
+        return Err(format!(
+            "Paperclip script path points to a directory, not a file: {}",
+            resolved_script_path.display()
+        ));
+    }
+
+    let working_directory = working_directory.or_else(|| {
+        resolved_script_path
+            .parent()
+            .map(PathBuf::from)
+            .filter(|path| path.exists())
+    });
+
+    let resolved_script_string = resolved_script_path.to_string_lossy().to_string();
+    let (command_path, args, launch_mode) =
+        if let Some(interpreter) = paperclip_shell_interpreter(&resolved_script_path) {
+            (
+                interpreter.to_string(),
+                vec![resolved_script_string.clone()],
+                "shell-script".to_string(),
+            )
+        } else {
+            (
+                resolved_script_string.clone(),
+                Vec::<String>::new(),
+                "direct".to_string(),
+            )
+        };
+
+    let mut command = app_handle.shell().command(&command_path);
+    if !args.is_empty() {
+        command = command.args(args.clone());
+    }
+    if let Some(directory) = working_directory.as_ref() {
+        command = command.current_dir(directory);
+    }
+
+    let (_rx, child) = command
+        .spawn()
+        .map_err(|error| format!("launch Paperclip script: {error}"))?;
+
+    Ok(PaperclipLaunchResult {
+        pid: child.pid(),
+        script_path: resolved_script_string,
+        command_path,
+        working_directory: working_directory.map(|path| path.to_string_lossy().to_string()),
+        launch_mode,
+    })
+}
+
+#[tauri::command]
+pub async fn open_paperclip_ui(
+    app_handle: tauri::AppHandle,
+    url: String,
+) -> Result<PaperclipUiOpenResult, String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("Paperclip UI URL is required".to_string());
+    }
+
+    let parsed = reqwest::Url::parse(trimmed)
+        .map_err(|error| format!("Invalid Paperclip UI URL: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Paperclip UI URL must use http:// or https://".to_string());
+    }
+
+    let normalized_url = parsed.to_string();
+    #[allow(deprecated)]
+    app_handle
+        .shell()
+        .open(normalized_url.clone(), None)
+        .map_err(|error| format!("open Paperclip UI: {error}"))?;
+
+    Ok(PaperclipUiOpenResult {
+        url: normalized_url,
+    })
 }
 
 #[tauri::command]
@@ -1358,8 +1773,8 @@ pub async fn get_project_breakdown(
     struct Row {
         project_id: Option<String>,
         project_name: String,
-        total_seconds: f64,
-        billable_seconds: f64,
+        total_seconds: i64,
+        billable_seconds: i64,
         member_count: i64,
     }
 
@@ -1386,8 +1801,8 @@ pub async fn get_project_breakdown(
     Ok(rows
         .into_iter()
         .map(|r| {
-            let total_hours = r.total_seconds / 3600.0;
-            let billable_hours = r.billable_seconds / 3600.0;
+            let total_hours = r.total_seconds as f64 / 3600.0;
+            let billable_hours = r.billable_seconds as f64 / 3600.0;
             let utilization = if total_hours > 0.0 {
                 billable_hours / total_hours
             } else {
@@ -1432,8 +1847,8 @@ pub async fn get_projects_catalog(
 #[derive(sqlx::FromRow)]
 struct ClockifyProjectHoursRow {
     project_id: Option<String>,
-    total_seconds: f64,
-    billable_seconds: f64,
+    total_seconds: i64,
+    billable_seconds: i64,
     member_count: i64,
 }
 
@@ -1458,8 +1873,8 @@ fn normalize_project_match(value: &str) -> String {
 }
 
 fn project_hours_from_row(row: &ClockifyProjectHoursRow) -> (f64, f64, u32, f64) {
-    let total_hours = row.total_seconds / 3600.0;
-    let billable_hours = row.billable_seconds / 3600.0;
+    let total_hours = row.total_seconds as f64 / 3600.0;
+    let billable_hours = row.billable_seconds as f64 / 3600.0;
     let utilization = if total_hours > 0.0 {
         billable_hours / total_hours
     } else {
@@ -1473,12 +1888,9 @@ fn project_hours_from_row(row: &ClockifyProjectHoursRow) -> (f64, f64, u32, f64)
     )
 }
 
-#[tauri::command]
-pub async fn get_execution_projects(
-    db: State<'_, DbPool>,
+async fn load_execution_projects_from_local_projection(
+    pool: &sqlx::SqlitePool,
 ) -> Result<Vec<ExecutionProjectView>, String> {
-    let pool = &db.0;
-
     let (start, end) = month_bounds();
     let clockify_rows: Vec<ClockifyProjectHoursRow> = sqlx::query_as(
         "SELECT
@@ -1695,6 +2107,28 @@ pub async fn get_execution_projects(
     });
 
     Ok(rows)
+}
+
+#[tauri::command]
+pub async fn get_execution_projects(
+    db: State<'_, DbPool>,
+) -> Result<ExecutionProjectsResponse, String> {
+    let pool = &db.0;
+    let source_error = refresh_teamforge_execution_bridge(pool).await;
+    let projects = load_execution_projects_from_local_projection(pool)
+        .await
+        .map_err(|load_error| {
+            if let Some(source_error) = source_error.as_deref() {
+                format!("{load_error}. TeamForge registry status: {source_error}")
+            } else {
+                load_error
+            }
+        })?;
+
+    Ok(ExecutionProjectsResponse {
+        projects,
+        source_error,
+    })
 }
 
 fn source_rank(source: &str) -> u8 {
@@ -3882,7 +4316,7 @@ pub async fn get_milestones(db: State<'_, DbPool>) -> Result<Vec<MilestoneView>,
     let pool = &db.0;
     let client = match get_huly_client(pool).await {
         Ok(c) => c,
-        Err(_) => return Ok(vec![]),
+        Err(error) => return Err(format!("huly milestones unavailable: {error}")),
     };
 
     let milestones = client.get_milestones().await.unwrap_or_default();
@@ -3937,7 +4371,7 @@ pub async fn get_time_discrepancies(db: State<'_, DbPool>) -> Result<Vec<TimeDis
     let pool = &db.0;
     let client = match get_huly_client(pool).await {
         Ok(c) => c,
-        Err(_) => return Ok(vec![]),
+        Err(error) => return Err(format!("huly time reports unavailable: {error}")),
     };
 
     // Fetch Huly time reports for this month
@@ -4036,7 +4470,7 @@ pub async fn get_estimation_accuracy(
     let pool = &db.0;
     let client = match get_huly_client(pool).await {
         Ok(c) => c,
-        Err(_) => return Ok(vec![]),
+        Err(error) => return Err(format!("huly estimation data unavailable: {error}")),
     };
 
     let issues = client.get_issues(None).await.unwrap_or_default();
@@ -4134,7 +4568,7 @@ pub async fn get_priority_distribution(
     let pool = &db.0;
     let client = match get_huly_client(pool).await {
         Ok(c) => c,
-        Err(_) => return Ok(vec![]),
+        Err(error) => return Err(format!("huly priority data unavailable: {error}")),
     };
 
     let issues = client.get_issues(None).await.unwrap_or_default();
@@ -4460,6 +4894,10 @@ async fn build_team_snapshot_from_cache(
         .await
         .map_err(|e| format!("db error: {e}"))?
         .map(|state| state.last_sync_at);
+    let (vault_profiles, vault_error) = match vault::load_team_profiles(pool).await {
+        Ok(records) => (records, None),
+        Err(error) => (Vec::new(), Some(error)),
+    };
 
     let department_views = build_department_views(
         pool,
@@ -4504,10 +4942,12 @@ async fn build_team_snapshot_from_cache(
     Ok(TeamSnapshotView {
         departments: department_views,
         org_chart,
+        vault_profiles,
         leaves: leave_views,
         holidays: holiday_views,
         cache_updated_at,
         huly_error,
+        vault_error,
     })
 }
 
@@ -4891,7 +5331,7 @@ pub async fn get_board_cards(db: State<'_, DbPool>) -> Result<Vec<BoardCardView>
     let pool = &db.0;
     let client = match get_huly_client(pool).await {
         Ok(c) => c,
-        Err(_) => return Ok(vec![]),
+        Err(error) => return Err(format!("huly board cards unavailable: {error}")),
     };
 
     let cards = client.get_board_cards().await.unwrap_or_default();
@@ -4946,7 +5386,7 @@ pub async fn get_meeting_load(db: State<'_, DbPool>) -> Result<Vec<MeetingLoadVi
     let pool = &db.0;
     let client = match get_huly_client(pool).await {
         Ok(c) => c,
-        Err(_) => return Ok(vec![]),
+        Err(error) => return Err(format!("huly meeting load unavailable: {error}")),
     };
 
     let events = client.get_calendar_events().await.unwrap_or_default();
@@ -5080,6 +5520,45 @@ pub async fn get_meeting_load(db: State<'_, DbPool>) -> Result<Vec<MeetingLoadVi
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     Ok(results)
+}
+
+fn parse_json_string_list(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+fn map_employee_kpi_snapshot(row: EmployeeKpiSnapshotRow) -> EmployeeKpiSnapshotView {
+    EmployeeKpiSnapshotView {
+        id: row.id,
+        employee_id: row.employee_id,
+        member_id: row.member_id,
+        title: row.title,
+        role_template: row.role_template,
+        role_template_file: row.role_template_file,
+        kpi_version: row.kpi_version,
+        last_reviewed: row.last_reviewed,
+        reports_to: row.reports_to,
+        tags: parse_json_string_list(&row.tags_json),
+        source_file_path: row.source_file_path,
+        source_relative_path: row.source_relative_path,
+        source_last_modified_at: row.source_last_modified_at,
+        role_scope_markdown: row.role_scope_markdown,
+        monthly_kpis: parse_json_string_list(&row.monthly_kpis_json),
+        quarterly_milestones: parse_json_string_list(&row.quarterly_milestones_json),
+        yearly_milestones: parse_json_string_list(&row.yearly_milestones_json),
+        cross_role_dependencies: parse_json_string_list(&row.cross_role_dependencies_json),
+        evidence_sources: parse_json_string_list(&row.evidence_sources_json),
+        compensation_milestones: parse_json_string_list(&row.compensation_milestones_json),
+        gap_flags: parse_json_string_list(&row.gap_flags_json),
+        synthesis_review_markdown: row.synthesis_review_markdown,
+        body_markdown: row.body_markdown,
+        imported_at: row.imported_at,
+        updated_at: row.updated_at,
+    }
 }
 
 #[tauri::command]
@@ -5306,6 +5785,15 @@ pub async fn get_employee_summary(
 
     upcoming_events.sort_by(|left, right| left.starts_at.cmp(&right.starts_at));
     upcoming_events.truncate(5);
+    let vault_profile = snapshot
+        .vault_profiles
+        .iter()
+        .find(|profile| profile.employee_id.as_deref() == Some(employee.id.as_str()))
+        .cloned();
+    let kpi_snapshot = queries::get_latest_employee_kpi_snapshot(pool, &employee.id)
+        .await
+        .map_err(|e| format!("load employee KPI snapshot: {e}"))?
+        .map(map_employee_kpi_snapshot);
 
     Ok(EmployeeSummaryView {
         employee,
@@ -5322,6 +5810,8 @@ pub async fn get_employee_summary(
         current_leave,
         upcoming_leaves,
         upcoming_events,
+        vault_profile,
+        kpi_snapshot,
     })
 }
 
@@ -5334,7 +5824,7 @@ pub async fn get_naming_compliance(db: State<'_, DbPool>) -> Result<NamingCompli
     let pool = &db.0;
     let client = match get_huly_client(pool).await {
         Ok(c) => c,
-        Err(_) => return Ok(compute_compliance_stats(&[])),
+        Err(error) => return Err(format!("huly naming compliance unavailable: {error}")),
     };
 
     let issues = client.get_issues(None).await.unwrap_or_default();
@@ -5649,6 +6139,7 @@ pub struct ClientView {
     pub tech_stack: Vec<String>,
     pub drive_link: Option<String>,
     pub chrome_profile: Option<String>,
+    pub profile: Option<TeamforgeClientProfileView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -5657,6 +6148,7 @@ pub struct ClientDetailView {
     pub client: ClientView,
     pub linked_projects: Vec<ClientLinkedProjectView>,
     pub linked_devices: Vec<ClientLinkedDeviceView>,
+    pub linked_devices_unavailable: bool,
     pub resources: Vec<ClientResourceView>,
     pub recent_activity: Vec<ActivityItem>,
 }
@@ -6069,6 +6561,7 @@ async fn load_clients(pool: &sqlx::SqlitePool) -> Result<Vec<ClientView>, String
             tech_stack,
             drive_link: get_client_setting_value(pool, &client_slug, "drive_link").await?,
             chrome_profile: get_client_setting_value(pool, &client_slug, "chrome_profile").await?,
+            profile: None,
         });
     }
 
@@ -6161,10 +6654,66 @@ async fn load_clients(pool: &sqlx::SqlitePool) -> Result<Vec<ClientView>, String
                 drive_link: get_client_setting_value(pool, &client_slug, "drive_link").await?,
                 chrome_profile: get_client_setting_value(pool, &client_slug, "chrome_profile")
                     .await?,
+                profile: None,
             };
             client_index_by_name.insert(client.name.to_lowercase(), clients.len());
             clients.push(client);
         }
+    }
+
+    let profiles = load_teamforge_client_profiles(pool)
+        .await
+        .unwrap_or_default();
+    for profile in profiles {
+        let profile_key = normalize_teamforge_match_key(&profile.client_name);
+        if let Some(index) = client_index_by_name.get(&profile_key).copied() {
+            let client = &mut clients[index];
+            if profile.industry.is_some() {
+                client.industry = profile.industry.clone();
+            }
+            if profile.primary_contact.is_some() {
+                client.primary_contact = profile.primary_contact.clone();
+            }
+            client.profile = Some(profile);
+            continue;
+        }
+
+        let active_projects = profile.project_ids.len() as u32;
+        let tier = infer_client_tier(0.0, active_projects);
+        let client_name = profile.client_name.clone();
+        let client_slug = slugify_client_name(&client_name);
+        let latest_activity_at = if profile.updated_at.trim().is_empty() {
+            None
+        } else {
+            Some(profile.updated_at.clone())
+        };
+
+        client_index_by_name.insert(profile_key, clients.len());
+        clients.push(ClientView {
+            id: format!("client-{client_slug}"),
+            name: client_name,
+            tier,
+            industry: profile.industry.clone(),
+            month_billable_hours: 0.0,
+            active_projects,
+            planning_source: "vault".to_string(),
+            github_projects: 0,
+            github_open_issues: 0,
+            github_total_issues: 0,
+            primary_contact: profile.primary_contact.clone(),
+            contract_status: if profile.active {
+                "active".to_string()
+            } else {
+                "inactive".to_string()
+            },
+            contract_end_date: None,
+            days_remaining: None,
+            latest_activity_at,
+            tech_stack: Vec::new(),
+            drive_link: None,
+            chrome_profile: None,
+            profile: Some(profile),
+        });
     }
 
     clients.sort_by(|left, right| {
@@ -6321,6 +6870,15 @@ pub async fn get_client_detail(
             url: None,
         });
     }
+    if let Some(profile) = &client.profile {
+        for link in &profile.resource_links {
+            resources.push(ClientResourceView {
+                name: link.clone(),
+                r#type: "vault-resource".to_string(),
+                url: Some(link.clone()),
+            });
+        }
+    }
 
     let doc_rows: Vec<(Option<String>,)> = sqlx::query_as(
         "SELECT DISTINCT doc_title
@@ -6461,10 +7019,29 @@ pub async fn get_client_detail(
     recent_activity.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
     recent_activity.truncate(20);
 
+    let huly_devices_available = get_huly_client(pool).await.is_ok();
+    let linked_devices = if huly_devices_available {
+        load_devices(pool)
+            .await?
+            .into_iter()
+            .filter(|device| {
+                client_matches_device_name(device.client_name.as_deref(), &client.name)
+            })
+            .map(|device| ClientLinkedDeviceView {
+                id: device.id,
+                name: device.name,
+                platform: device.platform,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     Ok(ClientDetailView {
         client,
         linked_projects,
-        linked_devices: vec![],
+        linked_devices,
+        linked_devices_unavailable: !huly_devices_available,
         resources,
         recent_activity,
     })
@@ -6619,6 +7196,27 @@ fn infer_device_platform(text: &str) -> String {
     "Cross-platform".to_string()
 }
 
+fn device_signal_is_active(status_text: &str, context: &str) -> bool {
+    let trimmed_status = status_text.trim();
+    if !trimmed_status.is_empty() {
+        return !status_indicates_completion(trimmed_status);
+    }
+
+    !status_indicates_completion(context)
+}
+
+fn client_matches_device_name(device_client_name: Option<&str>, client_name: &str) -> bool {
+    let Some(device_client_name) = device_client_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+
+    let expected = client_name.trim();
+    !expected.is_empty() && device_client_name.eq_ignore_ascii_case(expected)
+}
+
 fn normalize_device_key(value: &str) -> String {
     let mut key = String::with_capacity(value.len());
     let mut previous_was_separator = false;
@@ -6751,9 +7349,309 @@ pub struct DeviceView {
     pub firmware_version: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveProjectIssueView {
+    pub id: String,
+    pub project_id: Option<String>,
+    pub project_name: String,
+    pub client_name: Option<String>,
+    pub repo: String,
+    pub number: i64,
+    pub title: String,
+    pub state: String,
+    pub url: String,
+    pub milestone_number: Option<i64>,
+    pub labels: Vec<String>,
+    pub assignees: Vec<String>,
+    pub priority: Option<String>,
+    pub track: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub closed_at: Option<String>,
+}
+
+fn map_teamforge_active_project_issue_cache(
+    row: TeamforgeActiveProjectIssueCache,
+) -> ActiveProjectIssueView {
+    ActiveProjectIssueView {
+        id: row.id,
+        project_id: row.project_id,
+        project_name: row.project_name,
+        client_name: row.client_name,
+        repo: row.repo,
+        number: row.number,
+        title: row.title,
+        state: row.state,
+        url: row.url,
+        milestone_number: row.milestone_number,
+        labels: parse_json_string_list(&row.labels_json),
+        assignees: parse_json_string_list(&row.assignees_json),
+        priority: row.priority,
+        track: row.track,
+        created_at: row.created_at,
+        updated_at: row.updated_at.or(row.last_synced_at),
+        closed_at: row.closed_at,
+    }
+}
+
+fn build_teamforge_active_project_issue_cache(
+    issue: &ActiveProjectIssueView,
+    synced_at: &str,
+) -> TeamforgeActiveProjectIssueCache {
+    TeamforgeActiveProjectIssueCache {
+        id: issue.id.clone(),
+        workspace_id: "teamforge".to_string(),
+        project_id: issue.project_id.clone(),
+        project_name: issue.project_name.clone(),
+        client_name: issue.client_name.clone(),
+        repo: issue.repo.clone(),
+        number: issue.number,
+        title: issue.title.clone(),
+        state: issue.state.clone(),
+        url: issue.url.clone(),
+        milestone_number: issue.milestone_number,
+        labels_json: serde_json::to_string(&issue.labels).unwrap_or_else(|_| "[]".to_string()),
+        assignees_json: serde_json::to_string(&issue.assignees)
+            .unwrap_or_else(|_| "[]".to_string()),
+        priority: issue.priority.clone(),
+        track: issue.track.clone(),
+        created_at: issue.created_at.clone(),
+        updated_at: issue.updated_at.clone(),
+        closed_at: issue.closed_at.clone(),
+        last_synced_at: Some(synced_at.to_string()),
+    }
+}
+
+async fn load_teamforge_active_project_issue_projection(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<ActiveProjectIssueView>, String> {
+    match teamforge_worker::fetch_teamforge_active_project_issues(pool).await {
+        Ok(issues) => {
+            let synced_at = Utc::now().to_rfc3339();
+            let cache_rows: Vec<TeamforgeActiveProjectIssueCache> = issues
+                .iter()
+                .map(|issue| build_teamforge_active_project_issue_cache(issue, &synced_at))
+                .collect();
+            queries::replace_teamforge_active_project_issue_projection(pool, &cache_rows)
+                .await
+                .map_err(|e| format!("cache TeamForge active project issues: {e}"))?;
+            Ok(issues)
+        }
+        Err(remote_error) => {
+            let cached = queries::get_teamforge_active_project_issue_projection(pool)
+                .await
+                .map_err(|e| {
+                    format!(
+                        "load cached TeamForge active project issues after remote failure ({remote_error}): {e}"
+                    )
+                })?;
+            if cached.is_empty() {
+                Err(format!(
+                    "load TeamForge active project issues from Worker: {remote_error}"
+                ))
+            } else {
+                Ok(cached
+                    .into_iter()
+                    .map(map_teamforge_active_project_issue_cache)
+                    .collect())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ActiveIssueProjectScope {
+    project_id: Option<String>,
+    project_name: String,
+    client_name: Option<String>,
+    repo: String,
+    milestone_number: Option<i64>,
+}
+
+fn teamforge_project_status_is_active(status: &str) -> bool {
+    !matches!(
+        status.trim().to_lowercase().as_str(),
+        "archived" | "completed" | "closed" | "inactive" | "cancelled"
+    )
+}
+
+fn build_active_issue_project_scopes(
+    graphs: &[TeamforgeProjectGraph],
+    repo_configs: &[GithubRepoConfig],
+    clockify_projects: &[Project],
+) -> Vec<ActiveIssueProjectScope> {
+    let repo_config_by_repo: HashMap<String, &GithubRepoConfig> = repo_configs
+        .iter()
+        .map(|config| (config.repo.clone(), config))
+        .collect();
+    let project_by_clockify_id: HashMap<String, &Project> = clockify_projects
+        .iter()
+        .map(|project| (project.clockify_project_id.clone(), project))
+        .collect();
+
+    let mut scopes = Vec::new();
+    let mut seen = HashSet::new();
+
+    for graph in graphs
+        .iter()
+        .filter(|graph| teamforge_project_status_is_active(&graph.project.status))
+    {
+        for repo_link in graph.github_repos.iter().filter(|link| link.sync_issues) {
+            let Some(config) = repo_config_by_repo.get(&repo_link.repo) else {
+                continue;
+            };
+            if !seen.insert(repo_link.repo.clone()) {
+                continue;
+            }
+
+            scopes.push(ActiveIssueProjectScope {
+                project_id: Some(graph.project.id.clone()),
+                project_name: graph.project.name.clone(),
+                client_name: graph
+                    .project
+                    .client_name
+                    .clone()
+                    .or_else(|| config.client_name.clone()),
+                repo: repo_link.repo.clone(),
+                milestone_number: config.default_milestone_number,
+            });
+        }
+    }
+
+    if !scopes.is_empty() {
+        return scopes;
+    }
+
+    for config in repo_configs.iter().filter(|config| config.enabled) {
+        if !seen.insert(config.repo.clone()) {
+            continue;
+        }
+
+        let linked_clockify_project = config
+            .clockify_project_id
+            .as_deref()
+            .and_then(|project_id| project_by_clockify_id.get(project_id));
+
+        scopes.push(ActiveIssueProjectScope {
+            project_id: None,
+            project_name: linked_clockify_project
+                .map(|project| project.name.clone())
+                .unwrap_or_else(|| config.display_name.clone()),
+            client_name: config.client_name.clone().or_else(|| {
+                linked_clockify_project.and_then(|project| project.client_name.clone())
+            }),
+            repo: config.repo.clone(),
+            milestone_number: config.default_milestone_number,
+        });
+    }
+
+    scopes
+}
+
+async fn load_active_project_issues(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<ActiveProjectIssueView>, String> {
+    if let Ok(issues) = load_teamforge_active_project_issue_projection(pool).await {
+        return Ok(issues);
+    }
+
+    let teamforge_graphs = queries::get_teamforge_project_graphs(pool)
+        .await
+        .map_err(|e| format!("load TeamForge projects for issues: {e}"))?;
+    let repo_configs = queries::get_enabled_github_repo_configs(pool)
+        .await
+        .map_err(|e| format!("load GitHub repo configs for issues: {e}"))?;
+    let clockify_projects = queries::get_projects(pool)
+        .await
+        .map_err(|e| format!("load Clockify projects for issues: {e}"))?;
+
+    let scopes =
+        build_active_issue_project_scopes(&teamforge_graphs, &repo_configs, &clockify_projects);
+    if scopes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut rows = Vec::new();
+    for scope in scopes {
+        let issues: Vec<GithubIssueCache> = if let Some(milestone_number) = scope.milestone_number {
+            sqlx::query_as::<_, GithubIssueCache>(
+                "SELECT * FROM github_issues
+                 WHERE repo = ?1 AND milestone_number = ?2
+                 ORDER BY
+                   CASE WHEN LOWER(state) = 'open' THEN 0 ELSE 1 END,
+                   updated_at DESC,
+                   number DESC",
+            )
+            .bind(&scope.repo)
+            .bind(milestone_number)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("load GitHub issues for {}: {e}", scope.repo))?
+        } else {
+            sqlx::query_as::<_, GithubIssueCache>(
+                "SELECT * FROM github_issues
+                 WHERE repo = ?1
+                 ORDER BY
+                   CASE WHEN LOWER(state) = 'open' THEN 0 ELSE 1 END,
+                   updated_at DESC,
+                   number DESC",
+            )
+            .bind(&scope.repo)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("load GitHub issues for {}: {e}", scope.repo))?
+        };
+
+        rows.extend(issues.into_iter().map(|issue| ActiveProjectIssueView {
+            id: format!("{}#{}", issue.repo, issue.number),
+            project_id: scope.project_id.clone(),
+            project_name: scope.project_name.clone(),
+            client_name: scope.client_name.clone(),
+            repo: issue.repo.clone(),
+            number: issue.number,
+            title: issue.title,
+            state: issue.state,
+            url: issue.url,
+            milestone_number: issue.milestone_number,
+            labels: parse_json_string_list(&issue.labels_json),
+            assignees: parse_json_string_list(&issue.assignee_logins_json),
+            priority: issue.priority,
+            track: issue.track,
+            created_at: issue.created_at,
+            updated_at: issue.updated_at,
+            closed_at: issue.closed_at,
+        }));
+    }
+
+    rows.sort_by(|left, right| {
+        left.project_name
+            .cmp(&right.project_name)
+            .then_with(|| {
+                match (
+                    left.state.eq_ignore_ascii_case("open"),
+                    right.state.eq_ignore_ascii_case("open"),
+                ) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => std::cmp::Ordering::Equal,
+                }
+            })
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| right.number.cmp(&left.number))
+    });
+
+    Ok(rows)
+}
+
 #[tauri::command]
-pub async fn get_devices(db: State<'_, DbPool>) -> Result<Vec<DeviceView>, String> {
-    let pool = &db.0;
+pub async fn get_active_project_issues(
+    db: State<'_, DbPool>,
+) -> Result<Vec<ActiveProjectIssueView>, String> {
+    load_active_project_issues(&db.0).await
+}
+
+async fn load_devices(pool: &sqlx::SqlitePool) -> Result<Vec<DeviceView>, String> {
     let client = match get_huly_client(pool).await {
         Ok(c) => c,
         Err(_) => return Ok(vec![]),
@@ -6906,6 +7804,9 @@ pub async fn get_devices(db: State<'_, DbPool>) -> Result<Vec<DeviceView>, Strin
             .as_ref()
             .map(|value| value.as_str().unwrap_or(&value.to_string()).to_string())
             .unwrap_or_default();
+        if !device_signal_is_active(&status_text, &combined_text) {
+            continue;
+        }
         let normalized_status = normalize_device_status(&status_text, &combined_text);
         let platform = infer_device_platform(&combined_text);
         let latest_activity_ms = issue.modified_on.or(issue.created_on).unwrap_or_default();
@@ -6982,6 +7883,9 @@ pub async fn get_devices(db: State<'_, DbPool>) -> Result<Vec<DeviceView>, Strin
             .as_ref()
             .map(|value| value.as_str().unwrap_or(&value.to_string()).to_string())
             .unwrap_or_default();
+        if !device_signal_is_active(&status_text, &combined_text) {
+            continue;
+        }
         let normalized_status = normalize_device_status(&status_text, &combined_text);
         let platform = infer_device_platform(&combined_text);
         let latest_activity_ms = card.modified_on.or(card.created_on).unwrap_or_default();
@@ -7040,6 +7944,14 @@ pub async fn get_devices(db: State<'_, DbPool>) -> Result<Vec<DeviceView>, Strin
     Ok(rows)
 }
 
+#[tauri::command]
+pub async fn get_devices(db: State<'_, DbPool>) -> Result<Vec<DeviceView>, String> {
+    if let Err(error) = get_huly_client(&db.0).await {
+        return Err(format!("huly devices unavailable: {error}"));
+    }
+    load_devices(&db.0).await
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeArticleView {
@@ -7060,7 +7972,7 @@ pub async fn get_knowledge_articles(
     let pool = &db.0;
     let client = match get_huly_client(pool).await {
         Ok(c) => c,
-        Err(_) => return Ok(vec![]),
+        Err(error) => return Err(format!("huly knowledge articles unavailable: {error}")),
     };
 
     let people = client.get_persons().await.unwrap_or_default();
@@ -7677,17 +8589,28 @@ pub async fn get_skills_matrix(db: State<'_, DbPool>) -> Result<Vec<SkillsMatrix
 #[serde(rename_all = "camelCase")]
 pub struct OnboardingTaskView {
     pub id: String,
+    pub sort_order: i64,
     pub title: String,
     pub completed: bool,
     pub completed_at: Option<String>,
     pub resource_created: Option<String>,
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OnboardingFlowView {
-    pub client_id: String,
-    pub client_name: String,
+    pub id: String,
+    pub audience: String,
+    pub source: String,
+    pub owner: Option<String>,
+    pub workspace_id: Option<String>,
+    pub subject_id: String,
+    pub subject_name: String,
+    pub primary_contact: Option<String>,
+    pub manager: Option<String>,
+    pub department: Option<String>,
+    pub joined_on: Option<String>,
     pub start_date: String,
     pub completed_tasks: u32,
     pub total_tasks: u32,
@@ -7697,11 +8620,65 @@ pub struct OnboardingFlowView {
     pub days_elapsed: u32,
 }
 
-#[tauri::command]
-pub async fn get_onboarding_flows(
-    db: State<'_, DbPool>,
+fn build_imported_onboarding_view(flow: TeamforgeOnboardingFlowDetail) -> OnboardingFlowView {
+    let start_date = if flow.starts_on.trim().is_empty() {
+        Utc::now().format("%Y-%m-%dT00:00:00").to_string()
+    } else {
+        flow.starts_on.clone()
+    };
+    let total_tasks = flow.tasks.len() as u32;
+    let completed_tasks = flow.tasks.iter().filter(|task| task.completed).count() as u32;
+    let progress_percent = if total_tasks > 0 {
+        (completed_tasks as f64 / total_tasks as f64) * 100.0
+    } else {
+        0.0
+    };
+    let days_elapsed = parse_datetime_flexible(&start_date)
+        .map(|start| Utc::now().signed_duration_since(start).num_days().max(0) as u32)
+        .unwrap_or(0);
+
+    OnboardingFlowView {
+        id: flow.flow_id.clone(),
+        audience: flow.audience,
+        source: flow.source,
+        owner: flow.owner,
+        workspace_id: if flow.workspace_id.trim().is_empty() {
+            None
+        } else {
+            Some(flow.workspace_id)
+        },
+        subject_id: flow.subject_id,
+        subject_name: flow.subject_name,
+        primary_contact: flow.primary_contact,
+        manager: flow.manager,
+        department: flow.department,
+        joined_on: flow.joined_on,
+        start_date,
+        completed_tasks,
+        total_tasks,
+        progress_percent,
+        status: flow.status,
+        tasks: flow
+            .tasks
+            .into_iter()
+            .map(|task| OnboardingTaskView {
+                id: task.task_id,
+                sort_order: task.sort_order,
+                title: task.title,
+                completed: task.completed,
+                completed_at: task.completed_at,
+                resource_created: task.resource_created,
+                notes: task.notes,
+            })
+            .collect(),
+        days_elapsed,
+    }
+}
+
+async fn build_client_onboarding_fallbacks(
+    pool: &sqlx::SqlitePool,
+    imported_client_keys: &HashSet<String>,
 ) -> Result<Vec<OnboardingFlowView>, String> {
-    let pool = &db.0;
     let projects = queries::get_projects(pool)
         .await
         .map_err(|e| format!("load projects for onboarding: {e}"))?;
@@ -7733,6 +8710,9 @@ pub async fn get_onboarding_flows(
         else {
             continue;
         };
+        if imported_client_keys.contains(&normalize_teamforge_match_key(&client_name)) {
+            continue;
+        }
         projects_by_client
             .entry(client_name)
             .or_default()
@@ -7843,24 +8823,29 @@ pub async fn get_onboarding_flows(
         let workspace_ready = !client_projects.is_empty();
         tasks.push(OnboardingTaskView {
             id: format!("{}-workspace", slugify_client_name(&client_name)),
+            sort_order: 0,
             title: "Workspace mapped in Clockify".to_string(),
             completed: workspace_ready,
             completed_at: first_project_created.clone(),
             resource_created: primary_project.clone(),
+            notes: Some("Heuristic fallback from project + time-entry telemetry.".to_string()),
         });
 
         let primary_project_created = primary_project.is_some();
         tasks.push(OnboardingTaskView {
             id: format!("{}-project", slugify_client_name(&client_name)),
+            sort_order: 1,
             title: "Primary project created".to_string(),
             completed: primary_project_created,
             completed_at: first_project_created.clone(),
             resource_created: primary_project.clone(),
+            notes: Some("Heuristic fallback from project registry.".to_string()),
         });
 
         let kickoff_logged = logged_hours > 0.0;
         tasks.push(OnboardingTaskView {
             id: format!("{}-kickoff", slugify_client_name(&client_name)),
+            sort_order: 2,
             title: "Kickoff execution logged".to_string(),
             completed: kickoff_logged,
             completed_at: first_time_entry.clone(),
@@ -7869,6 +8854,7 @@ pub async fn get_onboarding_flows(
             } else {
                 None
             },
+            notes: Some("Heuristic fallback from Clockify time entries.".to_string()),
         });
 
         let docs_ready = !matching_docs.is_empty();
@@ -7879,6 +8865,7 @@ pub async fn get_onboarding_flows(
             .and_then(ms_to_datetime_string);
         tasks.push(OnboardingTaskView {
             id: format!("{}-docs", slugify_client_name(&client_name)),
+            sort_order: 3,
             title: "Knowledge docs linked".to_string(),
             completed: docs_ready,
             completed_at: first_doc_date,
@@ -7887,11 +8874,13 @@ pub async fn get_onboarding_flows(
             } else {
                 None
             },
+            notes: Some("Heuristic fallback from Huly documents.".to_string()),
         });
 
         let delivery_active = matching_issues + matching_cards > 0;
         tasks.push(OnboardingTaskView {
             id: format!("{}-delivery", slugify_client_name(&client_name)),
+            sort_order: 4,
             title: "Delivery board activity detected".to_string(),
             completed: delivery_active,
             completed_at: None,
@@ -7900,6 +8889,7 @@ pub async fn get_onboarding_flows(
             } else {
                 None
             },
+            notes: Some("Heuristic fallback from Huly issues and board cards.".to_string()),
         });
 
         let total_tasks = tasks.len() as u32;
@@ -7928,8 +8918,17 @@ pub async fn get_onboarding_flows(
         .to_string();
 
         flows.push(OnboardingFlowView {
-            client_id: format!("onboarding-{}", slugify_client_name(&client_name)),
-            client_name,
+            id: format!("fallback-{}", slugify_client_name(&client_name)),
+            audience: "client".to_string(),
+            source: "heuristic".to_string(),
+            owner: None,
+            workspace_id: None,
+            subject_id: slugify_client_name(&client_name),
+            subject_name: client_name,
+            primary_contact: None,
+            manager: None,
+            department: None,
+            joined_on: None,
             start_date,
             completed_tasks,
             total_tasks,
@@ -7940,11 +8939,41 @@ pub async fn get_onboarding_flows(
         });
     }
 
+    Ok(flows)
+}
+
+#[tauri::command]
+pub async fn get_onboarding_flows(
+    db: State<'_, DbPool>,
+) -> Result<Vec<OnboardingFlowView>, String> {
+    let pool = &db.0;
+    let imported_flows = load_teamforge_onboarding_flows(pool, None)
+        .await
+        .unwrap_or_default();
+    let imported_client_keys: HashSet<String> = imported_flows
+        .iter()
+        .filter(|flow| flow.audience == "client")
+        .flat_map(|flow| {
+            [
+                normalize_teamforge_match_key(&flow.subject_id),
+                normalize_teamforge_match_key(&flow.subject_name),
+            ]
+        })
+        .collect();
+
+    let mut flows = imported_flows
+        .into_iter()
+        .map(build_imported_onboarding_view)
+        .collect::<Vec<_>>();
+    flows.extend(build_client_onboarding_fallbacks(pool, &imported_client_keys).await?);
+
     flows.sort_by(|left, right| {
-        left.status
-            .cmp(&right.status)
+        left.audience
+            .cmp(&right.audience)
+            .then(left.source.cmp(&right.source))
+            .then(left.status.cmp(&right.status))
             .then(right.days_elapsed.cmp(&left.days_elapsed))
-            .then(left.client_name.cmp(&right.client_name))
+            .then(left.subject_name.cmp(&right.subject_name))
     });
     Ok(flows)
 }
@@ -9343,6 +10372,424 @@ mod tests {
             .map_err(|e| format!("init live db: {e}"))
     }
 
+    fn temp_app_data_dir(prefix: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        std::env::temp_dir().join(format!("teamforge-{prefix}-{unique}"))
+    }
+
+    #[tokio::test]
+    async fn clockify_project_hours_query_decodes_integer_sums() {
+        let app_data_dir = temp_app_data_dir("clockify-hours-decode");
+        std::fs::create_dir_all(&app_data_dir).expect("create temp app data dir");
+        let pool = queries::init_db(&app_data_dir).await.expect("init temp db");
+
+        sqlx::query(
+            "INSERT INTO employees (
+                id, clockify_user_id, name, email, monthly_quota_hours, is_active
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .bind("employee-1")
+        .bind("clockify-user-1")
+        .bind("Builder")
+        .bind("builder@thoughtseedlabs.com")
+        .bind(160.0)
+        .bind(1)
+        .execute(&pool)
+        .await
+        .expect("insert employee");
+
+        sqlx::query(
+            "INSERT INTO projects (
+                id, clockify_project_id, name, client_name, is_billable, is_archived
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .bind("project-1")
+        .bind("clockify-project-1")
+        .bind("Axtech")
+        .bind("Axtech")
+        .bind(1)
+        .bind(0)
+        .execute(&pool)
+        .await
+        .expect("insert project");
+
+        sqlx::query(
+            "INSERT INTO time_entries (
+                id, employee_id, project_id, description, start_time, end_time,
+                duration_seconds, is_billable, synced_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .bind("entry-1")
+        .bind("employee-1")
+        .bind("project-1")
+        .bind("billable work")
+        .bind("2026-04-10T10:00:00Z")
+        .bind("2026-04-10T11:00:00Z")
+        .bind(3600_i64)
+        .bind(1)
+        .bind("2026-04-10T11:05:00Z")
+        .execute(&pool)
+        .await
+        .expect("insert billable entry");
+
+        sqlx::query(
+            "INSERT INTO time_entries (
+                id, employee_id, project_id, description, start_time, end_time,
+                duration_seconds, is_billable, synced_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .bind("entry-2")
+        .bind("employee-1")
+        .bind("project-1")
+        .bind("internal work")
+        .bind("2026-04-11T10:00:00Z")
+        .bind("2026-04-11T10:30:00Z")
+        .bind(1800_i64)
+        .bind(0)
+        .bind("2026-04-11T10:35:00Z")
+        .execute(&pool)
+        .await
+        .expect("insert non-billable entry");
+
+        let rows: Vec<ClockifyProjectHoursRow> = sqlx::query_as(
+            "SELECT
+                te.project_id AS project_id,
+                COALESCE(SUM(te.duration_seconds), 0) AS total_seconds,
+                COALESCE(SUM(CASE WHEN te.is_billable = 1 THEN te.duration_seconds ELSE 0 END), 0) AS billable_seconds,
+                COUNT(DISTINCT te.employee_id) AS member_count
+             FROM time_entries te
+             JOIN employees e ON e.id = te.employee_id
+             WHERE e.is_active = 1 AND te.start_time >= ?1 AND te.start_time < ?2
+             GROUP BY te.project_id",
+        )
+        .bind("2026-04-01")
+        .bind("2026-05-01")
+        .fetch_all(&pool)
+        .await
+        .expect("load clockify project hours");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].project_id.as_deref(), Some("project-1"));
+        assert_eq!(rows[0].total_seconds, 5400);
+        assert_eq!(rows[0].billable_seconds, 3600);
+        assert_eq!(rows[0].member_count, 1);
+
+        let (total_hours, billable_hours, member_count, utilization) =
+            project_hours_from_row(&rows[0]);
+        assert!((total_hours - 1.5).abs() < f64::EPSILON);
+        assert!((billable_hours - 1.0).abs() < f64::EPSILON);
+        assert_eq!(member_count, 1);
+        assert!((utilization - (2.0 / 3.0)).abs() < 1e-9);
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(&app_data_dir);
+    }
+
+    #[tokio::test]
+    async fn cached_teamforge_graphs_bridge_into_github_repo_configs() {
+        let app_data_dir = temp_app_data_dir("execution-bridge");
+        std::fs::create_dir_all(&app_data_dir).expect("create temp app data dir");
+        let pool = queries::init_db(&app_data_dir).await.expect("init temp db");
+        let now = Utc::now().to_rfc3339();
+
+        let graph = TeamforgeProjectGraph {
+            project: TeamforgeProject {
+                id: "tf-project-1".to_string(),
+                slug: "parkarea-phase-2".to_string(),
+                name: "ParkArea Phase 2 - Germany Launch".to_string(),
+                portfolio_name: Some("ParkArea".to_string()),
+                client_name: Some("ParkArea".to_string()),
+                project_type: Some("execution".to_string()),
+                status: "active".to_string(),
+                sync_mode: "hybrid".to_string(),
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            },
+            github_repos: vec![TeamforgeProjectGithubRepoLink {
+                project_id: "tf-project-1".to_string(),
+                repo: "Sheshiyer/parkarea-aleph".to_string(),
+                display_name: Some("ParkArea Phase 2 - Germany Launch".to_string()),
+                is_primary: true,
+                sync_issues: true,
+                sync_milestones: true,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            }],
+            huly_links: vec![TeamforgeProjectHulyLink {
+                project_id: "tf-project-1".to_string(),
+                huly_project_id: "huly-project-1".to_string(),
+                sync_issues: true,
+                sync_milestones: true,
+                sync_components: true,
+                sync_templates: false,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            }],
+            artifacts: vec![],
+            client_profile: None,
+        };
+
+        cache_and_bridge_teamforge_project_graphs(&pool, &[graph])
+            .await
+            .expect("cache and bridge teamforge graph");
+
+        let configs = queries::get_enabled_github_repo_configs(&pool)
+            .await
+            .expect("load github repo configs");
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].repo, "Sheshiyer/parkarea-aleph");
+        assert_eq!(configs[0].display_name, "ParkArea Phase 2 - Germany Launch");
+        assert_eq!(configs[0].client_name.as_deref(), Some("ParkArea"));
+        assert_eq!(
+            configs[0].huly_project_id.as_deref(),
+            Some("huly-project-1")
+        );
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(&app_data_dir);
+    }
+
+    #[tokio::test]
+    async fn active_project_issues_are_grouped_from_active_teamforge_projects() {
+        let app_data_dir = temp_app_data_dir("issues-view");
+        std::fs::create_dir_all(&app_data_dir).expect("create temp app data dir");
+        let pool = queries::init_db(&app_data_dir).await.expect("init temp db");
+        let now = Utc::now().to_rfc3339();
+
+        let active_graph = TeamforgeProjectGraph {
+            project: TeamforgeProject {
+                id: "tf-project-active".to_string(),
+                slug: "axtech".to_string(),
+                name: "Axtech".to_string(),
+                portfolio_name: Some("Axtech".to_string()),
+                client_name: Some("Axtech".to_string()),
+                project_type: Some("execution".to_string()),
+                status: "active".to_string(),
+                sync_mode: "hybrid".to_string(),
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            },
+            github_repos: vec![TeamforgeProjectGithubRepoLink {
+                project_id: "tf-project-active".to_string(),
+                repo: "Sheshiyer/axtech-aleph".to_string(),
+                display_name: Some("Axtech".to_string()),
+                is_primary: true,
+                sync_issues: true,
+                sync_milestones: true,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            }],
+            huly_links: vec![],
+            artifacts: vec![],
+            client_profile: None,
+        };
+
+        let archived_graph = TeamforgeProjectGraph {
+            project: TeamforgeProject {
+                id: "tf-project-archived".to_string(),
+                slug: "legacy".to_string(),
+                name: "Legacy".to_string(),
+                portfolio_name: Some("Legacy".to_string()),
+                client_name: Some("Legacy".to_string()),
+                project_type: Some("execution".to_string()),
+                status: "archived".to_string(),
+                sync_mode: "hybrid".to_string(),
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            },
+            github_repos: vec![TeamforgeProjectGithubRepoLink {
+                project_id: "tf-project-archived".to_string(),
+                repo: "Sheshiyer/legacy-aleph".to_string(),
+                display_name: Some("Legacy".to_string()),
+                is_primary: true,
+                sync_issues: true,
+                sync_milestones: true,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            }],
+            huly_links: vec![],
+            artifacts: vec![],
+            client_profile: None,
+        };
+
+        cache_and_bridge_teamforge_project_graphs(&pool, &[active_graph, archived_graph])
+            .await
+            .expect("cache teamforge graphs");
+
+        queries::upsert_github_issue(
+            &pool,
+            &GithubIssueCache {
+                repo: "Sheshiyer/axtech-aleph".to_string(),
+                number: 12,
+                node_id: Some("issue-node-12".to_string()),
+                title: "Fix Zigbee provisioning".to_string(),
+                body_excerpt: Some("Provisioning fails after pairing".to_string()),
+                state: "open".to_string(),
+                url: "https://github.com/Sheshiyer/axtech-aleph/issues/12".to_string(),
+                milestone_number: None,
+                assignee_logins_json: r#"["v.mohankumar"]"#.to_string(),
+                labels_json: r#"["track:firmware","priority:p1"]"#.to_string(),
+                priority: Some("p1".to_string()),
+                track: Some("firmware".to_string()),
+                created_at: Some("2026-04-20T10:00:00Z".to_string()),
+                updated_at: Some("2026-04-21T09:00:00Z".to_string()),
+                closed_at: None,
+                synced_at: now.clone(),
+            },
+        )
+        .await
+        .expect("upsert active issue");
+
+        queries::upsert_github_issue(
+            &pool,
+            &GithubIssueCache {
+                repo: "Sheshiyer/legacy-aleph".to_string(),
+                number: 7,
+                node_id: Some("issue-node-7".to_string()),
+                title: "Archived issue".to_string(),
+                body_excerpt: None,
+                state: "open".to_string(),
+                url: "https://github.com/Sheshiyer/legacy-aleph/issues/7".to_string(),
+                milestone_number: None,
+                assignee_logins_json: "[]".to_string(),
+                labels_json: "[]".to_string(),
+                priority: None,
+                track: None,
+                created_at: Some("2026-04-01T10:00:00Z".to_string()),
+                updated_at: Some("2026-04-02T10:00:00Z".to_string()),
+                closed_at: None,
+                synced_at: now.clone(),
+            },
+        )
+        .await
+        .expect("upsert archived issue");
+
+        let issues = load_active_project_issues(&pool)
+            .await
+            .expect("load active project issues");
+
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].project_id.as_deref(), Some("tf-project-active"));
+        assert_eq!(issues[0].project_name, "Axtech");
+        assert_eq!(issues[0].client_name.as_deref(), Some("Axtech"));
+        assert_eq!(issues[0].repo, "Sheshiyer/axtech-aleph");
+        assert_eq!(issues[0].number, 12);
+        assert_eq!(issues[0].state, "open");
+        assert_eq!(issues[0].labels, vec!["track:firmware", "priority:p1"]);
+        assert_eq!(issues[0].assignees, vec!["v.mohankumar"]);
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(&app_data_dir);
+    }
+
+    #[tokio::test]
+    async fn active_project_issues_prefer_cached_teamforge_projection_before_legacy_github_cache() {
+        let app_data_dir = temp_app_data_dir("issues-projection");
+        std::fs::create_dir_all(&app_data_dir).expect("create temp app data dir");
+        let pool = queries::init_db(&app_data_dir).await.expect("init temp db");
+        let now = Utc::now().to_rfc3339();
+
+        queries::replace_teamforge_active_project_issue_projection(
+            &pool,
+            &[TeamforgeActiveProjectIssueCache {
+                id: "mapping-issue-1".to_string(),
+                workspace_id: "workspace-1".to_string(),
+                project_id: Some("tf-project-active".to_string()),
+                project_name: "Axtech".to_string(),
+                client_name: Some("Axtech".to_string()),
+                repo: "Sheshiyer/axtech-aleph".to_string(),
+                number: 42,
+                title: "Worker-owned issue projection".to_string(),
+                state: "open".to_string(),
+                url: "https://github.com/Sheshiyer/axtech-aleph/issues/42".to_string(),
+                milestone_number: None,
+                labels_json: r#"["track:backend"]"#.to_string(),
+                assignees_json: r#"["raheman"]"#.to_string(),
+                priority: Some("p1".to_string()),
+                track: Some("backend".to_string()),
+                created_at: Some("2026-04-21T08:00:00Z".to_string()),
+                updated_at: Some("2026-04-21T09:00:00Z".to_string()),
+                closed_at: None,
+                last_synced_at: Some(now.clone()),
+            }],
+        )
+        .await
+        .expect("seed cached teamforge issue projection");
+
+        cache_and_bridge_teamforge_project_graphs(
+            &pool,
+            &[TeamforgeProjectGraph {
+                project: TeamforgeProject {
+                    id: "tf-project-active".to_string(),
+                    slug: "axtech".to_string(),
+                    name: "Axtech".to_string(),
+                    portfolio_name: Some("Axtech".to_string()),
+                    client_name: Some("Axtech".to_string()),
+                    project_type: Some("execution".to_string()),
+                    status: "active".to_string(),
+                    sync_mode: "hybrid".to_string(),
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                },
+                github_repos: vec![TeamforgeProjectGithubRepoLink {
+                    project_id: "tf-project-active".to_string(),
+                    repo: "Sheshiyer/axtech-aleph".to_string(),
+                    display_name: Some("Axtech".to_string()),
+                    is_primary: true,
+                    sync_issues: true,
+                    sync_milestones: true,
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                }],
+                huly_links: vec![],
+                artifacts: vec![],
+                client_profile: None,
+            }],
+        )
+        .await
+        .expect("seed teamforge graph");
+
+        queries::upsert_github_issue(
+            &pool,
+            &GithubIssueCache {
+                repo: "Sheshiyer/axtech-aleph".to_string(),
+                number: 7,
+                node_id: Some("legacy-issue-7".to_string()),
+                title: "Legacy fallback issue".to_string(),
+                body_excerpt: None,
+                state: "open".to_string(),
+                url: "https://github.com/Sheshiyer/axtech-aleph/issues/7".to_string(),
+                milestone_number: None,
+                assignee_logins_json: "[]".to_string(),
+                labels_json: "[]".to_string(),
+                priority: None,
+                track: None,
+                created_at: Some("2026-04-20T08:00:00Z".to_string()),
+                updated_at: Some("2026-04-20T09:00:00Z".to_string()),
+                closed_at: None,
+                synced_at: now.clone(),
+            },
+        )
+        .await
+        .expect("seed legacy github issue");
+
+        let issues = load_active_project_issues(&pool)
+            .await
+            .expect("load active project issues");
+
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].number, 42);
+        assert_eq!(issues[0].title, "Worker-owned issue projection");
+        assert_eq!(issues[0].track.as_deref(), Some("backend"));
+        assert_eq!(issues[0].labels, vec!["track:backend"]);
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(&app_data_dir);
+    }
+
     #[tokio::test]
     #[ignore]
     async fn inspect_live_huly_org_state() {
@@ -9429,5 +10876,33 @@ mod tests {
             .expect("apply normalization");
         println!("{}", serde_json::to_string_pretty(&report).unwrap());
         assert!(!report.actions.is_empty());
+    }
+
+    #[test]
+    fn device_signal_is_active_excludes_completed_statuses() {
+        assert!(!device_signal_is_active(
+            "Closed",
+            "ParkArea tuya gateway rollout"
+        ));
+        assert!(!device_signal_is_active(
+            "Resolved",
+            "ParkArea tuya gateway rollout"
+        ));
+        assert!(device_signal_is_active(
+            "In Progress",
+            "ParkArea tuya gateway rollout"
+        ));
+        assert!(device_signal_is_active(
+            "QA",
+            "ParkArea tuya gateway rollout"
+        ));
+    }
+
+    #[test]
+    fn client_matches_device_name_is_case_insensitive() {
+        assert!(client_matches_device_name(Some(" ParkArea "), "parkarea"));
+        assert!(client_matches_device_name(Some("AXTECH"), "Axtech"));
+        assert!(!client_matches_device_name(Some("SeedForge"), "ParkArea"));
+        assert!(!client_matches_device_name(None, "ParkArea"));
     }
 }

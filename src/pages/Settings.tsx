@@ -18,6 +18,7 @@ import type {
   ClockifyWorkspace,
   Employee,
   IdentityMapEntry,
+  VaultDirectoryValidation,
   SyncState,
 } from "../lib/types";
 
@@ -152,6 +153,19 @@ function Settings() {
   const [cloudSyncMessage, setCloudSyncMessage] = useState<string | null>(null);
   const [cloudSyncing, setCloudSyncing] = useState(false);
 
+  const [localVaultRoot, setLocalVaultRoot] = useState("");
+  const [paperclipScriptPath, setPaperclipScriptPath] = useState("");
+  const [paperclipWorkingDir, setPaperclipWorkingDir] = useState("");
+  const [paperclipUiUrl, setPaperclipUiUrl] = useState("");
+  const [localWorkspaceMessage, setLocalWorkspaceMessage] = useState<string | null>(null);
+  const [vaultValidation, setVaultValidation] = useState<VaultDirectoryValidation | null>(null);
+  const [vaultPicking, setVaultPicking] = useState(false);
+  const [vaultValidating, setVaultValidating] = useState(false);
+  const [paperclipLaunching, setPaperclipLaunching] = useState(false);
+  const [paperclipLaunchMessage, setPaperclipLaunchMessage] = useState<string | null>(null);
+  const [paperclipOpening, setPaperclipOpening] = useState(false);
+  const [paperclipOpenMessage, setPaperclipOpenMessage] = useState<string | null>(null);
+
   const [currentAppVersion, setCurrentAppVersion] = useState("--");
   const [availableUpdate, setAvailableUpdate] = useState<TauriUpdateHandle | null>(null);
   const [updateStatus, setUpdateStatus] = useState<
@@ -194,6 +208,9 @@ function Settings() {
     ? normalizedSlackFilters.split(", ").filter(Boolean).length
     : 0;
   const cloudAccessTokenPresent = cloudCredentialsAccessToken.trim().length > 0;
+  const vaultConfigured = localVaultRoot.trim().length > 0;
+  const paperclipScriptConfigured = paperclipScriptPath.trim().length > 0;
+  const paperclipUiConfigured = paperclipUiUrl.trim().length > 0;
   const slackSetupStatus = !trimmedSlackToken
     ? "NOT CONFIGURED"
     : trimmedSlackToken.startsWith("xoxb-")
@@ -207,6 +224,12 @@ function Settings() {
   const updaterAvailable = isUpdaterSupported();
   const relaunchAvailable = isRelaunchSupported();
   const downloadProgressLabel = formatDownloadProgress(downloadProgress);
+  const vaultValidationColor =
+    vaultValidation?.status === "ready"
+      ? "var(--lcars-green)"
+      : vaultValidation?.status === "warning"
+        ? "var(--lcars-orange)"
+        : "var(--lcars-red)";
   const updateActionBusy =
     updateStatus === "checking" ||
     updateStatus === "downloading" ||
@@ -253,6 +276,10 @@ function Settings() {
       setCloudCredentialsAccessToken(
         settings.cloud_credentials_access_token || ""
       );
+      setLocalVaultRoot(settings.local_vault_root || "");
+      setPaperclipScriptPath(settings.paperclip_script_path || "");
+      setPaperclipWorkingDir(settings.paperclip_working_dir || "");
+      setPaperclipUiUrl(settings.paperclip_ui_url || "http://127.0.0.1:3100");
     } catch { /* Settings may not exist yet */ }
   }, []);
 
@@ -656,6 +683,99 @@ function Settings() {
       setCloudSyncMessage(`Error: ${String(err)}`);
     } finally {
       setCloudSyncing(false);
+    }
+  };
+
+  const handleSaveLocalWorkspace = async () => {
+    setLocalWorkspaceMessage(null);
+    try {
+      await api.saveSetting("local_vault_root", localVaultRoot.trim());
+      await api.saveSetting("paperclip_script_path", paperclipScriptPath.trim());
+      await api.saveSetting("paperclip_working_dir", paperclipWorkingDir.trim());
+      await api.saveSetting("paperclip_ui_url", paperclipUiUrl.trim());
+      await loadSettings();
+      setLocalWorkspaceMessage("Local workspace settings saved");
+      setTimeout(() => setLocalWorkspaceMessage(null), 3000);
+    } catch (err) {
+      setLocalWorkspaceMessage(`Error: ${String(err)}`);
+    }
+  };
+
+  const handlePickVaultDirectory = async () => {
+    setVaultPicking(true);
+    setLocalWorkspaceMessage(null);
+    try {
+      const path = await api.pickVaultDirectory();
+      if (!path) return;
+      setLocalVaultRoot(path);
+      setVaultValidation(await api.validateVaultDirectory(path));
+    } catch (err) {
+      setLocalWorkspaceMessage(`Error: ${String(err)}`);
+    } finally {
+      setVaultPicking(false);
+    }
+  };
+
+  const handleValidateVaultDirectory = async () => {
+    if (!localVaultRoot.trim()) {
+      setVaultValidation({
+        path: "",
+        status: "error",
+        message: "Select a vault directory before validating.",
+        markers: [],
+        hasTeamDirectory: false,
+        hasClientEcosystemDirectory: false,
+        hasObsidianDirectory: false,
+      });
+      return;
+    }
+
+    setVaultValidating(true);
+    try {
+      setVaultValidation(await api.validateVaultDirectory(localVaultRoot.trim()));
+    } catch (err) {
+      setVaultValidation({
+        path: localVaultRoot.trim(),
+        status: "error",
+        message: String(err),
+        markers: [],
+        hasTeamDirectory: false,
+        hasClientEcosystemDirectory: false,
+        hasObsidianDirectory: false,
+      });
+    } finally {
+      setVaultValidating(false);
+    }
+  };
+
+  const handleLaunchPaperclip = async () => {
+    setPaperclipLaunching(true);
+    setPaperclipLaunchMessage(null);
+    try {
+      const result = await api.launchPaperclipScript(
+        paperclipScriptPath.trim(),
+        paperclipWorkingDir.trim() || null
+      );
+      setPaperclipLaunchMessage(
+        `Paperclip launched (${result.launchMode}, pid ${result.pid})`
+      );
+    } catch (err) {
+      setPaperclipLaunchMessage(`Error: ${String(err)}`);
+    } finally {
+      setPaperclipLaunching(false);
+    }
+  };
+
+  const handleOpenPaperclipUi = async () => {
+    setPaperclipOpening(true);
+    setPaperclipOpenMessage(null);
+    try {
+      const result = await api.openPaperclipUi(paperclipUiUrl.trim());
+      setPaperclipOpenMessage(`Opened ${result.url}`);
+    } catch (err) {
+      setPaperclipOpenMessage(`Error: ${String(err)}`);
+    } finally {
+      setPaperclipOpening(false);
     }
   };
 
@@ -1472,6 +1592,215 @@ function Settings() {
             </span>
           )}
         </div>
+      </div>
+
+      {/* Local Workspace */}
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-orange)" }}>
+        <h2 style={styles.sectionTitle}>LOCAL WORKSPACE</h2>
+        <div style={styles.sectionDivider} />
+
+        <div style={styles.summaryGrid}>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>VAULT MAP</span>
+            <span
+              style={{
+                ...styles.summaryValue,
+                color: vaultConfigured ? "var(--lcars-green)" : "var(--lcars-orange)",
+              }}
+            >
+              {vaultConfigured ? "CONFIGURED" : "MISSING"}
+            </span>
+          </div>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>PAPERCLIP SCRIPT</span>
+            <span
+              style={{
+                ...styles.summaryValue,
+                color: paperclipScriptConfigured
+                  ? "var(--lcars-green)"
+                  : "var(--lcars-orange)",
+              }}
+            >
+              {paperclipScriptConfigured ? "READY" : "MISSING"}
+            </span>
+          </div>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>PAPERCLIP UI</span>
+            <span
+              style={{
+                ...styles.summaryValue,
+                color: paperclipUiConfigured
+                  ? "var(--lcars-green)"
+                  : "var(--lcars-orange)",
+              }}
+            >
+              {paperclipUiConfigured ? "READY" : "MISSING"}
+            </span>
+          </div>
+        </div>
+
+        <div style={styles.field}>
+          <label style={styles.label}>VAULT DIRECTORY</label>
+          <div style={styles.inputRow}>
+            <input
+              value={localVaultRoot}
+              onChange={(event) => {
+                setLocalVaultRoot(event.target.value);
+                setVaultValidation(null);
+              }}
+              placeholder="SELECT THE LOCAL OBSIDIAN / THOUGHTSEED VAULT ROOT"
+              style={{ ...styles.input, flex: 1 }}
+            />
+            <button
+              onClick={handlePickVaultDirectory}
+              disabled={vaultPicking}
+              style={{ ...styles.ghostButton, opacity: vaultPicking ? 0.5 : 1 }}
+            >
+              {vaultPicking ? "CHOOSING..." : "CHOOSE FOLDER"}
+            </button>
+            <button
+              onClick={handleValidateVaultDirectory}
+              disabled={vaultValidating || !vaultConfigured}
+              style={{
+                ...styles.ghostButton,
+                opacity: vaultValidating || !vaultConfigured ? 0.5 : 1,
+              }}
+            >
+              {vaultValidating ? "VALIDATING..." : "VALIDATE VAULT"}
+            </button>
+          </div>
+          <div style={styles.helperText}>
+            THIS PATH IS STORED LOCALLY ON THIS MACHINE AND USED AS THE FIRST
+            CHOICE BEFORE THE OLD ENV-VAR OR OBSIDIAN FALLBACKS.
+          </div>
+        </div>
+
+        {vaultValidation && (
+          <div style={styles.statusBox}>
+            <div style={{ ...styles.statusTitle, color: vaultValidationColor }}>
+              VAULT STATUS • {vaultValidation.status.toUpperCase()}
+            </div>
+            <div style={styles.statusBody}>{vaultValidation.message}</div>
+            <div style={styles.helperText}>
+              MARKERS:{" "}
+              {vaultValidation.markers.length > 0
+                ? vaultValidation.markers.join(", ")
+                : "NONE DETECTED"}
+            </div>
+          </div>
+        )}
+
+        <div style={styles.inlineFieldGrid}>
+          <div>
+            <label style={styles.label}>PAPERCLIP SCRIPT</label>
+            <input
+              value={paperclipScriptPath}
+              onChange={(event) => setPaperclipScriptPath(event.target.value)}
+              placeholder=".../TEAM-FORGE-TS/SCRIPTS/LAUNCH-THOUGHTSEED-PAPERCLIP.SH"
+              style={styles.input}
+            />
+            <div style={styles.helperText}>
+              RECOMMENDED FOR THIS MACHINE: THE INCLUDED
+              `scripts/launch-thoughtseed-paperclip.sh` WRAPPER. IT TARGETS THE
+              SIBLING `thougghtseed-paperclip` REPO AND MAPS TEAMFORGE LAUNCHES
+              TO PAPERCLIP'S EXISTING `babysitter.sh start` ENTRYPOINT.
+            </div>
+          </div>
+          <div>
+            <label style={styles.label}>PAPERCLIP WORKING DIRECTORY</label>
+            <input
+              value={paperclipWorkingDir}
+              onChange={(event) => setPaperclipWorkingDir(event.target.value)}
+              placeholder="/ABSOLUTE/PATH/TO/PAPERCLIP"
+              style={styles.input}
+            />
+            <div style={styles.helperText}>
+              OPTIONAL. IF BLANK, TEAMFORGE USES THE SCRIPT PARENT DIRECTORY.
+            </div>
+          </div>
+        </div>
+
+        <div style={styles.field}>
+          <label style={styles.label}>PAPERCLIP UI URL</label>
+          <input
+            value={paperclipUiUrl}
+            onChange={(event) => setPaperclipUiUrl(event.target.value)}
+            placeholder="http://127.0.0.1:3100"
+            style={styles.input}
+          />
+          <div style={styles.helperText}>
+            LOCAL OR REMOTE HTTP URL TO THE PAPERCLIP UI INSTANCE THIS FOUNDER
+            MACHINE SHOULD OPEN. THE LOCAL THOUGHTSEED PAPERCLIP DEFAULT IS
+            `http://127.0.0.1:3100`.
+          </div>
+        </div>
+
+        <div style={styles.buttonRow}>
+          <button onClick={handleSaveLocalWorkspace} style={styles.primaryButton}>
+            SAVE LOCAL WORKSPACE
+          </button>
+          <button
+            onClick={handleLaunchPaperclip}
+            disabled={paperclipLaunching || !paperclipScriptConfigured}
+            style={{
+              ...styles.ghostButton,
+              opacity: paperclipLaunching || !paperclipScriptConfigured ? 0.5 : 1,
+            }}
+          >
+            {paperclipLaunching ? "LAUNCHING..." : "LAUNCH PAPERCLIP"}
+          </button>
+          <button
+            onClick={handleOpenPaperclipUi}
+            disabled={paperclipOpening || !paperclipUiConfigured}
+            style={{
+              ...styles.ghostButton,
+              opacity: paperclipOpening || !paperclipUiConfigured ? 0.5 : 1,
+            }}
+          >
+            {paperclipOpening ? "OPENING..." : "OPEN PAPERCLIP UI"}
+          </button>
+        </div>
+
+        {(localWorkspaceMessage || paperclipLaunchMessage || paperclipOpenMessage) && (
+          <div style={styles.statusBox}>
+            {localWorkspaceMessage && (
+              <div
+                style={{
+                  ...styles.statusBody,
+                  color: localWorkspaceMessage.startsWith("Error")
+                    ? "var(--lcars-red)"
+                    : "var(--lcars-green)",
+                }}
+              >
+                {localWorkspaceMessage.toUpperCase()}
+              </div>
+            )}
+            {paperclipLaunchMessage && (
+              <div
+                style={{
+                  ...styles.statusBody,
+                  color: paperclipLaunchMessage.startsWith("Error")
+                    ? "var(--lcars-red)"
+                    : "var(--lcars-green)",
+                }}
+              >
+                {paperclipLaunchMessage.toUpperCase()}
+              </div>
+            )}
+            {paperclipOpenMessage && (
+              <div
+                style={{
+                  ...styles.statusBody,
+                  color: paperclipOpenMessage.startsWith("Error")
+                    ? "var(--lcars-red)"
+                    : "var(--lcars-green)",
+                }}
+              >
+                {paperclipOpenMessage.toUpperCase()}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* App Updates */}

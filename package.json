@@ -1,6 +1,6 @@
 {
   "name": "team-forge-ts",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "description": "LCARS mission-control desktop app with a Cloudflare-backed TeamForge project control plane for GitHub and Huly.",
   "private": true,
   "type": "module",
@@ -9,7 +9,10 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "release:ota:publish": "node scripts/publish-ota-release.mjs"
+    "paperclip:launch": "bash scripts/launch-thoughtseed-paperclip.sh",
+    "paperclip:status": "bash scripts/launch-thoughtseed-paperclip.sh status",
+    "release:ota:publish": "node scripts/publish-ota-release.mjs",
+    "parity:labs-vault": "node scripts/teamforge-vault-parity.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

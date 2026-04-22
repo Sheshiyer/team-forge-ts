@@ -7,11 +7,16 @@ import type {
   TimeEntry,
   ProjectStats,
   ProjectCatalogItem,
-  ExecutionProjectView,
+  ExecutionProjectsResponse,
+  TeamforgeClientProfile,
+  TeamforgeOnboardingFlow,
   TeamforgeProjectGraph,
   TeamforgeProjectControlPlane,
   TeamforgeProjectInput,
   TeamforgeProjectActionInput,
+  VaultDirectoryValidation,
+  PaperclipLaunchResult,
+  PaperclipUiOpenResult,
   ActivityItem,
   PresenceStatus,
   Employee,
@@ -34,6 +39,7 @@ import type {
   EmployeeSummaryView,
   NamingComplianceStats,
   IssueWithNaming,
+  ActiveProjectIssueView,
   StandupReport,
   ClientView,
   ClientDetailView,
@@ -44,6 +50,7 @@ import type {
   TrainingTrackView,
   TrainingStatusRow,
   SkillsMatrixCell,
+  OnboardingAudience,
   OnboardingFlowView,
   PlannerSlotView,
   CredentialSyncResult,
@@ -61,6 +68,16 @@ const invokeApi = {
   getSettings: () => invoke<Record<string, string>>("get_settings"),
   saveSetting: (key: string, value: string) =>
     invoke<void>("save_setting", { key, value }),
+  pickVaultDirectory: () => invoke<string | null>("pick_vault_directory"),
+  validateVaultDirectory: (path: string) =>
+    invoke<VaultDirectoryValidation>("validate_vault_directory", { path }),
+  launchPaperclipScript: (scriptPath: string, workingDir: string | null) =>
+    invoke<PaperclipLaunchResult>("launch_paperclip_script", {
+      scriptPath,
+      workingDir,
+    }),
+  openPaperclipUi: (url: string) =>
+    invoke<PaperclipUiOpenResult>("open_paperclip_ui", { url }),
   triggerSync: () => invoke<string>("trigger_sync"),
   getOverview: () => invoke<OverviewData>("get_overview"),
   getQuotaCompliance: () => invoke<QuotaRow[]>("get_quota_compliance"),
@@ -79,9 +96,15 @@ const invokeApi = {
   getProjectsCatalog: () =>
     invoke<ProjectCatalogItem[]>("get_projects_catalog"),
   getExecutionProjects: () =>
-    invoke<ExecutionProjectView[]>("get_execution_projects"),
+    invoke<ExecutionProjectsResponse>("get_execution_projects"),
   getTeamforgeProjects: () =>
     invoke<TeamforgeProjectGraph[]>("get_teamforge_projects"),
+  getTeamforgeClientProfiles: () =>
+    invoke<TeamforgeClientProfile[]>("get_teamforge_client_profiles"),
+  getTeamforgeClientProfile: (clientId: string) =>
+    invoke<TeamforgeClientProfile | null>("get_teamforge_client_profile", { clientId }),
+  getTeamforgeOnboardingFlows: (audience: OnboardingAudience | null = null) =>
+    invoke<TeamforgeOnboardingFlow[]>("get_teamforge_onboarding_flows", { audience }),
   getTeamforgeProjectControlPlane: (projectId: string) =>
     invoke<TeamforgeProjectControlPlane>("get_teamforge_project_control_plane", {
       projectId,
@@ -146,6 +169,8 @@ const invokeApi = {
   getClients: () => invoke<ClientView[]>("get_clients"),
   getClientDetail: (clientId: string) =>
     invoke<ClientDetailView>("get_client_detail", { clientId }),
+  getActiveProjectIssues: () =>
+    invoke<ActiveProjectIssueView[]>("get_active_project_issues"),
   getDevices: () => invoke<DeviceView[]>("get_devices"),
   getKnowledgeArticles: () =>
     invoke<KnowledgeArticleView[]>("get_knowledge_articles"),

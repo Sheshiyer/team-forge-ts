@@ -38,14 +38,18 @@ function Boards() {
   const api = useInvoke();
   const [cards, setCards] = useState<BoardCardView[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [stuckOnly, setStuckOnly] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const data = await api.getBoardCards();
       setCards([...data].sort((a, b) => b.daysInStatus - a.daysInStatus));
+      setLoadError(null);
     } catch {
-      // data may not exist yet
+      setLoadError(
+        "COULD NOT LOAD BOARD CARDS FROM HULY. VERIFY BOARD SYNC AND HULY CONNECTIVITY.",
+      );
     } finally {
       setLoading(false);
     }
@@ -89,9 +93,13 @@ function Boards() {
         </div>
         <div style={styles.sectionDivider} />
 
-        {filtered.length === 0 ? (
+        {loadError ? (
+          <p style={styles.emptyText}>{loadError}</p>
+        ) : filtered.length === 0 ? (
           <p style={styles.emptyText}>
-            {stuckOnly ? "NO STUCK CARDS FOUND" : "NO BOARD CARDS FOUND. SYNC HULY DATA FIRST."}
+            {stuckOnly
+              ? "NO STUCK CARDS FOUND"
+              : "NO BOARD CARDS FOUND IN HULY. SYNC ACTIVE BOARDS TO POPULATE THIS VIEW."}
           </p>
         ) : (
           <table style={styles.table}>

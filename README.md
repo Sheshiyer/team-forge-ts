@@ -85,12 +85,12 @@ Leave tracking and yearly holidays now live on a dedicated Calendar route, keepi
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
-## New In v0.1.19
+## New In v0.1.21
 
-- **Projects execution loading is now isolated from the new control-plane fetch path** so opening the page no longer stalls `EXECUTION` mode while the TeamForge registry is still coming online.
-- **Control-plane data now loads lazily when `CONTROL PLANE` is opened**, preserving the Worker-canonical project registry without blocking the legacy execution summary view.
-- **Execution-mode first-load failures now surface a retry banner instead of an endless skeleton**, making startup races recoverable and visible from the installed app.
-- **Release metadata is now at `0.1.19`** across the frontend package, sidecar package, Tauri config, and Rust crate.
+- **The founder console now includes a native Local Workspace section** for vault selection, vault validation, Paperclip launcher configuration, and Paperclip UI opening.
+- **The misleading `Devices` shell module has been replaced by a real `Issues` module** backed by active project engineering issues grouped by project.
+- **Active project issues now come from the TeamForge Worker-owned control plane first**, with local SQLite used as the desktop cache/offline projection.
+- **Release metadata is now at `0.1.21`** across the frontend package, sidecar package, Tauri config, and Rust crate.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
@@ -132,7 +132,7 @@ On first launch:
 
 ## Releases
 
-- **Current app version in repo:** `0.1.19`
+- **Current app version in repo:** `0.1.21`
 - **Latest published tag:** `v0.1.18`
 - **Release trigger:** pushing a tag that matches `v*`
 - **Artifacts:** macOS `.app` and `.dmg` bundles built by GitHub Actions for Apple Silicon and Intel targets
@@ -207,7 +207,7 @@ The rollout is now documented in-repo instead of living only in chat and GitHub 
 - [Cloudflare Project Sync Architecture](docs/plans/2026-04-17-cloudflare-project-sync-design.md)
 - [Cloudflare Project Backend Implementation Plan](docs/plans/2026-04-17-cloudflare-project-backend-implementation.md)
 
-The first Cloudflare control-plane tranche tracked in GitHub is now implemented on the current `0.1.19` line:
+The first Cloudflare control-plane tranche tracked in GitHub is now implemented on the current `0.1.21` line:
 
 - milestone propagation from GitHub into Huly with drift-review conflict records
 - Huly-owned execution/admin issue propagation
