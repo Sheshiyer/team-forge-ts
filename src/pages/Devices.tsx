@@ -129,6 +129,7 @@ function Devices() {
   const api = useInvoke();
   const [devices, setDevices] = useState<DeviceView[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filterClient, setFilterClient] = useState<string | null>(null);
   const [filterPlatform, setFilterPlatform] = useState<string | null>(null);
@@ -138,8 +139,11 @@ function Devices() {
     try {
       const data = await api.getDevices();
       setDevices(data);
+      setLoadError(null);
     } catch {
-      // data may not exist yet
+      setLoadError(
+        "COULD NOT LOAD THE DEVICE REGISTRY. CHECK HULY CONNECTIVITY AND RUN A FRESH SYNC.",
+      );
     } finally {
       setLoading(false);
     }
@@ -307,9 +311,11 @@ function Devices() {
         </div>
         <div style={styles.sectionDivider} />
 
-        {devices.length === 0 ? (
+        {loadError ? (
+          <p style={styles.emptyText}>{loadError}</p>
+        ) : devices.length === 0 ? (
           <p style={styles.emptyText}>
-            NO DEVICES FOUND. SYNC HULY DATA FIRST.
+            NO ACTIVE DEVICE SIGNALS FOUND. CLOSED AND RESOLVED DEVICE WORK IS FILTERED OUT. SYNC HULY TO REFRESH LIVE INVENTORY.
           </p>
         ) : filtered.length === 0 ? (
           <p style={styles.emptyText}>

@@ -12,6 +12,38 @@ CREATE TABLE IF NOT EXISTS employees (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS employee_kpi_snapshots (
+    id TEXT PRIMARY KEY,
+    employee_id TEXT NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+    member_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    role_template TEXT,
+    role_template_file TEXT,
+    kpi_version TEXT NOT NULL,
+    last_reviewed TEXT,
+    reports_to TEXT,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    source_file_path TEXT NOT NULL,
+    source_relative_path TEXT NOT NULL,
+    source_last_modified_at TEXT NOT NULL,
+    role_scope_markdown TEXT,
+    monthly_kpis_json TEXT NOT NULL DEFAULT '[]',
+    quarterly_milestones_json TEXT NOT NULL DEFAULT '[]',
+    yearly_milestones_json TEXT NOT NULL DEFAULT '[]',
+    cross_role_dependencies_json TEXT NOT NULL DEFAULT '[]',
+    evidence_sources_json TEXT NOT NULL DEFAULT '[]',
+    compensation_milestones_json TEXT NOT NULL DEFAULT '[]',
+    gap_flags_json TEXT NOT NULL DEFAULT '[]',
+    synthesis_review_markdown TEXT,
+    body_markdown TEXT NOT NULL,
+    imported_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(employee_id, kpi_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_employee_kpi_snapshots_employee_recency
+    ON employee_kpi_snapshots(employee_id, source_last_modified_at DESC, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS identity_map (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,
@@ -120,6 +152,95 @@ CREATE TABLE IF NOT EXISTS teamforge_project_artifacts (
 
 CREATE INDEX IF NOT EXISTS idx_teamforge_project_artifacts_project
     ON teamforge_project_artifacts(project_id, artifact_type, title);
+
+CREATE TABLE IF NOT EXISTS teamforge_client_profiles (
+    workspace_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    client_name TEXT NOT NULL,
+    engagement_model TEXT,
+    industry TEXT,
+    primary_contact TEXT,
+    project_ids_json TEXT NOT NULL DEFAULT '[]',
+    stakeholders_json TEXT NOT NULL DEFAULT '[]',
+    strategic_fit_json TEXT NOT NULL DEFAULT '[]',
+    risks_json TEXT NOT NULL DEFAULT '[]',
+    resource_links_json TEXT NOT NULL DEFAULT '[]',
+    active INTEGER NOT NULL DEFAULT 1,
+    onboarded TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (workspace_id, client_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_teamforge_client_profiles_name
+    ON teamforge_client_profiles(workspace_id, client_name);
+
+CREATE TABLE IF NOT EXISTS teamforge_onboarding_flows (
+    workspace_id TEXT NOT NULL,
+    flow_id TEXT NOT NULL,
+    audience TEXT NOT NULL,
+    status TEXT NOT NULL,
+    owner TEXT,
+    starts_on TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    subject_name TEXT NOT NULL,
+    primary_contact TEXT,
+    manager TEXT,
+    department TEXT,
+    joined_on TEXT,
+    source TEXT NOT NULL DEFAULT 'vault',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (workspace_id, flow_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_teamforge_onboarding_flows_audience
+    ON teamforge_onboarding_flows(workspace_id, audience, status);
+
+CREATE TABLE IF NOT EXISTS teamforge_onboarding_tasks (
+    workspace_id TEXT NOT NULL,
+    flow_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    title TEXT NOT NULL,
+    completed INTEGER NOT NULL DEFAULT 0,
+    completed_at TEXT,
+    resource_created TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (workspace_id, flow_id, task_id),
+    FOREIGN KEY (workspace_id, flow_id)
+      REFERENCES teamforge_onboarding_flows(workspace_id, flow_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_teamforge_onboarding_tasks_flow
+    ON teamforge_onboarding_tasks(workspace_id, flow_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS teamforge_active_project_issues (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    project_id TEXT,
+    project_name TEXT NOT NULL,
+    client_name TEXT,
+    repo TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    state TEXT NOT NULL,
+    url TEXT NOT NULL,
+    milestone_number INTEGER,
+    labels_json TEXT NOT NULL DEFAULT '[]',
+    assignees_json TEXT NOT NULL DEFAULT '[]',
+    priority TEXT,
+    track TEXT,
+    created_at TEXT,
+    updated_at TEXT,
+    closed_at TEXT,
+    last_synced_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_teamforge_active_project_issues_project
+    ON teamforge_active_project_issues(project_name, state, updated_at);
 
 CREATE TABLE IF NOT EXISTS github_milestones (
     repo TEXT NOT NULL,
@@ -276,6 +397,7 @@ CREATE TABLE IF NOT EXISTS slack_message_activity (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     message_key TEXT NOT NULL UNIQUE,
     slack_channel_id TEXT NOT NULL,
+    slack_channel_name TEXT,
     slack_user_id TEXT,
     employee_id TEXT REFERENCES employees(id),
     message_ts TEXT NOT NULL,

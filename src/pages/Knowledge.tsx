@@ -69,6 +69,7 @@ function Knowledge() {
   const api = useInvoke();
   const [articles, setArticles] = useState<KnowledgeArticleView[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState<string>("All");
   const [activeTags, setActiveTags] = useState<Set<string>>(new Set());
@@ -78,8 +79,11 @@ function Knowledge() {
     try {
       const data = await api.getKnowledgeArticles();
       setArticles(data);
+      setLoadError(null);
     } catch {
-      // data may not exist yet
+      setLoadError(
+        "COULD NOT LOAD KNOWLEDGE ARTICLES. VERIFY HULY DOCUMENT ACCESS AND LOCAL CACHE STATE.",
+      );
     } finally {
       setLoading(false);
     }
@@ -207,9 +211,17 @@ function Knowledge() {
       )}
 
       {/* Article list */}
-      {filtered.length === 0 ? (
+      {loadError ? (
         <div style={styles.card}>
-          <p style={styles.emptyText}>NO ARTICLES FOUND. ADD KNOWLEDGE BASE ENTRIES FIRST.</p>
+          <p style={styles.emptyText}>{loadError}</p>
+        </div>
+      ) : articles.length === 0 ? (
+        <div style={styles.card}>
+          <p style={styles.emptyText}>NO KNOWLEDGE ARTICLES FOUND IN HULY OR THE LOCAL CACHE.</p>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div style={styles.card}>
+          <p style={styles.emptyText}>NO ARTICLES MATCH THE CURRENT SEARCH OR FILTERS.</p>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>

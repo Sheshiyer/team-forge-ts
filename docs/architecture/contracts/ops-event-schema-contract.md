@@ -10,6 +10,20 @@ Define the canonical event envelope shared between TeamForge and Paperclip so in
 - Owned by TeamForge runtime.
 - Consumers (Paperclip and downstream agents) must treat unknown versions as incompatible and skip safely.
 
+## Backward Compatibility Strategy
+
+- `ops_event/v1` is stable at the envelope level:
+  - `sync_key`
+  - `schema_version`
+  - source/entity/actor identity fields
+  - `occurred_at`
+  - `severity`
+  - `payload_json`
+  - `detected_at`
+- Additive changes inside `payload_json` or new event types are allowed within `v1` as long as the envelope and `sync_key` rules remain unchanged.
+- Any breaking change to envelope semantics, `sync_key` composition, or consumer interpretation requires a new schema version such as `ops_event/v2`.
+- Consumers must ignore unknown payload fields and must never infer `v2` semantics from a `v1` event.
+
 ## SQLite Canonical Table
 
 TeamForge persists the contract in `ops_events`:
@@ -53,6 +67,19 @@ TeamForge persists the contract in `ops_events`:
   - empty optional segment becomes `na`
 
 This is the idempotency key for downstream task creation and alerting.
+
+## Collision Handling Strategy
+
+- TeamForge enforces `UNIQUE(sync_key)` in SQLite, so duplicate upstream observations collapse to a single canonical `ops_events` row.
+- A repeated upstream event with the same normalized identity segments is treated as the same event, not as a new event instance.
+- Distinct events must differ in at least one canonical segment:
+  - `event_type`
+  - `entity_type`
+  - `entity_id`
+  - actor identity
+  - `occurred_at`
+- If two legitimately distinct upstream records would otherwise collide, TeamForge must fix the producer mapping so one of the canonical segments changes before emission. Consumers should not invent post-hoc collision suffixes.
+- Determinism and occurrence-sensitive changes are covered by the `build_sync_key` tests in [src-tauri/src/ops/mod.rs](/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/team-forge-ts/src-tauri/src/ops/mod.rs).
 
 ## v1 Event Types Emitted Today
 

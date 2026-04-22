@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Routes, Route, NavLink, useNavigate } from "react-router-dom";
+import { Routes, Route, NavLink, Navigate, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
@@ -16,7 +16,7 @@ import Activity from "./pages/Activity";
 import Live from "./pages/Live";
 import Settings from "./pages/Settings";
 import Clients from "./pages/Clients";
-import Devices from "./pages/Devices";
+import Issues from "./pages/Issues";
 import Knowledge from "./pages/Knowledge";
 import Onboarding from "./pages/Onboarding";
 import Planner from "./pages/Planner";
@@ -53,7 +53,7 @@ const navSections = [
     color: "var(--lcars-cyan)",
     items: [
       { path: "/clients", label: "Clients" },
-      { path: "/devices", label: "Devices" },
+      { path: "/issues", label: "Issues" },
       { path: "/knowledge", label: "Knowledge" },
       { path: "/onboarding", label: "Onboarding" },
       { path: "/planner", label: "Planner" },
@@ -454,7 +454,8 @@ function App() {
         <Route path="/comms" element={<Comms />} />
             <Route path="/boards" element={<Boards />} />
             <Route path="/clients" element={<Clients />} />
-            <Route path="/devices" element={<Devices />} />
+            <Route path="/issues" element={<Issues />} />
+            <Route path="/devices" element={<Navigate to="/issues" replace />} />
             <Route path="/knowledge" element={<Knowledge />} />
             <Route path="/onboarding" element={<Onboarding />} />
             <Route path="/planner" element={<Planner />} />

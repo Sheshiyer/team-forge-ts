@@ -19,6 +19,36 @@ pub struct Employee {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
+pub struct EmployeeKpiSnapshotRow {
+    pub id: String,
+    pub employee_id: String,
+    pub member_id: String,
+    pub title: String,
+    pub role_template: Option<String>,
+    pub role_template_file: Option<String>,
+    pub kpi_version: String,
+    pub last_reviewed: Option<String>,
+    pub reports_to: Option<String>,
+    pub tags_json: String,
+    pub source_file_path: String,
+    pub source_relative_path: String,
+    pub source_last_modified_at: String,
+    pub role_scope_markdown: Option<String>,
+    pub monthly_kpis_json: String,
+    pub quarterly_milestones_json: String,
+    pub yearly_milestones_json: String,
+    pub cross_role_dependencies_json: String,
+    pub evidence_sources_json: String,
+    pub compensation_milestones_json: String,
+    pub gap_flags_json: String,
+    pub synthesis_review_markdown: Option<String>,
+    pub body_markdown: String,
+    pub imported_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
 pub struct IdentityMapEntry {
     pub id: Option<i64>,
     pub source: String,
@@ -120,6 +150,140 @@ pub struct TeamforgeProjectArtifact {
     pub is_primary: bool,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeClientProfileCache {
+    pub workspace_id: String,
+    pub client_id: String,
+    pub client_name: String,
+    pub engagement_model: Option<String>,
+    pub industry: Option<String>,
+    pub primary_contact: Option<String>,
+    pub project_ids_json: String,
+    pub stakeholders_json: String,
+    pub strategic_fit_json: String,
+    pub risks_json: String,
+    pub resource_links_json: String,
+    pub active: bool,
+    pub onboarded: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeClientProfileView {
+    pub workspace_id: String,
+    pub client_id: String,
+    pub client_name: String,
+    pub engagement_model: Option<String>,
+    pub industry: Option<String>,
+    pub primary_contact: Option<String>,
+    pub project_ids: Vec<String>,
+    pub stakeholders: Vec<String>,
+    pub strategic_fit: Vec<String>,
+    pub risks: Vec<String>,
+    pub resource_links: Vec<String>,
+    pub active: bool,
+    pub onboarded: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub profile_completeness: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeOnboardingFlowCache {
+    pub workspace_id: String,
+    pub flow_id: String,
+    pub audience: String,
+    pub status: String,
+    pub owner: Option<String>,
+    pub starts_on: String,
+    pub subject_id: String,
+    pub subject_name: String,
+    pub primary_contact: Option<String>,
+    pub manager: Option<String>,
+    pub department: Option<String>,
+    pub joined_on: Option<String>,
+    pub source: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeOnboardingTaskCache {
+    pub workspace_id: String,
+    pub flow_id: String,
+    pub task_id: String,
+    pub sort_order: i64,
+    pub title: String,
+    pub completed: bool,
+    pub completed_at: Option<String>,
+    pub resource_created: Option<String>,
+    pub notes: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeOnboardingTaskView {
+    pub task_id: String,
+    pub sort_order: i64,
+    pub title: String,
+    pub completed: bool,
+    pub completed_at: Option<String>,
+    pub resource_created: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeOnboardingFlowDetail {
+    pub workspace_id: String,
+    pub flow_id: String,
+    pub audience: String,
+    pub status: String,
+    pub owner: Option<String>,
+    pub starts_on: String,
+    pub subject_id: String,
+    pub subject_name: String,
+    pub primary_contact: Option<String>,
+    pub manager: Option<String>,
+    pub department: Option<String>,
+    pub joined_on: Option<String>,
+    pub source: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub tasks: Vec<TeamforgeOnboardingTaskView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeActiveProjectIssueCache {
+    pub id: String,
+    pub workspace_id: String,
+    pub project_id: Option<String>,
+    pub project_name: String,
+    pub client_name: Option<String>,
+    pub repo: String,
+    pub number: i64,
+    pub title: String,
+    pub state: String,
+    pub url: String,
+    pub milestone_number: Option<i64>,
+    pub labels_json: String,
+    pub assignees_json: String,
+    pub priority: Option<String>,
+    pub track: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub closed_at: Option<String>,
+    pub last_synced_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -257,6 +421,7 @@ pub struct SlackMessageActivity {
     pub id: Option<i64>,
     pub message_key: String,
     pub slack_channel_id: String,
+    pub slack_channel_name: Option<String>,
     pub slack_user_id: Option<String>,
     pub employee_id: Option<String>,
     pub message_ts: String,
@@ -416,6 +581,7 @@ pub struct TeamforgeProjectGraph {
     pub github_repos: Vec<TeamforgeProjectGithubRepoLink>,
     pub huly_links: Vec<TeamforgeProjectHulyLink>,
     pub artifacts: Vec<TeamforgeProjectArtifact>,
+    pub client_profile: Option<TeamforgeClientProfileView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -568,6 +734,13 @@ pub struct ExecutionProjectView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExecutionProjectsResponse {
+    pub projects: Vec<ExecutionProjectView>,
+    pub source_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectCatalogItem {
     pub id: String,
     pub name: String,
@@ -715,10 +888,12 @@ pub struct OrgChartView {
 pub struct TeamSnapshotView {
     pub departments: Vec<DepartmentView>,
     pub org_chart: Option<OrgChartView>,
+    pub vault_profiles: Vec<VaultTeamProfileView>,
     pub leaves: Vec<LeaveView>,
     pub holidays: Vec<HolidayView>,
     pub cache_updated_at: Option<String>,
     pub huly_error: Option<String>,
+    pub vault_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -822,6 +997,68 @@ pub struct EmployeeScheduleEventView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EmployeeKpiSnapshotView {
+    pub id: String,
+    pub employee_id: String,
+    pub member_id: String,
+    pub title: String,
+    pub role_template: Option<String>,
+    pub role_template_file: Option<String>,
+    pub kpi_version: String,
+    pub last_reviewed: Option<String>,
+    pub reports_to: Option<String>,
+    pub tags: Vec<String>,
+    pub source_file_path: String,
+    pub source_relative_path: String,
+    pub source_last_modified_at: String,
+    pub role_scope_markdown: Option<String>,
+    pub monthly_kpis: Vec<String>,
+    pub quarterly_milestones: Vec<String>,
+    pub yearly_milestones: Vec<String>,
+    pub cross_role_dependencies: Vec<String>,
+    pub evidence_sources: Vec<String>,
+    pub compensation_milestones: Vec<String>,
+    pub gap_flags: Vec<String>,
+    pub synthesis_review_markdown: Option<String>,
+    pub body_markdown: String,
+    pub imported_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultTeamProfileView {
+    pub member_id: String,
+    pub employee_id: Option<String>,
+    pub display_name: String,
+    pub role: Option<String>,
+    pub role_template: Option<String>,
+    pub department: Option<String>,
+    pub primary_projects: Vec<String>,
+    pub scope: Vec<String>,
+    pub team_tags: Vec<String>,
+    pub onboarding_stage: Vec<String>,
+    pub active: bool,
+    pub hired_status: Option<String>,
+    pub clockify_status: Option<String>,
+    pub probation: Option<String>,
+    pub joined: Option<String>,
+    pub contract_effective: Option<String>,
+    pub contact_email: Option<String>,
+    pub contact_location: Option<String>,
+    pub signed_contract_on_file: Option<String>,
+    pub source: Option<String>,
+    pub source_url: Option<String>,
+    pub imported_at: Option<String>,
+    pub summary_markdown: Option<String>,
+    pub role_scope_markdown: Option<String>,
+    pub source_file_path: String,
+    pub source_relative_path: String,
+    pub source_last_modified_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EmployeeSummaryView {
     pub employee: Employee,
     pub department_names: Vec<String>,
@@ -837,4 +1074,6 @@ pub struct EmployeeSummaryView {
     pub current_leave: Option<LeaveView>,
     pub upcoming_leaves: Vec<LeaveView>,
     pub upcoming_events: Vec<EmployeeScheduleEventView>,
+    pub vault_profile: Option<VaultTeamProfileView>,
+    pub kpi_snapshot: Option<EmployeeKpiSnapshotView>,
 }

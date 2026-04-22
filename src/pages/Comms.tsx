@@ -58,20 +58,36 @@ function Comms() {
   const [chatActivity, setChatActivity] = useState<ChatActivityView[]>([]);
   const [meetingLoad, setMeetingLoad] = useState<MeetingLoadView[]>([]);
   const [loading, setLoading] = useState(true);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [meetingError, setMeetingError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    try {
-      const [chat, meetings] = await Promise.all([
-        api.getChatActivity(),
-        api.getMeetingLoad(),
-      ]);
-      setChatActivity([...chat].sort((a, b) => b.messageCount - a.messageCount));
-      setMeetingLoad(meetings);
-    } catch {
-      // data may not exist yet
-    } finally {
-      setLoading(false);
+    const [chat, meetings] = await Promise.allSettled([
+      api.getChatActivity(),
+      api.getMeetingLoad(),
+    ]);
+
+    if (chat.status === "fulfilled") {
+      setChatActivity([...chat.value].sort((a, b) => b.messageCount - a.messageCount));
+      setChatError(null);
+    } else {
+      setChatActivity([]);
+      setChatError(
+        "CHAT ACTIVITY COULD NOT LOAD. VERIFY SLACK AND HULY MESSAGE SYNC STATE.",
+      );
     }
+
+    if (meetings.status === "fulfilled") {
+      setMeetingLoad(meetings.value);
+      setMeetingError(null);
+    } else {
+      setMeetingLoad([]);
+      setMeetingError(
+        "MEETING LOAD COULD NOT LOAD. VERIFY CALENDAR AND TIME-TRACKING SOURCE DATA.",
+      );
+    }
+
+    setLoading(false);
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -102,7 +118,9 @@ function Comms() {
       <div style={styles.card}>
         <h2 style={styles.sectionTitle}>CHAT ACTIVITY (LAST 7 DAYS)</h2>
         <div style={styles.sectionDivider} />
-        {chatActivity.length === 0 ? (
+        {chatError ? (
+          <p style={styles.emptyText}>{chatError}</p>
+        ) : chatActivity.length === 0 ? (
           <p style={styles.emptyText}>NO CHAT ACTIVITY DATA AVAILABLE</p>
         ) : (
           <table style={styles.table}>
@@ -188,7 +206,9 @@ function Comms() {
       <div style={styles.card}>
         <h2 style={styles.sectionTitle}>MEETING LOAD (THIS WEEK)</h2>
         <div style={styles.sectionDivider} />
-        {meetingLoad.length === 0 ? (
+        {meetingError ? (
+          <p style={styles.emptyText}>{meetingError}</p>
+        ) : meetingLoad.length === 0 ? (
           <p style={styles.emptyText}>NO MEETING DATA AVAILABLE</p>
         ) : (
           <table style={styles.table}>

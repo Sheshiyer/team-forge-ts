@@ -1,14 +1,22 @@
 import type { Env } from "../lib/env";
+import { requireBearerAuth } from "../lib/auth";
 import { jsonNotImplemented, jsonOk } from "../lib/response";
+import { handleAgentFeedExport, handleProjectCloseout, handleProjectScaffold } from "./agent-feed";
 import { handleGetConnections, handleTestConnection } from "./connections";
 import { handleGetCredentials } from "./credentials";
 import { handleGetNormalizationHistory, handleNormalizationApply, handleNormalizationPreview } from "./normalization";
 import { handleOtaCheck, handleOtaInstallEvent } from "./ota";
 import {
+  handleGetClientProfile,
+  handleGetClientProfiles,
+  handleGetOnboardingFlows,
   handleGetProjectControlPlane,
+  handleGetProjectMappingIssues,
   handleGetProjectMappings,
   handleGetProjects,
   handlePostProjectAction,
+  handlePutClientProfile,
+  handlePutOnboardingFlows,
   handlePutProject,
   handlePutProjectMappings,
 } from "./projects";
@@ -22,6 +30,24 @@ interface DatabaseStatus {
 
 export async function handleV1Request(request: Request, env: Env, url: URL): Promise<Response> {
   const { method, pathname } = { method: request.method, pathname: url.pathname };
+
+  // Agent feed (Paperclip bridge) — auth required, shared HMAC secret
+  if (method === "GET" && pathname === "/v1/agent-feed/export") {
+    const authFailure = requireBearerAuth(request, env.TF_WEBHOOK_HMAC_SECRET, "internal");
+    if (authFailure) return authFailure;
+    return handleAgentFeedExport(env);
+  }
+  if (method === "POST" && pathname === "/v1/projects/scaffold") {
+    const authFailure = requireBearerAuth(request, env.TF_WEBHOOK_HMAC_SECRET, "internal");
+    if (authFailure) return authFailure;
+    return handleProjectScaffold(env, request);
+  }
+  const closeoutMatch = pathname.match(/^\/v1\/projects\/([^/]+)\/closeout$/);
+  if (method === "GET" && closeoutMatch) {
+    const authFailure = requireBearerAuth(request, env.TF_WEBHOOK_HMAC_SECRET, "internal");
+    if (authFailure) return authFailure;
+    return handleProjectCloseout(env, closeoutMatch[1]);
+  }
 
   // Bootstrap & config
   if (method === "GET" && pathname === "/v1/bootstrap") {
@@ -50,10 +76,33 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   if (method === "PUT" && projectMatch) {
     return handlePutProject(env, projectMatch[1], request);
   }
+  if (method === "GET" && pathname === "/v1/client-profiles") {
+    return handleGetClientProfiles(env, url);
+  }
+  const clientProfileMatch = pathname.match(/^\/v1\/client-profiles\/([^/]+)$/);
+  if (method === "GET" && clientProfileMatch) {
+    return handleGetClientProfile(env, clientProfileMatch[1], url);
+  }
+  if (method === "PUT" && clientProfileMatch) {
+    const authFailure = requireBearerAuth(request, env.TF_WEBHOOK_HMAC_SECRET, "internal");
+    if (authFailure) return authFailure;
+    return handlePutClientProfile(env, clientProfileMatch[1], request);
+  }
+  if (method === "GET" && pathname === "/v1/onboarding-flows") {
+    return handleGetOnboardingFlows(env, url);
+  }
+  if (method === "PUT" && pathname === "/v1/onboarding-flows") {
+    const authFailure = requireBearerAuth(request, env.TF_WEBHOOK_HMAC_SECRET, "internal");
+    if (authFailure) return authFailure;
+    return handlePutOnboardingFlows(env, request);
+  }
 
   // Project mappings — alias to projects with mapping context
   if (method === "GET" && pathname === "/v1/project-mappings") {
     return handleGetProjectMappings(env, url);
+  }
+  if (method === "GET" && pathname === "/v1/project-mappings/issues") {
+    return handleGetProjectMappingIssues(env, url);
   }
   const mappingMatch = pathname.match(/^\/v1\/project-mappings\/([^/]+)$/);
   if (method === "PUT" && mappingMatch) {
@@ -132,6 +181,8 @@ async function buildBootstrapPayload(env: Env): Promise<Record<string, unknown>>
       bootstrap: "live",
       remoteConfig: "live",
       projects: "live",
+      clientProfiles: "live",
+      onboardingFlows: "live",
       projectMappings: "live",
       connections: "live",
       sync: "live",

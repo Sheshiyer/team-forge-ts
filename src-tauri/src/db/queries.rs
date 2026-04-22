@@ -22,6 +22,7 @@ pub async fn init_db(app_data_dir: &Path) -> Result<SqlitePool, sqlx::Error> {
         .await?;
     ensure_identity_map_columns(&pool).await?;
     ensure_github_repo_config_columns(&pool).await?;
+    ensure_slack_message_activity_columns(&pool).await?;
 
     Ok(pool)
 }
@@ -54,6 +55,86 @@ async fn ensure_github_repo_config_columns(pool: &SqlitePool) -> Result<(), sqlx
     Ok(())
 }
 
+async fn ensure_slack_message_activity_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    for statement in ["ALTER TABLE slack_message_activity ADD COLUMN slack_channel_name TEXT"] {
+        if let Err(error) = sqlx::query(statement).execute(pool).await {
+            let message = error.to_string().to_lowercase();
+            if !message.contains("duplicate column name") {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn serialize_string_list(values: &[String]) -> String {
+    serde_json::to_string(values).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn deserialize_string_list(value: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(value)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+fn calculate_client_profile_completeness(profile: &TeamforgeClientProfileView) -> f64 {
+    let fields = [
+        profile.engagement_model.is_some(),
+        profile.industry.is_some(),
+        profile.primary_contact.is_some(),
+        profile.onboarded.is_some(),
+        !profile.project_ids.is_empty(),
+        !profile.stakeholders.is_empty(),
+        !profile.strategic_fit.is_empty(),
+        !profile.risks.is_empty(),
+        !profile.resource_links.is_empty(),
+    ];
+    let completed = fields.into_iter().filter(|value| *value).count() as f64;
+    (completed / 9.0) * 100.0
+}
+
+fn map_teamforge_client_profile_cache(
+    row: TeamforgeClientProfileCache,
+) -> TeamforgeClientProfileView {
+    let mut profile = TeamforgeClientProfileView {
+        workspace_id: row.workspace_id,
+        client_id: row.client_id,
+        client_name: row.client_name,
+        engagement_model: row.engagement_model,
+        industry: row.industry,
+        primary_contact: row.primary_contact,
+        project_ids: deserialize_string_list(&row.project_ids_json),
+        stakeholders: deserialize_string_list(&row.stakeholders_json),
+        strategic_fit: deserialize_string_list(&row.strategic_fit_json),
+        risks: deserialize_string_list(&row.risks_json),
+        resource_links: deserialize_string_list(&row.resource_links_json),
+        active: row.active,
+        onboarded: row.onboarded,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        profile_completeness: 0.0,
+    };
+    profile.profile_completeness = calculate_client_profile_completeness(&profile);
+    profile
+}
+
+fn map_teamforge_onboarding_task_cache(
+    row: TeamforgeOnboardingTaskCache,
+) -> TeamforgeOnboardingTaskView {
+    TeamforgeOnboardingTaskView {
+        task_id: row.task_id,
+        sort_order: row.sort_order,
+        title: row.title,
+        completed: row.completed,
+        completed_at: row.completed_at,
+        resource_created: row.resource_created,
+        notes: row.notes,
+    }
+}
+
 // ─── Employees ───────────────────────────────────────────────────
 
 pub async fn get_employees(pool: &SqlitePool) -> Result<Vec<Employee>, sqlx::Error> {
@@ -70,6 +151,114 @@ pub async fn get_employee_by_id(
         .bind(employee_id)
         .fetch_optional(pool)
         .await
+}
+
+pub async fn upsert_employee_kpi_snapshot(
+    pool: &SqlitePool,
+    snapshot: &EmployeeKpiSnapshotRow,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO employee_kpi_snapshots (
+            id,
+            employee_id,
+            member_id,
+            title,
+            role_template,
+            role_template_file,
+            kpi_version,
+            last_reviewed,
+            reports_to,
+            tags_json,
+            source_file_path,
+            source_relative_path,
+            source_last_modified_at,
+            role_scope_markdown,
+            monthly_kpis_json,
+            quarterly_milestones_json,
+            yearly_milestones_json,
+            cross_role_dependencies_json,
+            evidence_sources_json,
+            compensation_milestones_json,
+            gap_flags_json,
+            synthesis_review_markdown,
+            body_markdown,
+            imported_at,
+            updated_at
+        )
+        VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+            ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
+            ?21, ?22, ?23, ?24, ?25
+        )
+        ON CONFLICT(employee_id, kpi_version) DO UPDATE SET
+            id = excluded.id,
+            member_id = excluded.member_id,
+            title = excluded.title,
+            role_template = excluded.role_template,
+            role_template_file = excluded.role_template_file,
+            last_reviewed = excluded.last_reviewed,
+            reports_to = excluded.reports_to,
+            tags_json = excluded.tags_json,
+            source_file_path = excluded.source_file_path,
+            source_relative_path = excluded.source_relative_path,
+            source_last_modified_at = excluded.source_last_modified_at,
+            role_scope_markdown = excluded.role_scope_markdown,
+            monthly_kpis_json = excluded.monthly_kpis_json,
+            quarterly_milestones_json = excluded.quarterly_milestones_json,
+            yearly_milestones_json = excluded.yearly_milestones_json,
+            cross_role_dependencies_json = excluded.cross_role_dependencies_json,
+            evidence_sources_json = excluded.evidence_sources_json,
+            compensation_milestones_json = excluded.compensation_milestones_json,
+            gap_flags_json = excluded.gap_flags_json,
+            synthesis_review_markdown = excluded.synthesis_review_markdown,
+            body_markdown = excluded.body_markdown,
+            imported_at = excluded.imported_at,
+            updated_at = datetime('now')",
+    )
+    .bind(&snapshot.id)
+    .bind(&snapshot.employee_id)
+    .bind(&snapshot.member_id)
+    .bind(&snapshot.title)
+    .bind(&snapshot.role_template)
+    .bind(&snapshot.role_template_file)
+    .bind(&snapshot.kpi_version)
+    .bind(&snapshot.last_reviewed)
+    .bind(&snapshot.reports_to)
+    .bind(&snapshot.tags_json)
+    .bind(&snapshot.source_file_path)
+    .bind(&snapshot.source_relative_path)
+    .bind(&snapshot.source_last_modified_at)
+    .bind(&snapshot.role_scope_markdown)
+    .bind(&snapshot.monthly_kpis_json)
+    .bind(&snapshot.quarterly_milestones_json)
+    .bind(&snapshot.yearly_milestones_json)
+    .bind(&snapshot.cross_role_dependencies_json)
+    .bind(&snapshot.evidence_sources_json)
+    .bind(&snapshot.compensation_milestones_json)
+    .bind(&snapshot.gap_flags_json)
+    .bind(&snapshot.synthesis_review_markdown)
+    .bind(&snapshot.body_markdown)
+    .bind(&snapshot.imported_at)
+    .bind(&snapshot.updated_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_latest_employee_kpi_snapshot(
+    pool: &SqlitePool,
+    employee_id: &str,
+) -> Result<Option<EmployeeKpiSnapshotRow>, sqlx::Error> {
+    sqlx::query_as::<_, EmployeeKpiSnapshotRow>(
+        "SELECT *
+         FROM employee_kpi_snapshots
+         WHERE employee_id = ?1
+         ORDER BY source_last_modified_at DESC, updated_at DESC
+         LIMIT 1",
+    )
+    .bind(employee_id)
+    .fetch_optional(pool)
+    .await
 }
 
 pub async fn set_employee_active(
@@ -659,6 +848,7 @@ pub async fn get_teamforge_project_graphs(
                 github_repos: github_by_project.remove(&project_id).unwrap_or_default(),
                 huly_links: huly_by_project.remove(&project_id).unwrap_or_default(),
                 artifacts: artifacts_by_project.remove(&project_id).unwrap_or_default(),
+                client_profile: None,
             }
         })
         .collect())
@@ -675,15 +865,16 @@ pub async fn replace_teamforge_project_graph_projection(
         return Ok(());
     }
 
-    let project_ids: Vec<String> = graphs.iter().map(|graph| graph.project.id.clone()).collect();
+    let project_ids: Vec<String> = graphs
+        .iter()
+        .map(|graph| graph.project.id.clone())
+        .collect();
     let placeholders = project_ids
         .iter()
         .map(|_| "?")
         .collect::<Vec<_>>()
         .join(", ");
-    let delete_sql = format!(
-        "DELETE FROM teamforge_projects WHERE id NOT IN ({placeholders})"
-    );
+    let delete_sql = format!("DELETE FROM teamforge_projects WHERE id NOT IN ({placeholders})");
     let mut delete_query = sqlx::query(&delete_sql);
     for project_id in &project_ids {
         delete_query = delete_query.bind(project_id);
@@ -695,6 +886,374 @@ pub async fn replace_teamforge_project_graph_projection(
     }
 
     Ok(())
+}
+
+pub async fn upsert_teamforge_client_profile_projection(
+    pool: &SqlitePool,
+    profile: &TeamforgeClientProfileView,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO teamforge_client_profiles (
+            workspace_id,
+            client_id,
+            client_name,
+            engagement_model,
+            industry,
+            primary_contact,
+            project_ids_json,
+            stakeholders_json,
+            strategic_fit_json,
+            risks_json,
+            resource_links_json,
+            active,
+            onboarded,
+            created_at,
+            updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+        ON CONFLICT(workspace_id, client_id) DO UPDATE SET
+          client_name = excluded.client_name,
+          engagement_model = excluded.engagement_model,
+          industry = excluded.industry,
+          primary_contact = excluded.primary_contact,
+          project_ids_json = excluded.project_ids_json,
+          stakeholders_json = excluded.stakeholders_json,
+          strategic_fit_json = excluded.strategic_fit_json,
+          risks_json = excluded.risks_json,
+          resource_links_json = excluded.resource_links_json,
+          active = excluded.active,
+          onboarded = excluded.onboarded,
+          updated_at = excluded.updated_at",
+    )
+    .bind(&profile.workspace_id)
+    .bind(&profile.client_id)
+    .bind(&profile.client_name)
+    .bind(&profile.engagement_model)
+    .bind(&profile.industry)
+    .bind(&profile.primary_contact)
+    .bind(serialize_string_list(&profile.project_ids))
+    .bind(serialize_string_list(&profile.stakeholders))
+    .bind(serialize_string_list(&profile.strategic_fit))
+    .bind(serialize_string_list(&profile.risks))
+    .bind(serialize_string_list(&profile.resource_links))
+    .bind(profile.active)
+    .bind(&profile.onboarded)
+    .bind(&profile.created_at)
+    .bind(&profile.updated_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn replace_teamforge_client_profile_projection(
+    pool: &SqlitePool,
+    profiles: &[TeamforgeClientProfileView],
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM teamforge_client_profiles")
+        .execute(&mut *tx)
+        .await?;
+    for profile in profiles {
+        sqlx::query(
+            "INSERT INTO teamforge_client_profiles (
+                workspace_id,
+                client_id,
+                client_name,
+                engagement_model,
+                industry,
+                primary_contact,
+                project_ids_json,
+                stakeholders_json,
+                strategic_fit_json,
+                risks_json,
+                resource_links_json,
+                active,
+                onboarded,
+                created_at,
+                updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        )
+        .bind(&profile.workspace_id)
+        .bind(&profile.client_id)
+        .bind(&profile.client_name)
+        .bind(&profile.engagement_model)
+        .bind(&profile.industry)
+        .bind(&profile.primary_contact)
+        .bind(serialize_string_list(&profile.project_ids))
+        .bind(serialize_string_list(&profile.stakeholders))
+        .bind(serialize_string_list(&profile.strategic_fit))
+        .bind(serialize_string_list(&profile.risks))
+        .bind(serialize_string_list(&profile.resource_links))
+        .bind(profile.active)
+        .bind(&profile.onboarded)
+        .bind(&profile.created_at)
+        .bind(&profile.updated_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn get_teamforge_client_profiles(
+    pool: &SqlitePool,
+) -> Result<Vec<TeamforgeClientProfileView>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, TeamforgeClientProfileCache>(
+        "SELECT * FROM teamforge_client_profiles
+         ORDER BY active DESC, client_name COLLATE NOCASE, client_id COLLATE NOCASE",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(map_teamforge_client_profile_cache)
+        .collect())
+}
+
+pub async fn get_teamforge_client_profile(
+    pool: &SqlitePool,
+    client_id: &str,
+) -> Result<Option<TeamforgeClientProfileView>, sqlx::Error> {
+    let row = sqlx::query_as::<_, TeamforgeClientProfileCache>(
+        "SELECT * FROM teamforge_client_profiles
+         WHERE client_id = ?1
+         ORDER BY updated_at DESC
+         LIMIT 1",
+    )
+    .bind(client_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(map_teamforge_client_profile_cache))
+}
+
+pub async fn replace_teamforge_onboarding_flow_projection(
+    pool: &SqlitePool,
+    flows: &[TeamforgeOnboardingFlowDetail],
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM teamforge_onboarding_tasks")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM teamforge_onboarding_flows")
+        .execute(&mut *tx)
+        .await?;
+    for flow in flows {
+        sqlx::query(
+            "INSERT INTO teamforge_onboarding_flows (
+                workspace_id,
+                flow_id,
+                audience,
+                status,
+                owner,
+                starts_on,
+                subject_id,
+                subject_name,
+                primary_contact,
+                manager,
+                department,
+                joined_on,
+                source,
+                created_at,
+                updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        )
+        .bind(&flow.workspace_id)
+        .bind(&flow.flow_id)
+        .bind(&flow.audience)
+        .bind(&flow.status)
+        .bind(&flow.owner)
+        .bind(&flow.starts_on)
+        .bind(&flow.subject_id)
+        .bind(&flow.subject_name)
+        .bind(&flow.primary_contact)
+        .bind(&flow.manager)
+        .bind(&flow.department)
+        .bind(&flow.joined_on)
+        .bind(&flow.source)
+        .bind(&flow.created_at)
+        .bind(&flow.updated_at)
+        .execute(&mut *tx)
+        .await?;
+
+        for task in &flow.tasks {
+            sqlx::query(
+                "INSERT INTO teamforge_onboarding_tasks (
+                    workspace_id,
+                    flow_id,
+                    task_id,
+                    sort_order,
+                    title,
+                    completed,
+                    completed_at,
+                    resource_created,
+                    notes,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            )
+            .bind(&flow.workspace_id)
+            .bind(&flow.flow_id)
+            .bind(&task.task_id)
+            .bind(task.sort_order)
+            .bind(&task.title)
+            .bind(task.completed)
+            .bind(&task.completed_at)
+            .bind(&task.resource_created)
+            .bind(&task.notes)
+            .bind(&flow.created_at)
+            .bind(&flow.updated_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn get_teamforge_onboarding_flows(
+    pool: &SqlitePool,
+    audience: Option<&str>,
+) -> Result<Vec<TeamforgeOnboardingFlowDetail>, sqlx::Error> {
+    let flow_rows = if let Some(audience) = audience {
+        sqlx::query_as::<_, TeamforgeOnboardingFlowCache>(
+            "SELECT * FROM teamforge_onboarding_flows
+             WHERE audience = ?1
+             ORDER BY starts_on DESC, flow_id COLLATE NOCASE",
+        )
+        .bind(audience)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, TeamforgeOnboardingFlowCache>(
+            "SELECT * FROM teamforge_onboarding_flows
+             ORDER BY starts_on DESC, flow_id COLLATE NOCASE",
+        )
+        .fetch_all(pool)
+        .await?
+    };
+
+    if flow_rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let task_rows = sqlx::query_as::<_, TeamforgeOnboardingTaskCache>(
+        "SELECT * FROM teamforge_onboarding_tasks
+         ORDER BY workspace_id, flow_id, sort_order, task_id COLLATE NOCASE",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut tasks_by_flow: HashMap<(String, String), Vec<TeamforgeOnboardingTaskView>> =
+        HashMap::new();
+    for task in task_rows {
+        tasks_by_flow
+            .entry((task.workspace_id.clone(), task.flow_id.clone()))
+            .or_default()
+            .push(map_teamforge_onboarding_task_cache(task));
+    }
+
+    Ok(flow_rows
+        .into_iter()
+        .map(|flow| TeamforgeOnboardingFlowDetail {
+            workspace_id: flow.workspace_id.clone(),
+            flow_id: flow.flow_id.clone(),
+            audience: flow.audience,
+            status: flow.status,
+            owner: flow.owner,
+            starts_on: flow.starts_on,
+            subject_id: flow.subject_id,
+            subject_name: flow.subject_name,
+            primary_contact: flow.primary_contact,
+            manager: flow.manager,
+            department: flow.department,
+            joined_on: flow.joined_on,
+            source: flow.source,
+            created_at: flow.created_at,
+            updated_at: flow.updated_at,
+            tasks: tasks_by_flow
+                .remove(&(flow.workspace_id, flow.flow_id))
+                .unwrap_or_default(),
+        })
+        .collect())
+}
+
+pub async fn replace_teamforge_active_project_issue_projection(
+    pool: &SqlitePool,
+    issues: &[TeamforgeActiveProjectIssueCache],
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM teamforge_active_project_issues")
+        .execute(&mut *tx)
+        .await?;
+
+    for issue in issues {
+        sqlx::query(
+            "INSERT INTO teamforge_active_project_issues (
+                id,
+                workspace_id,
+                project_id,
+                project_name,
+                client_name,
+                repo,
+                number,
+                title,
+                state,
+                url,
+                milestone_number,
+                labels_json,
+                assignees_json,
+                priority,
+                track,
+                created_at,
+                updated_at,
+                closed_at,
+                last_synced_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+        )
+        .bind(&issue.id)
+        .bind(&issue.workspace_id)
+        .bind(&issue.project_id)
+        .bind(&issue.project_name)
+        .bind(&issue.client_name)
+        .bind(&issue.repo)
+        .bind(issue.number)
+        .bind(&issue.title)
+        .bind(&issue.state)
+        .bind(&issue.url)
+        .bind(issue.milestone_number)
+        .bind(&issue.labels_json)
+        .bind(&issue.assignees_json)
+        .bind(&issue.priority)
+        .bind(&issue.track)
+        .bind(&issue.created_at)
+        .bind(&issue.updated_at)
+        .bind(&issue.closed_at)
+        .bind(&issue.last_synced_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn get_teamforge_active_project_issue_projection(
+    pool: &SqlitePool,
+) -> Result<Vec<TeamforgeActiveProjectIssueCache>, sqlx::Error> {
+    sqlx::query_as::<_, TeamforgeActiveProjectIssueCache>(
+        "SELECT * FROM teamforge_active_project_issues
+         ORDER BY
+           project_name COLLATE NOCASE,
+           CASE WHEN LOWER(state) = 'open' THEN 0 ELSE 1 END,
+           updated_at DESC,
+           number DESC",
+    )
+    .fetch_all(pool)
+    .await
 }
 
 // ─── GitHub Planning Cache ───────────────────────────────────────
@@ -1425,6 +1984,7 @@ pub async fn upsert_slack_message_activity(
         "INSERT INTO slack_message_activity (
             message_key,
             slack_channel_id,
+            slack_channel_name,
             slack_user_id,
             employee_id,
             message_ts,
@@ -1432,9 +1992,10 @@ pub async fn upsert_slack_message_activity(
             content_preview,
             detected_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
         ON CONFLICT(message_key) DO UPDATE SET
           slack_channel_id = excluded.slack_channel_id,
+          slack_channel_name = excluded.slack_channel_name,
           slack_user_id = excluded.slack_user_id,
           employee_id = excluded.employee_id,
           message_ts = excluded.message_ts,
@@ -1444,6 +2005,7 @@ pub async fn upsert_slack_message_activity(
     )
     .bind(&activity.message_key)
     .bind(&activity.slack_channel_id)
+    .bind(&activity.slack_channel_name)
     .bind(&activity.slack_user_id)
     .bind(&activity.employee_id)
     .bind(&activity.message_ts)
@@ -1465,6 +2027,25 @@ pub async fn get_slack_message_activity_since(
          WHERE message_ts_ms IS NOT NULL AND message_ts_ms >= ?1
          ORDER BY message_ts_ms DESC",
     )
+    .bind(since_ts_ms)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_slack_message_activity_for_employee_since(
+    pool: &SqlitePool,
+    employee_id: &str,
+    since_ts_ms: i64,
+) -> Result<Vec<SlackMessageActivity>, sqlx::Error> {
+    sqlx::query_as::<_, SlackMessageActivity>(
+        "SELECT *
+         FROM slack_message_activity
+         WHERE employee_id = ?1
+           AND message_ts_ms IS NOT NULL
+           AND message_ts_ms >= ?2
+         ORDER BY message_ts_ms DESC",
+    )
+    .bind(employee_id)
     .bind(since_ts_ms)
     .fetch_all(pool)
     .await
@@ -2098,6 +2679,7 @@ mod tests {
             id: None,
             message_key: "slack:C123:1744470000.123456".to_string(),
             slack_channel_id: "C123".to_string(),
+            slack_channel_name: Some("daily-standup".to_string()),
             slack_user_id: Some("U123".to_string()),
             employee_id: Some(employee.id.clone()),
             message_ts: "1744470000.123456".to_string(),
@@ -2127,6 +2709,17 @@ mod tests {
             .expect("load persisted slack activity");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].employee_id.as_deref(), Some(employee.id.as_str()));
+        assert_eq!(rows[0].slack_channel_name.as_deref(), Some("daily-standup"));
+
+        let employee_rows =
+            get_slack_message_activity_for_employee_since(&pool, &employee.id, 1_744_469_000_000)
+                .await
+                .expect("load employee slack activity");
+        assert_eq!(employee_rows.len(), 1);
+        assert_eq!(
+            employee_rows[0].slack_channel_name.as_deref(),
+            Some("daily-standup")
+        );
 
         pool.close().await;
         let _ = std::fs::remove_dir_all(dir);
@@ -2522,6 +3115,7 @@ mod tests {
                     updated_at: "2026-04-17T00:00:00Z".to_string(),
                 },
             ],
+            client_profile: None,
         };
 
         replace_teamforge_project_graph(&pool, &graph)
@@ -2540,7 +3134,10 @@ mod tests {
         assert_eq!(graph.artifacts.len(), 2);
         assert_eq!(graph.github_repos[0].repo, "Sheshiyer/parkarea-aleph");
         assert_eq!(graph.huly_links[0].huly_project_id, "huly-project-parkarea");
-        assert!(graph.artifacts.iter().any(|artifact| artifact.artifact_type == "prd"));
+        assert!(graph
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.artifact_type == "prd"));
 
         pool.close().await;
         let _ = std::fs::remove_dir_all(dir);
@@ -2596,6 +3193,7 @@ mod tests {
                 created_at: "2026-04-17T00:00:00Z".to_string(),
                 updated_at: "2026-04-17T00:00:00Z".to_string(),
             }],
+            client_profile: None,
         };
 
         replace_teamforge_project_graph(&pool, &graph)

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useInvoke } from "../hooks/useInvoke";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 import { SkeletonCard, SkeletonTable } from "../components/ui/Skeleton";
-import type { OnboardingFlowView } from "../lib/types";
+import type { OnboardingAudience, OnboardingFlowView } from "../lib/types";
 
 function MetricCard({
   label,
@@ -112,11 +112,13 @@ function TaskCheckItem({
   completed,
   completedAt,
   resourceCreated,
+  notes,
 }: {
   title: string;
   completed: boolean;
   completedAt: string | null;
   resourceCreated: string | null;
+  notes: string | null;
 }) {
   return (
     <div
@@ -184,12 +186,33 @@ function TaskCheckItem({
           {resourceCreated}
         </span>
       )}
+      {notes && (
+        <div
+          style={{
+            marginLeft: 24,
+            color: "var(--text-quaternary)",
+            fontSize: 10,
+            fontFamily: "'JetBrains Mono', monospace",
+            lineHeight: 1.4,
+          }}
+        >
+          {notes}
+        </div>
+      )}
     </div>
   );
 }
 
 function OnboardingCard({ flow }: { flow: OnboardingFlowView }) {
   const [expanded, setExpanded] = useState(false);
+  const subtitle =
+    flow.audience === "client"
+      ? flow.primaryContact
+        ? `PRIMARY CONTACT · ${flow.primaryContact}`
+        : flow.source === "heuristic"
+          ? "HEURISTIC FALLBACK"
+          : "NO PRIMARY CONTACT"
+      : [flow.department, flow.manager].filter(Boolean).join(" · ") || "EMPLOYEE FLOW";
 
   return (
     <div
@@ -223,7 +246,7 @@ function OnboardingCard({ flow }: { flow: OnboardingFlowView }) {
               marginBottom: 4,
             }}
           >
-            {flow.clientName}
+            {flow.subjectName}
           </div>
           <div
             style={{
@@ -232,10 +255,11 @@ function OnboardingCard({ flow }: { flow: OnboardingFlowView }) {
               fontFamily: "'JetBrains Mono', monospace",
             }}
           >
-            STARTED {formatDate(flow.startDate)}
+            {subtitle} · STARTED {formatDate(flow.startDate)}
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={styles.sourcePill}>{flow.source.toUpperCase()}</span>
           <div
             style={{
               fontFamily: "'JetBrains Mono', monospace",
@@ -302,6 +326,7 @@ function OnboardingCard({ flow }: { flow: OnboardingFlowView }) {
               completed={task.completed}
               completedAt={task.completedAt}
               resourceCreated={task.resourceCreated}
+              notes={task.notes}
             />
           ))}
         </div>
@@ -310,23 +335,22 @@ function OnboardingCard({ flow }: { flow: OnboardingFlowView }) {
   );
 }
 
-const SCENARIO_DEFS = [
-  { name: "New Client Onboarding", key: "onboarding" },
-  { name: "Daily Work Cycle", key: "daily" },
-  { name: "Sprint Planning", key: "sprint" },
-] as const;
-
 function Onboarding() {
   const api = useInvoke();
   const [flows, setFlows] = useState<OnboardingFlowView[]>([]);
+  const [tab, setTab] = useState<OnboardingAudience>("client");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const data = await api.getOnboardingFlows();
       setFlows(data);
+      setLoadError(null);
     } catch {
-      // data may not exist yet
+      setLoadError(
+        "COULD NOT LOAD ONBOARDING FLOWS. VERIFY THE TEAMFORGE CACHE OR WORKER ROUTES FOR CLIENT/EMPLOYEE ONBOARDING.",
+      );
     } finally {
       setLoading(false);
     }
@@ -353,140 +377,102 @@ function Onboarding() {
     );
   }
 
-  const active = flows.filter(
+  const visibleFlows = flows.filter((flow) => flow.audience === tab);
+  const active = visibleFlows.filter(
     (f) => f.status.toLowerCase() !== "completed"
   );
   const activeCount = active.length;
   const avgDays =
-    flows.length > 0
-      ? flows.reduce((sum, f) => sum + f.daysElapsed, 0) / flows.length
+    visibleFlows.length > 0
+      ? visibleFlows.reduce((sum, f) => sum + f.daysElapsed, 0) / visibleFlows.length
       : 0;
-  const totalTasks = flows.reduce((sum, f) => sum + f.totalTasks, 0);
-  const completedTasks = flows.reduce((sum, f) => sum + f.completedTasks, 0);
+  const totalTasks = visibleFlows.reduce((sum, f) => sum + f.totalTasks, 0);
+  const completedTasks = visibleFlows.reduce((sum, f) => sum + f.completedTasks, 0);
   const templateCompliance =
     totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
-
-  // Derive scenario compliance from flow data
-  const scenarioStats = SCENARIO_DEFS.map((s) => {
-    if (s.key === "onboarding") {
-      return {
-        ...s,
-        compliance: templateCompliance,
-        total: flows.length,
-        completed: flows.filter((f) => f.status.toLowerCase() === "completed")
-          .length,
-      };
-    }
-    // For non-onboarding scenarios, show aggregate task stats
-    return {
-      ...s,
-      compliance: templateCompliance,
-      total: totalTasks,
-      completed: completedTasks,
-    };
-  });
+  const vaultFlows = visibleFlows.filter((flow) => flow.source !== "heuristic").length;
+  const fallbackFlows = visibleFlows.filter((flow) => flow.source === "heuristic").length;
+  const heading = tab === "client" ? "CLIENT ONBOARDING" : "EMPLOYEE ONBOARDING";
 
   return (
     <div>
-      <h1 style={styles.pageTitle}>CLIENT ONBOARDING</h1>
+      <h1 style={styles.pageTitle}>{heading}</h1>
       <div style={styles.pageTitleBar} />
 
-      <div style={styles.metricsRow}>
-        <MetricCard
-          label="ACTIVE ONBOARDINGS"
-          value={String(activeCount)}
-          barColor="var(--lcars-orange)"
-        />
-        <MetricCard
-          label="AVG DAYS TO COMPLETE"
-          value={avgDays.toFixed(0)}
-          barColor="var(--lcars-cyan)"
-        />
-        <MetricCard
-          label="TEMPLATE COMPLIANCE"
-          value={`${templateCompliance.toFixed(0)}%`}
-          barColor="var(--lcars-green)"
-        />
+      <div style={styles.infoBanner}>
+        <div style={styles.infoBannerIcon}>◈</div>
+        <div style={styles.infoBannerText}>
+          {tab === "client"
+            ? "CLIENT ONBOARDING PREFERS CANONICAL VAULT NOTES AND FALLS BACK TO A CLEARLY-LABELED HEURISTIC VIEW WHEN NO CLIENT FLOW NOTE EXISTS."
+            : "EMPLOYEE ONBOARDING IS NOTE-DRIVEN ONLY. IF NO EMPLOYEE FLOW NOTE EXISTS, THIS TAB STAYS EMPTY RATHER THAN INFERRING PROGRESS FROM UNRELATED TELEMETRY."}
+        </div>
       </div>
+
+      <div style={styles.tabRow}>
+        <button
+          onClick={() => setTab("client")}
+          style={{
+            ...styles.tabButton,
+            ...(tab === "client" ? styles.tabButtonActive : null),
+          }}
+        >
+          CLIENT ONBOARDING
+        </button>
+        <button
+          onClick={() => setTab("employee")}
+          style={{
+            ...styles.tabButton,
+            ...(tab === "employee" ? styles.tabButtonActive : null),
+          }}
+        >
+          EMPLOYEE ONBOARDING
+        </button>
+      </div>
+
+      {!loadError && (
+        <div style={styles.metricsRow}>
+          <MetricCard
+            label="ACTIVE FLOWS"
+            value={String(activeCount)}
+            barColor="var(--lcars-orange)"
+          />
+          <MetricCard
+            label="AVG DAYS TO COMPLETE"
+            value={avgDays.toFixed(0)}
+            barColor="var(--lcars-cyan)"
+          />
+          <MetricCard
+            label="TASK COMPLETION"
+            value={`${templateCompliance.toFixed(0)}%`}
+            barColor="var(--lcars-green)"
+          />
+          <MetricCard
+            label="VAULT / FALLBACK"
+            value={`${vaultFlows}/${fallbackFlows}`}
+            barColor="var(--lcars-lavender)"
+          />
+        </div>
+      )}
 
       {/* Onboarding flow cards */}
       <div style={styles.card}>
         <h2 style={styles.sectionTitle}>ONBOARDING FLOWS</h2>
         <div style={styles.sectionDivider} />
-        {flows.length === 0 ? (
+        {loadError ? (
+          <p style={styles.emptyText}>{loadError}</p>
+        ) : visibleFlows.length === 0 ? (
           <p style={styles.emptyText}>
-            NO ONBOARDING FLOWS FOUND. SYNC DATA FIRST.
+            {tab === "client"
+              ? "NO CLIENT ONBOARDING FLOWS FOUND. ADD A `client-onboarding-flow` NOTE OR WAIT FOR A CLIENT FALLBACK FLOW TO APPEAR."
+              : "NO EMPLOYEE ONBOARDING FLOWS FOUND. ADD AN `employee-onboarding-flow` NOTE TO THE VAULT TO POPULATE THIS TAB."}
           </p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {flows.map((flow) => (
-              <OnboardingCard key={flow.clientId} flow={flow} />
+            {visibleFlows.map((flow) => (
+              <OnboardingCard key={flow.id} flow={flow} />
             ))}
           </div>
         )}
-      </div>
-
-      {/* Scenario tracking */}
-      <div style={styles.card}>
-        <h2 style={styles.sectionTitle}>SCENARIO TRACKING</h2>
-        <div style={styles.sectionDivider} />
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-            gap: 12,
-          }}
-        >
-          {scenarioStats.map((s) => (
-            <div
-              key={s.key}
-              style={{
-                ...lcarsPageStyles.subtleCard,
-                borderLeftColor: "var(--lcars-lavender)",
-                padding: 16,
-              }}
-            >
-              <div
-                style={{
-                  fontFamily: "'Orbitron', sans-serif",
-                  fontSize: 10,
-                  fontWeight: 600,
-                  color: "var(--lcars-orange)",
-                  letterSpacing: "1px",
-                  marginBottom: 8,
-                  textTransform: "uppercase" as const,
-                }}
-              >
-                {s.name}
-              </div>
-              <div
-                style={{
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: 22,
-                  fontWeight: 600,
-                  color:
-                    s.compliance >= 80
-                      ? "var(--lcars-green)"
-                      : s.compliance >= 50
-                        ? "var(--lcars-orange)"
-                        : "var(--lcars-red)",
-                  marginBottom: 4,
-                }}
-              >
-                {s.compliance.toFixed(0)}%
-              </div>
-              <div
-                style={{
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: 11,
-                  color: "var(--text-quaternary)",
-                }}
-              >
-                {s.completed}/{s.total} COMPLETED
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );
@@ -495,6 +481,26 @@ function Onboarding() {
 const styles: Record<string, React.CSSProperties> = {
   pageTitle: lcarsPageStyles.pageTitle,
   pageTitleBar: lcarsPageStyles.pageTitleBar,
+  tabRow: {
+    display: "flex",
+    gap: 10,
+    marginBottom: 16,
+  },
+  tabButton: {
+    background: "rgba(153, 153, 204, 0.08)",
+    border: "1px solid rgba(153, 153, 204, 0.22)",
+    color: "var(--lcars-lavender)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    letterSpacing: "1px",
+    padding: "8px 12px",
+    cursor: "pointer",
+  },
+  tabButtonActive: {
+    borderColor: "var(--lcars-orange)",
+    color: "var(--lcars-orange)",
+    boxShadow: "0 0 10px rgba(255, 153, 0, 0.14)",
+  },
   metricsRow: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
@@ -520,9 +526,46 @@ const styles: Record<string, React.CSSProperties> = {
     ...lcarsPageStyles.card,
     borderLeftColor: "var(--lcars-cyan)",
   },
+  infoBanner: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 12,
+    background: "rgba(0, 204, 255, 0.05)",
+    border: "1px solid rgba(0, 204, 255, 0.14)",
+    borderLeft: "6px solid var(--lcars-cyan)",
+    borderRadius: "0 18px 18px 0",
+    padding: "12px 16px",
+    marginBottom: 20,
+  },
+  infoBannerIcon: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 14,
+    color: "var(--lcars-cyan)",
+    lineHeight: 1,
+    marginTop: 1,
+  },
+  infoBannerText: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    fontWeight: 500,
+    color: "var(--lcars-cyan)",
+    letterSpacing: "1px",
+    lineHeight: 1.6,
+    textTransform: "uppercase" as const,
+  },
   sectionTitle: lcarsPageStyles.sectionTitle,
   sectionDivider: lcarsPageStyles.sectionDivider,
   emptyText: lcarsPageStyles.emptyText,
+  sourcePill: {
+    display: "inline-block",
+    padding: "2px 8px",
+    border: "1px solid rgba(153, 153, 204, 0.3)",
+    color: "var(--lcars-lavender)",
+    fontSize: 9,
+    fontFamily: "'Orbitron', sans-serif",
+    letterSpacing: "1px",
+    borderRadius: 2,
+  },
 };
 
 export default Onboarding;

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useInvoke } from "../hooks/useInvoke";
 import { SkeletonCard, SkeletonTable } from "../components/ui/Skeleton";
 import Avatar from "../components/ui/Avatar";
-import type { OverviewData, QuotaRow, DashboardRole } from "../lib/types";
+import type { OverviewData, QuotaRow } from "../lib/types";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 
 // ── ProgressRing ──────────────────────────────────────────────
@@ -60,57 +60,6 @@ function ProgressRing({
   );
 }
 
-// ── Sparkline ─────────────────────────────────────────────────
-
-function Sparkline({
-  data,
-  width = 80,
-  height = 24,
-  color = "var(--lcars-orange)",
-}: {
-  data: number[];
-  width?: number;
-  height?: number;
-  color?: string;
-}) {
-  if (data.length < 2) return null;
-  const max = Math.max(...data, 1);
-  const min = Math.min(...data, 0);
-  const range = max - min || 1;
-  const points = data
-    .map((v, i) => {
-      const x = (i / (data.length - 1)) * width;
-      const y = height - ((v - min) / range) * (height - 4) - 2;
-      return `${x},${y}`;
-    })
-    .join(" ");
-
-  return (
-    <svg width={width} height={height} style={{ display: "block" }}>
-      <polyline
-        points={points}
-        fill="none"
-        stroke={color}
-        strokeWidth={1.5}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function mockSparklineData(name: string): number[] {
-  let seed = name.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
-  const data: number[] = [];
-  let val = 10 + (seed % 20);
-  for (let i = 0; i < 8; i++) {
-    seed = (seed * 9301 + 49297) % 233280;
-    val += (seed % 7) - 2;
-    data.push(Math.max(val, 0));
-  }
-  return data;
-}
-
 // ── MetricCard ────────────────────────────────────────────────
 
 const METRIC_COLORS = ["var(--lcars-orange)", "var(--lcars-cyan)", "var(--lcars-green)"];
@@ -149,78 +98,11 @@ function MetricCard({
 
 // ── Overview Page ─────────────────────────────────────────────
 
-const ROLE_LABELS: Record<DashboardRole, string> = {
-  executive: "EXECUTIVE",
-  pm: "PM",
-  developer: "DEVELOPER",
-};
-
-function RoleDashboard({ role }: { role: DashboardRole }) {
-  const cards: { title: string; color: string; content: string }[] =
-    role === "executive"
-      ? [
-          { title: "CRITICAL ISSUES ACROSS ALL PROJECTS", color: "var(--lcars-red)", content: "P0/P1 ISSUES GROUPED BY CLIENT" },
-          { title: "TEAM CAPACITY THIS WEEK", color: "var(--lcars-orange)", content: "HOURS SCHEDULED VS AVAILABLE PER PERSON" },
-          { title: "REVENUE PROJECTS STATUS", color: "var(--lcars-green)", content: "TIER 1+2 PROJECT PROGRESS" },
-          { title: "BLOCKED TASKS", color: "var(--lcars-yellow)", content: "HOW LONG BLOCKED, ASSIGNED TO WHOM" },
-          { title: "COMPLETED THIS WEEK", color: "var(--lcars-cyan)", content: "TEAM MORALE SHOWCASE" },
-        ]
-      : role === "pm"
-        ? [
-            { title: "MY PROJECTS OVERVIEW", color: "var(--lcars-orange)", content: "TOTAL / IN-PROGRESS / BLOCKED PER PROJECT" },
-            { title: "TEAM WORKLOAD NEXT 3 DAYS", color: "var(--lcars-cyan)", content: "OVER/UNDER ALLOCATION HEATMAP" },
-            { title: "CLIENT DELIVERABLES DUE THIS SPRINT", color: "var(--lcars-red)", content: "ON TRACK / AT RISK / DELAYED" },
-            { title: "KNOWLEDGE GAPS", color: "var(--lcars-lavender)", content: "TASKS WITH NO LINKED DOCUMENTATION" },
-            { title: "STANDUP SUMMARY YESTERDAY", color: "var(--lcars-green)", content: "WHO POSTED, WHO'S MISSING" },
-          ]
-        : [
-            { title: "MY ACTIVE WORK", color: "var(--lcars-orange)", content: "GROUPED BY PRIORITY" },
-            { title: "MY PLANNER THIS WEEK", color: "var(--lcars-cyan)", content: "VISUAL CALENDAR" },
-            { title: "RELATED KNOWLEDGE", color: "var(--lcars-lavender)", content: "ARTICLES LINKED TO CURRENT TASKS" },
-            { title: "CODE REVIEWS NEEDED", color: "var(--lcars-peach)", content: "PRS AWAITING REVIEW" },
-            { title: "PROCESS READINESS", color: "var(--lcars-green)", content: "SOP & DOC COVERAGE" },
-          ];
-
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
-      {cards.map((card) => (
-        <div
-          key={card.title}
-          style={{
-            ...lcarsPageStyles.card,
-            borderLeftColor: card.color,
-            padding: 20,
-          }}
-        >
-          <div
-            style={{
-              fontFamily: "'Orbitron', sans-serif",
-              fontSize: 10,
-              fontWeight: 600,
-              color: card.color,
-              letterSpacing: "1.5px",
-              textTransform: "uppercase" as const,
-              marginBottom: 12,
-            }}
-          >
-            {card.title}
-          </div>
-          <div style={lcarsPageStyles.sectionDivider} />
-          <p style={{ ...lcarsPageStyles.emptyText, marginTop: 8 }}>
-            {card.content} — AWAITING DATA STREAM
-          </p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function Overview() {
   const api = useInvoke();
   const [overview, setOverview] = useState<OverviewData | null>(null);
   const [quotaRows, setQuotaRows] = useState<QuotaRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dashboardRole, setDashboardRole] = useState<DashboardRole>("executive");
 
   const load = useCallback(async () => {
     try {
@@ -262,6 +144,32 @@ function Overview() {
     overview && overview.teamQuota > 0
       ? (overview.teamHoursThisMonth / overview.teamQuota) * 100
       : 0;
+  const statusCounts = quotaRows.reduce(
+    (acc, row) => {
+      acc[row.status] += 1;
+      return acc;
+    },
+    { onTrack: 0, behind: 0, critical: 0 } as Record<QuotaRow["status"], number>,
+  );
+  const attentionRows = quotaRows
+    .filter((row) => row.status !== "onTrack")
+    .sort((left, right) => {
+      const severity = { critical: 2, behind: 1, onTrack: 0 };
+      return (
+        severity[right.status] - severity[left.status] ||
+        right.thisMonthHours - left.thisMonthHours ||
+        left.employeeName.localeCompare(right.employeeName)
+      );
+    });
+  const topWeeklyRows = [...quotaRows]
+    .sort((left, right) => {
+      return (
+        right.thisWeekHours - left.thisWeekHours ||
+        right.thisMonthHours - left.thisMonthHours ||
+        left.employeeName.localeCompare(right.employeeName)
+      );
+    })
+    .slice(0, 5);
 
   return (
     <div>
@@ -351,7 +259,6 @@ function Overview() {
                 <th style={styles.th}>THIS WEEK</th>
                 <th style={styles.th}>THIS MONTH</th>
                 <th style={styles.th}>QUOTA</th>
-                <th style={styles.th}>TREND</th>
                 <th style={styles.th}>STATUS</th>
               </tr>
             </thead>
@@ -374,18 +281,6 @@ function Overview() {
                   <td style={styles.tdMono}>{row.thisMonthHours.toFixed(1)}h</td>
                   <td style={styles.tdMono}>{row.quota.toFixed(0)}h</td>
                   <td style={styles.td}>
-                    <Sparkline
-                      data={mockSparklineData(row.employeeName)}
-                      color={
-                        row.status === "onTrack"
-                          ? "var(--lcars-green)"
-                          : row.status === "behind"
-                          ? "var(--lcars-yellow)"
-                          : "var(--lcars-red)"
-                      }
-                    />
-                  </td>
-                  <td style={styles.td}>
                     <StatusPill status={row.status} />
                   </td>
                 </tr>
@@ -395,37 +290,90 @@ function Overview() {
         )}
       </div>
 
-      {/* Weekly Trend */}
-      <div style={styles.card}>
-        <h2 style={styles.sectionTitle}>WEEKLY TREND</h2>
-        <div style={styles.sectionDivider} />
-        <p style={styles.emptyText}>AWAITING DATA STREAM</p>
-      </div>
-
-      {/* Role-Based Dashboard (#12) */}
-      <div style={{ marginTop: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-          <h2 style={{ ...styles.sectionTitle, marginBottom: 0 }}>ROLE DASHBOARD</h2>
-          <div style={{ display: "flex", gap: 6 }}>
-            {(["executive", "pm", "developer"] as DashboardRole[]).map((role) => (
-              <button
-                key={role}
-                onClick={() => setDashboardRole(role)}
-                style={{
-                  ...lcarsPageStyles.ghostButton,
-                  padding: "4px 12px",
-                  fontSize: 10,
-                  background: dashboardRole === role ? "rgba(255,153,0,0.1)" : "rgba(10,10,20,0.68)",
-                  border: `1px solid ${dashboardRole === role ? "var(--lcars-orange)" : "rgba(153,153,204,0.25)"}`,
-                  color: dashboardRole === role ? "var(--lcars-orange)" : "var(--lcars-lavender)",
-                }}
-              >
-                {ROLE_LABELS[role]}
-              </button>
-            ))}
+      <div style={styles.summaryGrid}>
+        <div style={styles.card}>
+          <h2 style={styles.sectionTitle}>STATUS SUMMARY</h2>
+          <div style={styles.sectionDivider} />
+          <div style={styles.summaryStatGrid}>
+            <div style={styles.summaryStatCard}>
+              <div style={styles.metricLabel}>ON TRACK</div>
+              <div style={{ ...styles.metricValue, color: "var(--lcars-green)" }}>
+                {statusCounts.onTrack}
+              </div>
+            </div>
+            <div style={styles.summaryStatCard}>
+              <div style={styles.metricLabel}>BEHIND</div>
+              <div style={{ ...styles.metricValue, color: "var(--lcars-yellow)" }}>
+                {statusCounts.behind}
+              </div>
+            </div>
+            <div style={styles.summaryStatCard}>
+              <div style={styles.metricLabel}>CRITICAL</div>
+              <div style={{ ...styles.metricValue, color: "var(--lcars-red)" }}>
+                {statusCounts.critical}
+              </div>
+            </div>
+          </div>
+          <div style={styles.summarySubtext}>
+            {quotaRows.length === 0
+              ? "Sync employees and Clockify time entries to populate quota status."
+              : `${quotaRows.length} active crew members are included in this month’s quota projection.`}
           </div>
         </div>
-        <RoleDashboard role={dashboardRole} />
+
+        <div style={styles.card}>
+          <h2 style={styles.sectionTitle}>WEEKLY LOAD</h2>
+          <div style={styles.sectionDivider} />
+          {topWeeklyRows.length === 0 ? (
+            <p style={styles.emptyText}>
+              NO WEEKLY LOAD DATA AVAILABLE YET.
+            </p>
+          ) : (
+            <div style={styles.summaryList}>
+              {topWeeklyRows.map((row) => (
+                <div key={row.employeeName} style={styles.summaryListItem}>
+                  <div>
+                    <div style={{ color: "var(--lcars-tan)", fontSize: 12 }}>
+                      {row.employeeName}
+                    </div>
+                    <div style={styles.summarySubtext}>
+                      {row.thisMonthHours.toFixed(1)}h logged this month
+                    </div>
+                  </div>
+                  <div style={styles.summaryValueMono}>
+                    {row.thisWeekHours.toFixed(1)}h
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={styles.card}>
+          <h2 style={styles.sectionTitle}>ATTENTION WATCHLIST</h2>
+          <div style={styles.sectionDivider} />
+          {attentionRows.length === 0 ? (
+            <p style={styles.emptyText}>
+              ALL ACTIVE CREW MEMBERS ARE CURRENTLY ON TRACK.
+            </p>
+          ) : (
+            <div style={styles.summaryList}>
+              {attentionRows.map((row) => (
+                <div key={row.employeeName} style={styles.summaryListItem}>
+                  <div>
+                    <div style={{ color: "var(--lcars-tan)", fontSize: 12 }}>
+                      {row.employeeName}
+                    </div>
+                    <div style={styles.summarySubtext}>
+                      {row.thisMonthHours.toFixed(1)}h / {row.quota.toFixed(0)}h quota
+                    </div>
+                  </div>
+                  <StatusPill status={row.status} />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -523,6 +471,48 @@ const styles: Record<string, React.CSSProperties> = {
   card: {
     ...lcarsPageStyles.card,
     borderLeft: "8px solid var(--lcars-lavender)",
+  },
+  summaryGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+    gap: 16,
+    marginTop: 16,
+  },
+  summaryStatGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+    gap: 12,
+  },
+  summaryStatCard: {
+    background: "rgba(153, 153, 204, 0.04)",
+    border: "1px solid rgba(153, 153, 204, 0.12)",
+    padding: 14,
+  },
+  summaryList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  summaryListItem: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    padding: "8px 10px",
+    background: "rgba(153, 153, 204, 0.04)",
+    borderLeft: "3px solid var(--lcars-cyan)",
+  },
+  summarySubtext: {
+    color: "var(--lcars-lavender)",
+    fontSize: 11,
+    marginTop: 4,
+  },
+  summaryValueMono: {
+    color: "var(--lcars-orange)",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 13,
+    fontWeight: 600,
+    whiteSpace: "nowrap",
   },
   sectionTitle: lcarsPageStyles.sectionTitle,
   sectionDivider: lcarsPageStyles.sectionDivider,

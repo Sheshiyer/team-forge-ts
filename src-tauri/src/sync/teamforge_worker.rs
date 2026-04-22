@@ -4,11 +4,13 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
+use crate::commands::ActiveProjectIssueView;
 use crate::db::models::{
-    TeamforgeProject, TeamforgeProjectArtifact, TeamforgeProjectGithubRepoLink,
+    TeamforgeClientProfileView, TeamforgeOnboardingFlowDetail, TeamforgeOnboardingTaskView,
+    TeamforgePolicyStateView, TeamforgeProject, TeamforgeProjectArtifact,
     TeamforgeProjectControlPlaneSummaryView, TeamforgeProjectControlPlaneView,
-    TeamforgeProjectGraph, TeamforgeProjectHulyLink, TeamforgeProjectSyncPolicyView,
-    TeamforgePolicyStateView, TeamforgeSyncConflictView, TeamforgeSyncEntityMappingView,
+    TeamforgeProjectGithubRepoLink, TeamforgeProjectGraph, TeamforgeProjectHulyLink,
+    TeamforgeProjectSyncPolicyView, TeamforgeSyncConflictView, TeamforgeSyncEntityMappingView,
     TeamforgeSyncJournalEntryView,
 };
 use crate::db::queries;
@@ -34,6 +36,29 @@ struct WorkerProjectSavePayload {
 #[derive(Debug, Deserialize)]
 struct WorkerProjectControlPlanePayload {
     detail: WorkerProjectControlPlane,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkerClientProfileListPayload {
+    #[serde(default, alias = "clientProfiles", alias = "profiles")]
+    client_profiles: Vec<WorkerClientProfile>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkerClientProfileDetailPayload {
+    #[serde(alias = "clientProfile", alias = "profile")]
+    client_profile: WorkerClientProfile,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkerOnboardingFlowListPayload {
+    #[serde(default, alias = "onboardingFlows")]
+    flows: Vec<WorkerOnboardingFlowRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkerProjectIssueFeedPayload {
+    issues: Vec<WorkerProjectIssueFeedItem>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +113,98 @@ struct WorkerArtifact {
     is_primary: bool,
     created_at: Option<String>,
     updated_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkerClientProfile {
+    workspace_id: Option<String>,
+    client_id: String,
+    client_name: String,
+    engagement_model: Option<String>,
+    industry: Option<String>,
+    primary_contact: Option<String>,
+    #[serde(default)]
+    project_ids: Vec<String>,
+    #[serde(default)]
+    stakeholders: Vec<String>,
+    #[serde(default)]
+    strategic_fit: Vec<String>,
+    #[serde(default)]
+    risks: Vec<String>,
+    #[serde(default)]
+    resource_links: Vec<String>,
+    active: bool,
+    onboarded: Option<String>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkerOnboardingFlowRecord {
+    flow: WorkerOnboardingFlow,
+    #[serde(default)]
+    tasks: Vec<WorkerOnboardingTask>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkerOnboardingFlow {
+    workspace_id: Option<String>,
+    flow_id: String,
+    audience: String,
+    status: String,
+    owner: Option<String>,
+    starts_on: Option<String>,
+    subject_id: Option<String>,
+    subject_name: Option<String>,
+    client_id: Option<String>,
+    member_id: Option<String>,
+    primary_contact: Option<String>,
+    manager: Option<String>,
+    department: Option<String>,
+    joined_on: Option<String>,
+    source: Option<String>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkerOnboardingTask {
+    task_id: String,
+    title: String,
+    completed: bool,
+    completed_at: Option<String>,
+    resource_created: Option<String>,
+    notes: Option<String>,
+    position: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkerProjectIssueFeedItem {
+    id: String,
+    project_id: String,
+    project_name: String,
+    client_name: Option<String>,
+    repo: String,
+    number: i64,
+    title: String,
+    state: String,
+    url: String,
+    milestone_number: Option<i64>,
+    #[serde(default)]
+    labels: Vec<String>,
+    #[serde(default)]
+    assignees: Vec<String>,
+    priority: Option<String>,
+    track: Option<String>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+    closed_at: Option<String>,
+    last_synced_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -284,7 +401,9 @@ fn map_worker_graph(graph: WorkerProjectGraph) -> TeamforgeProjectGraph {
             .artifacts
             .into_iter()
             .map(|artifact| TeamforgeProjectArtifact {
-                id: artifact.id.unwrap_or_else(|| format!("tf-artifact-{}", artifact.title)),
+                id: artifact
+                    .id
+                    .unwrap_or_else(|| format!("tf-artifact-{}", artifact.title)),
                 project_id: project_id.clone(),
                 artifact_type: artifact.artifact_type,
                 title: artifact.title,
@@ -294,6 +413,107 @@ fn map_worker_graph(graph: WorkerProjectGraph) -> TeamforgeProjectGraph {
                 is_primary: artifact.is_primary,
                 created_at: artifact.created_at.unwrap_or_else(|| created_at.clone()),
                 updated_at: artifact.updated_at.unwrap_or_else(|| updated_at.clone()),
+            })
+            .collect(),
+        client_profile: None,
+    }
+}
+
+fn calculate_client_profile_completeness(profile: &TeamforgeClientProfileView) -> f64 {
+    let fields = [
+        profile.engagement_model.is_some(),
+        profile.industry.is_some(),
+        profile.primary_contact.is_some(),
+        profile.onboarded.is_some(),
+        !profile.project_ids.is_empty(),
+        !profile.stakeholders.is_empty(),
+        !profile.strategic_fit.is_empty(),
+        !profile.risks.is_empty(),
+        !profile.resource_links.is_empty(),
+    ];
+    let completed = fields.into_iter().filter(|value| *value).count() as f64;
+    (completed / 9.0) * 100.0
+}
+
+fn map_worker_client_profile(profile: WorkerClientProfile) -> TeamforgeClientProfileView {
+    let mut mapped = TeamforgeClientProfileView {
+        workspace_id: profile.workspace_id.unwrap_or_default(),
+        client_id: profile.client_id,
+        client_name: profile.client_name,
+        engagement_model: profile.engagement_model,
+        industry: profile.industry,
+        primary_contact: profile.primary_contact,
+        project_ids: profile.project_ids,
+        stakeholders: profile.stakeholders,
+        strategic_fit: profile.strategic_fit,
+        risks: profile.risks,
+        resource_links: profile.resource_links,
+        active: profile.active,
+        onboarded: profile.onboarded,
+        created_at: profile.created_at.unwrap_or_default(),
+        updated_at: profile.updated_at.unwrap_or_default(),
+        profile_completeness: 0.0,
+    };
+    mapped.profile_completeness = calculate_client_profile_completeness(&mapped);
+    mapped
+}
+
+fn map_worker_onboarding_task(
+    task: WorkerOnboardingTask,
+    sort_order: i64,
+) -> TeamforgeOnboardingTaskView {
+    TeamforgeOnboardingTaskView {
+        task_id: task.task_id,
+        sort_order,
+        title: task.title,
+        completed: task.completed,
+        completed_at: task.completed_at,
+        resource_created: task.resource_created,
+        notes: task.notes,
+    }
+}
+
+fn map_worker_onboarding_flow(record: WorkerOnboardingFlowRecord) -> TeamforgeOnboardingFlowDetail {
+    let flow = record.flow;
+    let subject_id = flow
+        .subject_id
+        .clone()
+        .or_else(|| {
+            if flow.audience == "client" {
+                flow.client_id.clone()
+            } else {
+                flow.member_id.clone()
+            }
+        })
+        .unwrap_or_default();
+    let subject_name = flow
+        .subject_name
+        .clone()
+        .unwrap_or_else(|| subject_id.clone());
+
+    TeamforgeOnboardingFlowDetail {
+        workspace_id: flow.workspace_id.unwrap_or_default(),
+        flow_id: flow.flow_id,
+        audience: flow.audience,
+        status: flow.status,
+        owner: flow.owner,
+        starts_on: flow.starts_on.unwrap_or_default(),
+        subject_id,
+        subject_name,
+        primary_contact: flow.primary_contact,
+        manager: flow.manager,
+        department: flow.department,
+        joined_on: flow.joined_on,
+        source: flow.source.unwrap_or_else(|| "vault".to_string()),
+        created_at: flow.created_at.unwrap_or_default(),
+        updated_at: flow.updated_at.unwrap_or_default(),
+        tasks: record
+            .tasks
+            .into_iter()
+            .enumerate()
+            .map(|(index, task)| {
+                let sort_order = task.position.unwrap_or(index as i64);
+                map_worker_onboarding_task(task, sort_order)
             })
             .collect(),
     }
@@ -319,7 +539,12 @@ fn map_worker_policy(policy: WorkerProjectPolicy) -> TeamforgeProjectSyncPolicyV
 
 fn map_worker_control_plane(detail: WorkerProjectControlPlane) -> TeamforgeProjectControlPlaneView {
     TeamforgeProjectControlPlaneView {
-        policy: detail.project.policy.as_ref().cloned().map(map_worker_policy),
+        policy: detail
+            .project
+            .policy
+            .as_ref()
+            .cloned()
+            .map(map_worker_policy),
         project: map_worker_graph(detail.project),
         policy_state: TeamforgePolicyStateView {
             sync_state: detail.policy_state.sync_state,
@@ -432,6 +657,27 @@ async fn worker_access_token(pool: &SqlitePool) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
+async fn worker_url(
+    pool: &SqlitePool,
+    path: &str,
+    query: &[(&str, String)],
+) -> Result<String, String> {
+    let base_url = worker_base_url(pool).await?;
+    let mut url = reqwest::Url::parse(&format!("{}{}", base_url.trim_end_matches('/'), path))
+        .map_err(|e| format!("build TeamForge Worker url: {e}"))?;
+    if !query.is_empty() {
+        let mut pairs = url.query_pairs_mut();
+        for (key, value) in query {
+            pairs.append_pair(key, value);
+        }
+    }
+    Ok(url.to_string())
+}
+
+async fn resolved_workspace_query_value(pool: &SqlitePool) -> Option<String> {
+    resolve_teamforge_workspace_id(pool).await.ok().flatten()
+}
+
 async fn fetch_worker_graphs(pool: &SqlitePool) -> Result<Vec<WorkerProjectGraph>, String> {
     let client = Client::new();
     let base_url = worker_base_url(pool).await?;
@@ -472,6 +718,204 @@ pub async fn fetch_teamforge_project_graphs(
 ) -> Result<Vec<TeamforgeProjectGraph>, String> {
     let remote = fetch_worker_graphs(pool).await?;
     Ok(remote.into_iter().map(map_worker_graph).collect())
+}
+
+pub async fn fetch_teamforge_client_profiles(
+    pool: &SqlitePool,
+) -> Result<Vec<TeamforgeClientProfileView>, String> {
+    let client = Client::new();
+    let access_token = worker_access_token(pool).await?;
+    let mut query = Vec::new();
+    if let Some(workspace_id) = resolved_workspace_query_value(pool).await {
+        query.push(("workspace_id", workspace_id));
+    }
+    let url = worker_url(pool, "/v1/client-profiles", &query).await?;
+
+    let response = client
+        .get(&url)
+        .bearer_auth(access_token)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("fetch TeamForge client profiles: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "fetch TeamForge client profiles returned status {}",
+            response.status()
+        ));
+    }
+
+    let body: WorkerEnvelope<WorkerClientProfileListPayload> = response
+        .json()
+        .await
+        .map_err(|e| format!("parse TeamForge client profile response: {e}"))?;
+    if !body.ok {
+        return Err("TeamForge client profile response returned ok=false".to_string());
+    }
+
+    let data = body
+        .data
+        .ok_or_else(|| "TeamForge client profile response was missing data".to_string())?;
+    Ok(data
+        .client_profiles
+        .into_iter()
+        .map(map_worker_client_profile)
+        .collect())
+}
+
+pub async fn fetch_teamforge_client_profile(
+    pool: &SqlitePool,
+    client_id: &str,
+) -> Result<Option<TeamforgeClientProfileView>, String> {
+    let client = Client::new();
+    let access_token = worker_access_token(pool).await?;
+    let mut query = Vec::new();
+    if let Some(workspace_id) = resolved_workspace_query_value(pool).await {
+        query.push(("workspace_id", workspace_id));
+    }
+    let url = worker_url(pool, &format!("/v1/client-profiles/{client_id}"), &query).await?;
+
+    let response = client
+        .get(&url)
+        .bearer_auth(access_token)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("fetch TeamForge client profile detail: {e}"))?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Err(format!(
+            "fetch TeamForge client profile detail returned status {}",
+            response.status()
+        ));
+    }
+
+    let body: WorkerEnvelope<WorkerClientProfileDetailPayload> = response
+        .json()
+        .await
+        .map_err(|e| format!("parse TeamForge client profile detail response: {e}"))?;
+    if !body.ok {
+        return Err("TeamForge client profile detail response returned ok=false".to_string());
+    }
+
+    let data = body
+        .data
+        .ok_or_else(|| "TeamForge client profile detail response was missing data".to_string())?;
+    Ok(Some(map_worker_client_profile(data.client_profile)))
+}
+
+pub async fn fetch_teamforge_onboarding_flows(
+    pool: &SqlitePool,
+    audience: Option<&str>,
+) -> Result<Vec<TeamforgeOnboardingFlowDetail>, String> {
+    let client = Client::new();
+    let access_token = worker_access_token(pool).await?;
+    let mut query = Vec::new();
+    if let Some(workspace_id) = resolved_workspace_query_value(pool).await {
+        query.push(("workspace_id", workspace_id));
+    }
+    if let Some(audience) = audience {
+        query.push(("audience", audience.to_string()));
+    }
+    let url = worker_url(pool, "/v1/onboarding-flows", &query).await?;
+
+    let response = client
+        .get(&url)
+        .bearer_auth(access_token)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("fetch TeamForge onboarding flows: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "fetch TeamForge onboarding flows returned status {}",
+            response.status()
+        ));
+    }
+
+    let body: WorkerEnvelope<WorkerOnboardingFlowListPayload> = response
+        .json()
+        .await
+        .map_err(|e| format!("parse TeamForge onboarding flow response: {e}"))?;
+    if !body.ok {
+        return Err("TeamForge onboarding flow response returned ok=false".to_string());
+    }
+
+    let data = body
+        .data
+        .ok_or_else(|| "TeamForge onboarding flow response was missing data".to_string())?;
+    Ok(data
+        .flows
+        .into_iter()
+        .map(map_worker_onboarding_flow)
+        .collect())
+}
+
+pub async fn fetch_teamforge_active_project_issues(
+    pool: &SqlitePool,
+) -> Result<Vec<ActiveProjectIssueView>, String> {
+    let client = Client::new();
+    let access_token = worker_access_token(pool).await?;
+    let mut query = vec![("status", "active".to_string())];
+    if let Some(workspace_id) = resolved_workspace_query_value(pool).await {
+        query.push(("workspace_id", workspace_id));
+    }
+    let url = worker_url(pool, "/v1/project-mappings/issues", &query).await?;
+
+    let response = client
+        .get(&url)
+        .bearer_auth(access_token)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("fetch TeamForge active project issues: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "fetch TeamForge active project issues returned status {}",
+            response.status()
+        ));
+    }
+
+    let body: WorkerEnvelope<WorkerProjectIssueFeedPayload> = response
+        .json()
+        .await
+        .map_err(|e| format!("parse TeamForge active project issue response: {e}"))?;
+    if !body.ok {
+        return Err("TeamForge active project issue response returned ok=false".to_string());
+    }
+
+    let data = body
+        .data
+        .ok_or_else(|| "TeamForge active project issue response was missing data".to_string())?;
+    Ok(data
+        .issues
+        .into_iter()
+        .map(|issue| ActiveProjectIssueView {
+            id: issue.id,
+            project_id: Some(issue.project_id),
+            project_name: issue.project_name,
+            client_name: issue.client_name,
+            repo: issue.repo,
+            number: issue.number,
+            title: issue.title,
+            state: issue.state,
+            url: issue.url,
+            milestone_number: issue.milestone_number,
+            labels: issue.labels,
+            assignees: issue.assignees,
+            priority: issue.priority,
+            track: issue.track,
+            created_at: issue.created_at,
+            updated_at: issue.updated_at.or(issue.last_synced_at),
+            closed_at: issue.closed_at,
+        })
+        .collect())
 }
 
 pub async fn resolve_teamforge_workspace_id(pool: &SqlitePool) -> Result<Option<String>, String> {

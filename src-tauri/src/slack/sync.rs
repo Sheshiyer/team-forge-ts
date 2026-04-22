@@ -169,6 +169,7 @@ impl SlackSyncEngine {
                     .map(|value| value.as_str());
                 self.persist_slack_message_activity(
                     &channel.id,
+                    channel.name.as_deref(),
                     message.user.as_deref(),
                     employee_id,
                     &message,
@@ -225,6 +226,7 @@ impl SlackSyncEngine {
     async fn persist_slack_message_activity(
         &self,
         channel_id: &str,
+        channel_name: Option<&str>,
         slack_user_id: Option<&str>,
         employee_id: Option<&str>,
         message: &SlackMessage,
@@ -233,6 +235,7 @@ impl SlackSyncEngine {
             id: None,
             message_key: slack_message_key(channel_id, &message.ts),
             slack_channel_id: channel_id.to_string(),
+            slack_channel_name: channel_name.map(|value| value.to_string()),
             slack_user_id: slack_user_id.map(|value| value.to_string()),
             employee_id: employee_id.map(|value| value.to_string()),
             message_ts: message.ts.clone(),

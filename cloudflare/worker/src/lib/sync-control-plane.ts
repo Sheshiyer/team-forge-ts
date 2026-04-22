@@ -103,6 +103,25 @@ interface ProjectSyncPolicyControlRow {
   last_error_message: string | null;
 }
 
+interface ProjectIssueFeedRow {
+  id: string;
+  workspace_id: string;
+  project_id: string;
+  project_name: string;
+  client_name: string | null;
+  project_status: string;
+  github_repo: string;
+  github_number: number;
+  title: string;
+  issue_state: string | null;
+  source_url: string | null;
+  payload_json: string | null;
+  created_at: string;
+  updated_at: string;
+  last_source_version: string | null;
+  last_synced_at: string | null;
+}
+
 export interface SyncEntityMapping {
   id: string;
   entityType: string;
@@ -190,6 +209,29 @@ export interface ProjectControlPlaneDetail {
   };
 }
 
+export interface ProjectIssueFeedItem {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  projectName: string;
+  clientName: string | null;
+  projectStatus: string;
+  repo: string;
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+  milestoneNumber: number | null;
+  labels: string[];
+  assignees: string[];
+  priority: string | null;
+  track: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  closedAt: string | null;
+  lastSyncedAt: string | null;
+}
+
 export interface ProjectActionRequest {
   action:
     | "sync_now"
@@ -223,6 +265,25 @@ interface SyncContext {
   githubClient: GithubApiClient | null;
   hulyClient: HulyApiClient | null;
   hulyActorSocialId: string | null;
+}
+
+interface GithubIssuePayload {
+  repo?: unknown;
+  number?: unknown;
+  title?: unknown;
+  description?: unknown;
+  state?: unknown;
+  url?: unknown;
+  milestoneNumber?: unknown;
+  milestoneTitle?: unknown;
+  labels?: unknown;
+  assignees?: unknown;
+  priority?: unknown;
+  track?: unknown;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+  closedAt?: unknown;
+  hulyProjectId?: unknown;
 }
 
 export async function getProjectControlPlaneDetail(
@@ -272,6 +333,60 @@ export async function getProjectControlPlaneDetail(
       recentFailures: journal.filter((item) => item.status === "failed").length,
     },
   };
+}
+
+export async function listProjectIssueFeed(
+  db: D1DatabaseLike,
+  workspaceId?: string | null,
+  status = "active",
+): Promise<ProjectIssueFeedItem[]> {
+  let sql = `
+    SELECT
+      m.id,
+      m.workspace_id,
+      m.project_id,
+      p.name AS project_name,
+      p.client_name,
+      p.status AS project_status,
+      m.github_repo,
+      m.github_number,
+      m.title,
+      m.status AS issue_state,
+      m.source_url,
+      m.payload_json,
+      m.created_at,
+      m.updated_at,
+      m.last_source_version,
+      m.last_synced_at
+    FROM sync_entity_mappings m
+    JOIN projects p ON p.id = m.project_id
+    WHERE m.entity_type = 'issue'
+      AND m.ownership_domain = 'engineering'
+      AND m.github_repo IS NOT NULL
+      AND m.github_number IS NOT NULL
+  `;
+  const params: unknown[] = [];
+
+  if (workspaceId?.trim()) {
+    sql += " AND m.workspace_id = ?";
+    params.push(workspaceId.trim());
+  }
+
+  if (status.trim()) {
+    sql += " AND p.status = ?";
+    params.push(status.trim());
+  }
+
+  sql += `
+    ORDER BY
+      p.name COLLATE NOCASE,
+      CASE WHEN LOWER(COALESCE(m.status, 'open')) = 'open' THEN 0 ELSE 1 END,
+      COALESCE(m.last_source_version, m.updated_at, m.created_at) DESC,
+      m.github_number DESC
+  `;
+
+  const rows = await queryAll<ProjectIssueFeedRow>(db, sql, ...params);
+  return rows.map(mapProjectIssueFeedRow);
 }
 
 export async function performProjectAction(
@@ -1067,6 +1182,7 @@ function classifyGithubIssue(repoRole: string, issue: GithubIssue): OwnershipDom
 }
 
 function buildGithubIssuePayload(repo: string, issue: GithubIssue, hulyProjectId: string | null) {
+  const labels = issue.labels.map((label) => label.name);
   return {
     repo,
     number: issue.number,
@@ -1076,8 +1192,13 @@ function buildGithubIssuePayload(repo: string, issue: GithubIssue, hulyProjectId
     url: issue.html_url,
     milestoneNumber: issue.milestone?.number ?? null,
     milestoneTitle: issue.milestone?.title ?? null,
-    labels: issue.labels.map((label) => label.name),
+    labels,
     assignees: issue.assignees.map((assignee) => assignee.login),
+    priority: priorityFromLabels(labels),
+    track: trackFromIssue(issue.title, labels),
+    createdAt: issue.created_at ?? null,
+    updatedAt: issue.updated_at ?? null,
+    closedAt: issue.closed_at ?? null,
     hulyProjectId,
   };
 }
@@ -1602,6 +1723,77 @@ async function sha256Json(value: unknown): Promise<string> {
   const json = typeof value === "string" ? value : JSON.stringify(value);
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(json));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function priorityFromLabels(labels: string[]): string | null {
+  return labels.find((label) => label.startsWith("priority:"))?.slice("priority:".length) ?? null;
+}
+
+function trackFromIssue(title: string, labels: string[]): string | null {
+  const fromLabel = labels.find((label) => label.startsWith("track:"))?.slice("track:".length);
+  if (fromLabel) return fromLabel;
+  const fromTitle = title
+    .split(/\s+/)
+    .find((part) => part.startsWith("track-"))
+    ?.replace(/^[^a-z0-9-]+|[^a-z0-9-]+$/gi, "");
+  return fromTitle?.trim() || null;
+}
+
+function readString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function readNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function mapProjectIssueFeedRow(row: ProjectIssueFeedRow): ProjectIssueFeedItem {
+  const payload = safeJsonParse<GithubIssuePayload>(row.payload_json);
+  const state = readString(payload?.state) ?? readString(row.issue_state) ?? "open";
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    projectId: row.project_id,
+    projectName: row.project_name,
+    clientName: row.client_name,
+    projectStatus: row.project_status,
+    repo: row.github_repo,
+    number: row.github_number,
+    title: row.title,
+    state,
+    url:
+      readString(payload?.url) ??
+      readString(row.source_url) ??
+      `https://github.com/${row.github_repo}/issues/${row.github_number}`,
+    milestoneNumber: readNumber(payload?.milestoneNumber),
+    labels: readStringArray(payload?.labels),
+    assignees: readStringArray(payload?.assignees),
+    priority: readString(payload?.priority),
+    track: readString(payload?.track),
+    createdAt: readString(payload?.createdAt) ?? null,
+    updatedAt: readString(payload?.updatedAt) ?? readString(row.last_source_version) ?? readString(row.updated_at),
+    closedAt:
+      readString(payload?.closedAt) ??
+      (state.toLowerCase() === "closed"
+        ? readString(row.last_source_version) ?? readString(row.updated_at)
+        : null),
+    lastSyncedAt: readString(row.last_synced_at),
+  };
 }
 
 function safeJsonParse<T>(value: string | null): T | null {
