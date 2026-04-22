@@ -1,0 +1,484 @@
+{
+  "mode": "apply",
+  "localOnly": false,
+  "vaultRoot": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs",
+  "workerBaseUrl": "https://teamforge-api.sheshnarayan-iyer.workers.dev",
+  "teamforgeDbPath": "/Users/sheshnarayaniyer/Library/Application Support/com.thoughtseed.teamforge/teamforge.db",
+  "workspaceId": "ws_thoughtseed",
+  "remoteWarning": null,
+  "remoteShapes": [
+    "graph"
+  ],
+  "teamforgeDbWarnings": [],
+  "counts": {
+    "projectBriefsFound": 1,
+    "creates": 0,
+    "updates": 1,
+    "statuses": {
+      "active": 1
+    },
+    "duplicateProjectIds": 0,
+    "employeeKpiNotesFound": 6,
+    "employeeKpiCreates": 0,
+    "employeeKpiUpdates": 6,
+    "employeeKpiUnresolved": 0
+  },
+  "warnings": [],
+  "operations": [
+    {
+      "projectId": "axtech",
+      "targetProjectId": "axtech",
+      "mode": "update",
+      "relativePath": "60-client-ecosystem/axtech/project-brief.md",
+      "diffs": [
+        "slug: null -> axtech",
+        "clientName: null -> Axdis Group",
+        "artifacts: 0 -> 1"
+      ],
+      "remoteShape": "graph",
+      "latestSource": {
+        "filePath": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs/60-client-ecosystem/axtech/project-brief.md",
+        "relativePath": "60-client-ecosystem/axtech/project-brief.md",
+        "lastModifiedAt": "2026-04-18T10:22:14.000Z",
+        "owner": "mohan",
+        "source": "notion-team-pulse-tag",
+        "sourceUrl": null,
+        "tags": [
+          "project",
+          "client-engagement",
+          "active",
+          "axdis-group",
+          "erp",
+          "axtech"
+        ]
+      }
+    }
+  ],
+  "employeeKpiOperations": [
+    {
+      "memberId": "imran",
+      "employeeId": "67ce7d3a9b6d8d778e65dcdd",
+      "employeeName": "imran",
+      "mode": "update",
+      "matchMethod": "alias.exact",
+      "kpiVersion": "v1-2026-04-19-from-offer-letter",
+      "relativePath": "50-team/imran-kpi.md",
+      "diffs": [
+        "employee: imran",
+        "monthlyKpis: 10",
+        "quarterlyMilestones: 4",
+        "gapFlags: 3"
+      ],
+      "latestSource": {
+        "filePath": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs/50-team/imran-kpi.md",
+        "relativePath": "50-team/imran-kpi.md",
+        "lastModifiedAt": "2026-04-18T19:24:13.000Z",
+        "roleTemplate": "lead-backend-tuya-iot",
+        "lastReviewed": "2026-04-19",
+        "tags": [
+          "kpi",
+          "member-instance",
+          "lead-backend"
+        ]
+      }
+    },
+    {
+      "memberId": "pavun-kumar",
+      "employeeId": "6757fc37849214557591ddf6",
+      "employeeName": "Pavun Kumar R",
+      "mode": "update",
+      "matchMethod": "alias.exact",
+      "kpiVersion": "v1-2026-04-19-from-offer-letter",
+      "relativePath": "50-team/pavun-kumar-kpi.md",
+      "diffs": [
+        "employee: Pavun Kumar R",
+        "monthlyKpis: 8",
+        "quarterlyMilestones: 4",
+        "gapFlags: 3"
+      ],
+      "latestSource": {
+        "filePath": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs/50-team/pavun-kumar-kpi.md",
+        "relativePath": "50-team/pavun-kumar-kpi.md",
+        "lastModifiedAt": "2026-04-18T19:23:53.000Z",
+        "roleTemplate": "junior-innovation-developer",
+        "lastReviewed": "2026-04-19",
+        "tags": [
+          "kpi",
+          "member-instance",
+          "junior-innovation-developer"
+        ]
+      }
+    },
+    {
+      "memberId": "preetha",
+      "employeeId": "6841e6b6b7688b61f12d314f",
+      "employeeName": "Preethamanickam",
+      "mode": "update",
+      "matchMethod": "alias.prefix",
+      "kpiVersion": "v1-2026-04-19-from-offer-letter",
+      "relativePath": "50-team/preetha-kpi.md",
+      "diffs": [
+        "employee: Preethamanickam",
+        "monthlyKpis: 8",
+        "quarterlyMilestones: 4",
+        "gapFlags: 3"
+      ],
+      "latestSource": {
+        "filePath": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs/50-team/preetha-kpi.md",
+        "relativePath": "50-team/preetha-kpi.md",
+        "lastModifiedAt": "2026-04-18T19:24:34.000Z",
+        "roleTemplate": "growth-hacker",
+        "lastReviewed": "2026-04-19",
+        "tags": [
+          "kpi",
+          "member-instance",
+          "growth-hacker"
+        ]
+      }
+    },
+    {
+      "memberId": "raheman-ali",
+      "employeeId": "666b093a7a0aab220ccac6ac",
+      "employeeName": "Raheman Ali",
+      "mode": "update",
+      "matchMethod": "alias.exact",
+      "kpiVersion": "v1-2026-04-19-from-offer-letter",
+      "relativePath": "50-team/raheman-ali-kpi.md",
+      "diffs": [
+        "employee: Raheman Ali",
+        "monthlyKpis: 8",
+        "quarterlyMilestones: 4",
+        "gapFlags: 4"
+      ],
+      "latestSource": {
+        "filePath": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs/50-team/raheman-ali-kpi.md",
+        "relativePath": "50-team/raheman-ali-kpi.md",
+        "lastModifiedAt": "2026-04-18T19:23:35.000Z",
+        "roleTemplate": "product-innovation-catalyst",
+        "lastReviewed": "2026-04-19",
+        "tags": [
+          "kpi",
+          "member-instance",
+          "product-innovation-catalyst"
+        ]
+      }
+    },
+    {
+      "memberId": "rifayudeen",
+      "employeeId": "69d37ac6a11e6c49cbf50f01",
+      "employeeName": "Rifayudeen.q",
+      "mode": "update",
+      "matchMethod": "alias.exact",
+      "kpiVersion": "v1-2026-04-19-from-offer-letter",
+      "relativePath": "50-team/rifayudeen-kpi.md",
+      "diffs": [
+        "employee: Rifayudeen.q",
+        "monthlyKpis: 6",
+        "quarterlyMilestones: 4",
+        "gapFlags: 6"
+      ],
+      "latestSource": {
+        "filePath": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs/50-team/rifayudeen-kpi.md",
+        "relativePath": "50-team/rifayudeen-kpi.md",
+        "lastModifiedAt": "2026-04-18T19:25:06.000Z",
+        "roleTemplate": "associate-ai-developer",
+        "lastReviewed": "2026-04-19",
+        "tags": [
+          "kpi",
+          "member-instance",
+          "associate-ai-developer",
+          "new-hire"
+        ]
+      }
+    },
+    {
+      "memberId": "subitcha",
+      "employeeId": "6777c1fd3fb6a444eeecb835",
+      "employeeName": "Subitcha SM",
+      "mode": "update",
+      "matchMethod": "alias.exact",
+      "kpiVersion": "v1-2026-04-19-from-offer-letter",
+      "relativePath": "50-team/subitcha-kpi.md",
+      "diffs": [
+        "employee: Subitcha SM",
+        "monthlyKpis: 5",
+        "quarterlyMilestones: 4",
+        "gapFlags: 5"
+      ],
+      "latestSource": {
+        "filePath": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs/50-team/subitcha-kpi.md",
+        "relativePath": "50-team/subitcha-kpi.md",
+        "lastModifiedAt": "2026-04-18T19:24:48.000Z",
+        "roleTemplate": "dotnet-frontend-axtech-erp",
+        "lastReviewed": "2026-04-19",
+        "tags": [
+          "kpi",
+          "member-instance",
+          "dotnet",
+          "axtech"
+        ]
+      }
+    }
+  ],
+  "applied": [
+    {
+      "projectId": "axtech",
+      "targetProjectId": "axtech",
+      "mode": "update",
+      "latestSource": {
+        "filePath": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs/60-client-ecosystem/axtech/project-brief.md",
+        "relativePath": "60-client-ecosystem/axtech/project-brief.md",
+        "lastModifiedAt": "2026-04-18T10:22:14.000Z",
+        "owner": "mohan",
+        "source": "notion-team-pulse-tag",
+        "sourceUrl": null,
+        "tags": [
+          "project",
+          "client-engagement",
+          "active",
+          "axdis-group",
+          "erp",
+          "axtech"
+        ]
+      }
+    }
+  ],
+  "failures": [],
+  "employeeKpiApplied": [
+    {
+      "memberId": "imran",
+      "employeeId": "67ce7d3a9b6d8d778e65dcdd",
+      "employeeName": "imran",
+      "mode": "update",
+      "kpiVersion": "v1-2026-04-19-from-offer-letter",
+      "latestSource": {
+        "filePath": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs/50-team/imran-kpi.md",
+        "relativePath": "50-team/imran-kpi.md",
+        "lastModifiedAt": "2026-04-18T19:24:13.000Z",
+        "roleTemplate": "lead-backend-tuya-iot",
+        "lastReviewed": "2026-04-19",
+        "tags": [
+          "kpi",
+          "member-instance",
+          "lead-backend"
+        ]
+      }
+    },
+    {
+      "memberId": "pavun-kumar",
+      "employeeId": "6757fc37849214557591ddf6",
+      "employeeName": "Pavun Kumar R",
+      "mode": "update",
+      "kpiVersion": "v1-2026-04-19-from-offer-letter",
+      "latestSource": {
+        "filePath": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs/50-team/pavun-kumar-kpi.md",
+        "relativePath": "50-team/pavun-kumar-kpi.md",
+        "lastModifiedAt": "2026-04-18T19:23:53.000Z",
+        "roleTemplate": "junior-innovation-developer",
+        "lastReviewed": "2026-04-19",
+        "tags": [
+          "kpi",
+          "member-instance",
+          "junior-innovation-developer"
+        ]
+      }
+    },
+    {
+      "memberId": "preetha",
+      "employeeId": "6841e6b6b7688b61f12d314f",
+      "employeeName": "Preethamanickam",
+      "mode": "update",
+      "kpiVersion": "v1-2026-04-19-from-offer-letter",
+      "latestSource": {
+        "filePath": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs/50-team/preetha-kpi.md",
+        "relativePath": "50-team/preetha-kpi.md",
+        "lastModifiedAt": "2026-04-18T19:24:34.000Z",
+        "roleTemplate": "growth-hacker",
+        "lastReviewed": "2026-04-19",
+        "tags": [
+          "kpi",
+          "member-instance",
+          "growth-hacker"
+        ]
+      }
+    },
+    {
+      "memberId": "raheman-ali",
+      "employeeId": "666b093a7a0aab220ccac6ac",
+      "employeeName": "Raheman Ali",
+      "mode": "update",
+      "kpiVersion": "v1-2026-04-19-from-offer-letter",
+      "latestSource": {
+        "filePath": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs/50-team/raheman-ali-kpi.md",
+        "relativePath": "50-team/raheman-ali-kpi.md",
+        "lastModifiedAt": "2026-04-18T19:23:35.000Z",
+        "roleTemplate": "product-innovation-catalyst",
+        "lastReviewed": "2026-04-19",
+        "tags": [
+          "kpi",
+          "member-instance",
+          "product-innovation-catalyst"
+        ]
+      }
+    },
+    {
+      "memberId": "rifayudeen",
+      "employeeId": "69d37ac6a11e6c49cbf50f01",
+      "employeeName": "Rifayudeen.q",
+      "mode": "update",
+      "kpiVersion": "v1-2026-04-19-from-offer-letter",
+      "latestSource": {
+        "filePath": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs/50-team/rifayudeen-kpi.md",
+        "relativePath": "50-team/rifayudeen-kpi.md",
+        "lastModifiedAt": "2026-04-18T19:25:06.000Z",
+        "roleTemplate": "associate-ai-developer",
+        "lastReviewed": "2026-04-19",
+        "tags": [
+          "kpi",
+          "member-instance",
+          "associate-ai-developer",
+          "new-hire"
+        ]
+      }
+    },
+    {
+      "memberId": "subitcha",
+      "employeeId": "6777c1fd3fb6a444eeecb835",
+      "employeeName": "Subitcha SM",
+      "mode": "update",
+      "kpiVersion": "v1-2026-04-19-from-offer-letter",
+      "latestSource": {
+        "filePath": "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs/50-team/subitcha-kpi.md",
+        "relativePath": "50-team/subitcha-kpi.md",
+        "lastModifiedAt": "2026-04-18T19:24:48.000Z",
+        "roleTemplate": "dotnet-frontend-axtech-erp",
+        "lastReviewed": "2026-04-19",
+        "tags": [
+          "kpi",
+          "member-instance",
+          "dotnet",
+          "axtech"
+        ]
+      }
+    }
+  ],
+  "employeeKpiFailures": [],
+  "postApplyVerification": {
+    "remoteShapes": [
+      "graph"
+    ],
+    "verified": [
+      {
+        "projectId": "axtech",
+        "targetProjectId": "axtech",
+        "found": true,
+        "remoteShape": "graph",
+        "remoteProject": {
+          "id": "axtech",
+          "workspaceId": "ws_thoughtseed",
+          "slug": "axtech",
+          "name": "Axtech",
+          "clientName": "Axdis Group",
+          "projectType": "client-engagement",
+          "status": "active",
+          "syncMode": "manual"
+        },
+        "externalIds": []
+      }
+    ]
+  },
+  "postApplyKpiVerification": {
+    "verified": [
+      {
+        "memberId": "imran",
+        "employeeId": "67ce7d3a9b6d8d778e65dcdd",
+        "employeeName": "imran",
+        "kpiVersion": "v1-2026-04-19-from-offer-letter",
+        "found": true,
+        "snapshot": {
+          "employee_id": "67ce7d3a9b6d8d778e65dcdd",
+          "member_id": "imran",
+          "kpi_version": "v1-2026-04-19-from-offer-letter",
+          "title": "Mohammad Imran — KPI Instance (v1)",
+          "source_relative_path": "50-team/imran-kpi.md",
+          "source_last_modified_at": "2026-04-18T19:24:13.000Z"
+        }
+      },
+      {
+        "memberId": "pavun-kumar",
+        "employeeId": "6757fc37849214557591ddf6",
+        "employeeName": "Pavun Kumar R",
+        "kpiVersion": "v1-2026-04-19-from-offer-letter",
+        "found": true,
+        "snapshot": {
+          "employee_id": "6757fc37849214557591ddf6",
+          "member_id": "pavun-kumar",
+          "kpi_version": "v1-2026-04-19-from-offer-letter",
+          "title": "Pavun Kumar R — KPI Instance (v1)",
+          "source_relative_path": "50-team/pavun-kumar-kpi.md",
+          "source_last_modified_at": "2026-04-18T19:23:53.000Z"
+        }
+      },
+      {
+        "memberId": "preetha",
+        "employeeId": "6841e6b6b7688b61f12d314f",
+        "employeeName": "Preethamanickam",
+        "kpiVersion": "v1-2026-04-19-from-offer-letter",
+        "found": true,
+        "snapshot": {
+          "employee_id": "6841e6b6b7688b61f12d314f",
+          "member_id": "preetha",
+          "kpi_version": "v1-2026-04-19-from-offer-letter",
+          "title": "Preetha M — KPI Instance (v1)",
+          "source_relative_path": "50-team/preetha-kpi.md",
+          "source_last_modified_at": "2026-04-18T19:24:34.000Z"
+        }
+      },
+      {
+        "memberId": "raheman-ali",
+        "employeeId": "666b093a7a0aab220ccac6ac",
+        "employeeName": "Raheman Ali",
+        "kpiVersion": "v1-2026-04-19-from-offer-letter",
+        "found": true,
+        "snapshot": {
+          "employee_id": "666b093a7a0aab220ccac6ac",
+          "member_id": "raheman-ali",
+          "kpi_version": "v1-2026-04-19-from-offer-letter",
+          "title": "Raheman Ali — KPI Instance (v1)",
+          "source_relative_path": "50-team/raheman-ali-kpi.md",
+          "source_last_modified_at": "2026-04-18T19:23:35.000Z"
+        }
+      },
+      {
+        "memberId": "rifayudeen",
+        "employeeId": "69d37ac6a11e6c49cbf50f01",
+        "employeeName": "Rifayudeen.q",
+        "kpiVersion": "v1-2026-04-19-from-offer-letter",
+        "found": true,
+        "snapshot": {
+          "employee_id": "69d37ac6a11e6c49cbf50f01",
+          "member_id": "rifayudeen",
+          "kpi_version": "v1-2026-04-19-from-offer-letter",
+          "title": "Rifayudeen Q — KPI Instance (v1 — new hire)",
+          "source_relative_path": "50-team/rifayudeen-kpi.md",
+          "source_last_modified_at": "2026-04-18T19:25:06.000Z"
+        }
+      },
+      {
+        "memberId": "subitcha",
+        "employeeId": "6777c1fd3fb6a444eeecb835",
+        "employeeName": "Subitcha SM",
+        "kpiVersion": "v1-2026-04-19-from-offer-letter",
+        "found": true,
+        "snapshot": {
+          "employee_id": "6777c1fd3fb6a444eeecb835",
+          "member_id": "subitcha",
+          "kpi_version": "v1-2026-04-19-from-offer-letter",
+          "title": "Subitcha — KPI Instance (v1)",
+          "source_relative_path": "50-team/subitcha-kpi.md",
+          "source_last_modified_at": "2026-04-18T19:24:48.000Z"
+        }
+      }
+    ]
+  }
+}
