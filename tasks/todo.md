@@ -2,6 +2,33 @@
 
 ## Goal
 
+Remove the Node 20 GitHub Actions deprecation warning from the TeamForge
+release workflow by moving the warned JavaScript actions onto current Node 24
+capable versions, then push the workflow fix.
+
+## Plan
+
+- [x] Update the warned GitHub Actions in `.github/workflows/release.yml` to
+      current Node 24-capable versions.
+- [x] Review the workflow diff for compatibility risks and runner assumptions.
+- [x] Commit the workflow fix and push it to `main`.
+
+## Review
+
+- Workflow change:
+  - upgraded `actions/checkout` from `v4` to `v6`
+  - upgraded `actions/setup-node` from `v4` to `v6`
+  - upgraded `pnpm/action-setup` from `v4` to `v6`
+- Compatibility note:
+  - this workflow runs on GitHub-hosted `macos-latest`, so the runner version
+    requirements for the Node 24-capable action majors are satisfied by the
+    hosted environment
+- Verification:
+  - `git diff --check` passed
+  - workflow diff stayed limited to the three warned JavaScript actions
+
+## Goal
+
 Review the app-wide LCARS UI cleanup as a release candidate, verify the release
 workflow prerequisites, then commit and push the release-ready changes so the
 OTA flow can pick them up.
