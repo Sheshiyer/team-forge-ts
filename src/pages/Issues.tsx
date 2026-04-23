@@ -134,7 +134,7 @@ function Issues() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setLoadError(
-        `COULD NOT LOAD ACTIVE PROJECT ISSUES. ${message.toUpperCase()}`,
+        `ACTIVE PROJECT ISSUES UNAVAILABLE. ${message.toUpperCase()}`,
       );
     } finally {
       setLoading(false);
@@ -321,7 +321,7 @@ function Issues() {
       ) : issues.length === 0 ? (
         <div style={styles.card}>
           <p style={styles.emptyText}>
-            NO ACTIVE PROJECT ISSUES FOUND. SYNC GITHUB PROJECTS TO POPULATE THE ISSUE BOARD.
+            NO ACTIVE PROJECT ISSUES.
           </p>
         </div>
       ) : groupedIssues.length === 0 ? (

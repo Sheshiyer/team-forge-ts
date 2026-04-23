@@ -48,7 +48,7 @@ function Boards() {
       setLoadError(null);
     } catch {
       setLoadError(
-        "COULD NOT LOAD BOARD CARDS FROM HULY. VERIFY BOARD SYNC AND HULY CONNECTIVITY.",
+        "BOARD CARDS UNAVAILABLE.",
       );
     } finally {
       setLoading(false);
@@ -99,7 +99,7 @@ function Boards() {
           <p style={styles.emptyText}>
             {stuckOnly
               ? "NO STUCK CARDS FOUND"
-              : "NO BOARD CARDS FOUND IN HULY. SYNC ACTIVE BOARDS TO POPULATE THIS VIEW."}
+              : "NO BOARD CARDS."}
           </p>
         ) : (
           <table style={styles.table}>

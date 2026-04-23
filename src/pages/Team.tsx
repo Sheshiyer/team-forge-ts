@@ -162,9 +162,9 @@ function Team() {
       applySnapshot(cachedSnapshot);
 
       if (cachedSnapshot.cacheUpdatedAt) {
-        setSnapshotMessage("Showing cached ops data while live Team refresh runs.");
+        setSnapshotMessage("USING CACHED TEAM DATA");
       } else {
-        setSnapshotMessage("No Team cache yet. Hydrating live ops overlays.");
+        setSnapshotMessage("LOADING TEAM DATA");
       }
     } catch (err) {
       setVaultProfiles([]);
@@ -179,19 +179,15 @@ function Team() {
       const refreshed = await api.refreshTeamSnapshot();
       applySnapshot(refreshed);
       if (refreshed.hulyError) {
-        setSnapshotMessage(
-          `Live Huly refresh failed. Showing cached ops data. Details: ${refreshed.hulyError}`
-        );
+        setSnapshotMessage(`CACHE ACTIVE • ${refreshed.hulyError}`);
       } else {
-        setSnapshotMessage("Live Team refresh complete.");
+        setSnapshotMessage("TEAM DATA CURRENT");
       }
     } catch (err) {
       if (cachedSnapshot?.cacheUpdatedAt) {
-        setSnapshotMessage(
-          `Live Huly refresh failed. Showing cached ops data. Details: ${String(err)}`
-        );
+        setSnapshotMessage(`CACHE ACTIVE • ${String(err)}`);
       } else {
-        setSnapshotMessage(`Live Team refresh failed: ${String(err)}`);
+        setSnapshotMessage(`TEAM DATA ERROR • ${String(err)}`);
       }
     } finally {
       setRefreshing(false);
@@ -283,6 +279,14 @@ function Team() {
   const visibleProfiles = activeProfiles.filter((profile) =>
     profileMatchesSearch(profile, rosterSearch)
   );
+  const uniqueProjectCount = new Set(
+    activeProfiles.flatMap((profile) =>
+      profile.primaryProjects.map((project) => project.trim()).filter(Boolean)
+    )
+  ).size;
+  const onboardingActiveCount = activeProfiles.filter(
+    (profile) => profile.onboardingStage.length > 0
+  ).length;
   const latestVaultSourceAt = activeProfiles.reduce<string | null>((latest, profile) => {
     if (!profile.sourceLastModifiedAt) return latest;
     if (!latest) return profile.sourceLastModifiedAt;
@@ -305,6 +309,7 @@ function Team() {
     .sort((left, right) => left.name.localeCompare(right.name));
   const unmappedProfiles = activeProfiles.filter((profile) => !profile.employeeId).length;
   const mappedProfiles = activeProfiles.filter((profile) => profile.employeeId).length;
+  const remoteCrewCount = monthlyHours.filter((row) => row.isRemote).length;
 
   const monthlyHoursByEmployeeName = new Map(
     monthlyHours.map((row) => [row.employeeName.toLowerCase(), row])
@@ -365,41 +370,92 @@ function Team() {
       ? "1fr"
       : (styles.departmentGrid.gridTemplateColumns as string),
   };
+  const overviewDeckStyle = {
+    ...styles.overviewDeck,
+    gridTemplateColumns: isMobileLayout
+      ? "repeat(2, minmax(0, 1fr))"
+      : (styles.overviewDeck.gridTemplateColumns as string),
+  };
+  const subrouteNavStyle = {
+    ...styles.subrouteNav,
+    gridTemplateColumns: isMobileLayout
+      ? "1fr"
+      : (styles.subrouteNav.gridTemplateColumns as string),
+  };
   const monthlyHoursTableStyle = {
     ...styles.table,
     minWidth: isMobileLayout ? 860 : 980,
   };
+  const statusTone = vaultError
+    ? "var(--lcars-red)"
+    : refreshing
+      ? "var(--lcars-cyan)"
+      : cacheUpdatedAt
+        ? "var(--lcars-green)"
+        : "var(--lcars-yellow)";
+  const statusLabel = vaultError
+    ? "VAULT ERROR"
+    : refreshing
+      ? "UPDATING"
+      : cacheUpdatedAt
+        ? "CACHE READY"
+        : "LIVE";
 
   return (
     <div>
       <h1 style={styles.pageTitle}>TEAM</h1>
       <div style={styles.pageTitleBar} />
       {(snapshotMessage || cacheUpdatedAt || refreshing) && (
-        <div style={styles.statusBanner}>
+        <div style={{ ...styles.statusBanner, borderLeftColor: statusTone }}>
           <div>
-            <div style={styles.statusBannerLabel}>
-              {refreshing ? "SYNCING OPS OVERLAYS" : "TEAM STATUS"}
-            </div>
+            <div style={{ ...styles.statusBannerLabel, color: statusTone }}>{statusLabel}</div>
             {snapshotMessage ? (
               <div style={styles.statusBannerText}>{snapshotMessage}</div>
             ) : null}
             <div style={styles.statusBannerText}>
-              Roster source: Obsidian vault
+              VAULT SOURCE
               {latestVaultSourceAt
-                ? ` · latest note ${formatSnapshotTimestamp(latestVaultSourceAt)}`
+                ? ` • ${formatSnapshotTimestamp(latestVaultSourceAt)}`
                 : ""}
             </div>
           </div>
           {cacheUpdatedAt ? (
             <div style={styles.statusBannerMeta}>
-              LAST CACHE {formatSnapshotTimestamp(cacheUpdatedAt)}
+              CACHE {formatSnapshotTimestamp(cacheUpdatedAt)}
             </div>
           ) : null}
         </div>
       )}
       {vaultError ? <div style={styles.errorBanner}>{vaultError}</div> : null}
 
-      <div style={styles.subrouteNav}>
+      <div style={overviewDeckStyle}>
+        <div style={{ ...styles.overviewCard, borderLeftColor: "var(--lcars-cyan)" }}>
+          <div style={styles.overviewLabel}>ACTIVE CREW</div>
+          <div style={styles.overviewValue}>{activeProfiles.length}</div>
+          <div style={styles.overviewMeta}>{mappedProfiles} LINKED TO APP</div>
+        </div>
+        <div style={{ ...styles.overviewCard, borderLeftColor: "var(--lcars-peach)" }}>
+          <div style={styles.overviewLabel}>DEPARTMENTS</div>
+          <div style={styles.overviewValue}>{rosterDepartments.length}</div>
+          <div style={styles.overviewMeta}>{uniqueProjectCount} ACTIVE PROJECTS</div>
+        </div>
+        <div style={{ ...styles.overviewCard, borderLeftColor: "var(--lcars-yellow)" }}>
+          <div style={styles.overviewLabel}>ONBOARDING</div>
+          <div style={styles.overviewValue}>{onboardingActiveCount}</div>
+          <div style={styles.overviewMeta}>{unmappedProfiles} UNMAPPED NOTES</div>
+        </div>
+        <div style={{ ...styles.overviewCard, borderLeftColor: "var(--lcars-green)" }}>
+          <div style={styles.overviewLabel}>REMOTE CREW</div>
+          <div style={styles.overviewValue}>{remoteCrewCount}</div>
+          <div style={styles.overviewMeta}>
+            {latestVaultSourceAt
+              ? `LATEST NOTE ${formatSnapshotTimestamp(latestVaultSourceAt)}`
+              : "NO NOTE TIMESTAMP"}
+          </div>
+        </div>
+      </div>
+
+      <div style={subrouteNavStyle}>
         <NavLink
           to="/team/roster"
           end
@@ -441,15 +497,11 @@ function Team() {
               <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
                 <div style={styles.sectionHeader}>
                   <div>
-                    <h2 style={styles.sectionTitle}>VAULT ROSTER</h2>
-                    <p style={styles.helperText}>
-                      Team identity, role, department, and onboarding state come
-                      directly from the Obsidian `50-team/*.md` notes. The old
-                      assignment workflow is intentionally removed from this surface.
-                    </p>
+                    <h2 style={styles.sectionTitle}>ROSTER</h2>
+                    <div style={styles.sectionCaption}>VAULT NOTES / CREW LINKING</div>
                   </div>
                   <div style={styles.searchWrap}>
-                    <label style={styles.searchLabel}>Filter roster</label>
+                    <label style={styles.searchLabel}>FILTER</label>
                     <input
                       value={rosterSearch}
                       onChange={(event) => setRosterSearch(event.target.value)}
@@ -463,19 +515,19 @@ function Team() {
                 <div style={statsGridStyle}>
                   <div style={styles.statCard}>
                     <div style={styles.statValue}>{activeProfiles.length}</div>
-                    <div style={styles.statLabel}>ACTIVE NOTES</div>
+                    <div style={styles.statLabel}>NOTES</div>
                   </div>
                   <div style={styles.statCard}>
                     <div style={styles.statValue}>{mappedProfiles}</div>
-                    <div style={styles.statLabel}>MAPPED TO APP</div>
+                    <div style={styles.statLabel}>LINKED</div>
                   </div>
                   <div style={styles.statCard}>
                     <div style={styles.statValue}>{rosterDepartments.length}</div>
-                    <div style={styles.statLabel}>DEPARTMENTS</div>
+                    <div style={styles.statLabel}>GROUPS</div>
                   </div>
                   <div style={styles.statCard}>
                     <div style={styles.statValue}>{unmappedProfiles}</div>
-                    <div style={styles.statLabel}>UNMAPPED NOTES</div>
+                    <div style={styles.statLabel}>UNMAPPED</div>
                   </div>
                 </div>
               </div>
@@ -485,7 +537,7 @@ function Team() {
                   <p style={styles.emptyText}>
                     {vaultError
                       ? "TEAM VAULT COULD NOT BE READ."
-                      : "NO ACTIVE TEAM MEMBER NOTES WERE FOUND IN THE OBSIDIAN VAULT."}
+                      : "NO ACTIVE TEAM NOTES."}
                   </p>
                 </div>
               ) : (
@@ -500,8 +552,7 @@ function Team() {
                           {department.name.toUpperCase()}
                         </div>
                         <div style={styles.departmentCaption}>
-                          {department.profiles.length} active roster note
-                          {department.profiles.length === 1 ? "" : "s"}
+                          {department.profiles.length} CREW
                         </div>
                       </div>
                     </div>
@@ -558,25 +609,33 @@ function Team() {
                             ) : null}
 
                             {profile.primaryProjects.length > 0 ? (
-                              <div style={styles.metaList}>
-                                <span style={styles.metaLabel}>Projects</span>
-                                <span style={styles.metaValue}>
-                                  {profile.primaryProjects.join(", ")}
-                                </span>
+                              <div style={styles.dataGroup}>
+                                <div style={styles.dataGroupLabel}>PROJECTS</div>
+                                <div style={styles.tagRow}>
+                                  {profile.primaryProjects.map((project) => (
+                                    <span key={project} style={styles.dataTag}>
+                                      {project.toUpperCase()}
+                                    </span>
+                                  ))}
+                                </div>
                               </div>
                             ) : null}
 
                             {profile.onboardingStage.length > 0 ? (
-                              <div style={styles.metaList}>
-                                <span style={styles.metaLabel}>Onboarding</span>
-                                <span style={styles.metaValue}>
-                                  {profile.onboardingStage.join(", ")}
-                                </span>
+                              <div style={styles.dataGroup}>
+                                <div style={styles.dataGroupLabel}>ONBOARDING</div>
+                                <div style={styles.tagRow}>
+                                  {profile.onboardingStage.map((stage) => (
+                                    <span key={stage} style={styles.dataTagMuted}>
+                                      {stage.toUpperCase()}
+                                    </span>
+                                  ))}
+                                </div>
                               </div>
                             ) : null}
 
                             <div style={styles.rosterFooter}>
-                              {profile.sourceRelativePath}
+                              NOTE {profile.sourceRelativePath}
                             </div>
                           </button>
                         );
@@ -594,15 +653,16 @@ function Team() {
           element={
             <>
               <div style={{ ...styles.card, borderLeftColor: "var(--lcars-peach)" }}>
-                <h2 style={styles.sectionTitle}>DEPARTMENT CAPACITY</h2>
-                <p style={styles.helperText}>
-                  Department groupings come from the vault roster; monthly hours
-                  and quota remain live operational overlays.
-                </p>
+                <div style={styles.sectionHeader}>
+                  <div>
+                    <h2 style={styles.sectionTitle}>CAPACITY</h2>
+                    <div style={styles.sectionCaption}>DEPARTMENT LOAD / MONTHLY HOURS</div>
+                  </div>
+                </div>
                 <div style={styles.sectionDivider} />
                 {departmentCapacity.length === 0 ? (
                   <p style={styles.emptyText}>
-                    NO MAPPED VAULT ROSTER NOTES ARE AVAILABLE FOR CAPACITY.
+                    NO LINKED CREW AVAILABLE
                   </p>
                 ) : (
                   <div style={departmentGridStyle}>
@@ -638,11 +698,11 @@ function Team() {
               </div>
 
               <div style={{ ...styles.card, borderLeftColor: "var(--lcars-tan)" }}>
-                <h2 style={styles.sectionTitle}>MONTHLY HOURS & REMOTE VISIBILITY</h2>
+                <h2 style={styles.sectionTitle}>MONTHLY LOAD</h2>
                 <div style={styles.sectionDivider} />
                 {monthlyCapacityRows.length === 0 ? (
                   <p style={styles.emptyText}>
-                    NO MONTHLY HOURS DATA. SYNC CLOCKIFY + HULY FIRST.
+                    NO MONTHLY HOURS DATA
                   </p>
                 ) : (
                   <div style={styles.tableScrollWrap}>
@@ -740,24 +800,14 @@ function Team() {
         <Route
           path="crew"
           element={
-            <>
-              <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
-                <h2 style={styles.sectionTitle}>CREW PROFILE</h2>
-                <div style={styles.sectionDivider} />
-                <p style={styles.helperText}>
-                  Vault profile, KPI snapshot, and live operational signals for one
-                  crew member.
-                </p>
-              </div>
-              <EmployeeSummaryPanel
-                employees={crewEmployees}
-                selectedEmployeeId={selectedEmployeeId}
-                onSelectEmployee={setSelectedEmployeeId}
-                summary={employeeSummary}
-                loading={summaryLoading}
-                error={summaryError}
-              />
-            </>
+            <EmployeeSummaryPanel
+              employees={crewEmployees}
+              selectedEmployeeId={selectedEmployeeId}
+              onSelectEmployee={setSelectedEmployeeId}
+              summary={employeeSummary}
+              loading={summaryLoading}
+              error={summaryError}
+            />
           }
         />
         <Route path="*" element={<Navigate to="roster" replace />} />
@@ -771,6 +821,13 @@ const styles: Record<string, CSSProperties> = {
   pageTitleBar: lcarsPageStyles.pageTitleBar,
   card: lcarsPageStyles.card,
   sectionTitle: lcarsPageStyles.sectionTitle,
+  sectionCaption: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    color: "var(--lcars-lavender)",
+    letterSpacing: "1.4px",
+    textTransform: "uppercase",
+  },
   helperText: {
     ...lcarsPageStyles.helperText,
     maxWidth: 680,
@@ -779,7 +836,39 @@ const styles: Record<string, CSSProperties> = {
   sectionDivider: lcarsPageStyles.sectionDivider,
   input: lcarsPageStyles.input,
   emptyText: lcarsPageStyles.emptyText,
+  overviewDeck: {
+    display: "grid",
+    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+    gap: 12,
+    marginBottom: 18,
+  },
+  overviewCard: {
+    ...lcarsPageStyles.subtleCard,
+    minHeight: 104,
+    padding: "14px 16px",
+  },
+  overviewLabel: {
+    ...lcarsPageStyles.metricLabel,
+    marginBottom: 10,
+  },
+  overviewValue: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 28,
+    fontWeight: 700,
+    color: "var(--lcars-orange)",
+    lineHeight: 1,
+    letterSpacing: "-0.04em",
+  },
+  overviewMeta: {
+    marginTop: 10,
+    fontSize: 10,
+    color: "var(--lcars-lavender)",
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    lineHeight: 1.5,
+  },
   statusBanner: {
+    ...lcarsPageStyles.subtleCard,
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
@@ -787,24 +876,23 @@ const styles: Record<string, CSSProperties> = {
     gap: 16,
     marginBottom: 20,
     padding: "12px 16px",
-    borderLeft: "4px solid var(--lcars-cyan)",
-    background: "rgba(0, 0, 0, 0.22)",
-    borderRadius: 8,
+    borderLeftWidth: 8,
   },
   statusBannerLabel: {
     fontFamily: "'Orbitron', sans-serif",
-    fontSize: 11,
-    letterSpacing: "0.16em",
-    color: "var(--lcars-cyan)",
-    marginBottom: 4,
+    fontSize: 10,
+    letterSpacing: "0.18em",
+    marginBottom: 6,
+    textTransform: "uppercase",
   },
   statusBannerText: {
-    fontSize: 13,
+    fontSize: 12,
     color: "var(--lcars-tan)",
+    lineHeight: 1.6,
   },
   statusBannerMeta: {
     fontFamily: "'JetBrains Mono', monospace",
-    fontSize: 12,
+    fontSize: 11,
     color: "var(--lcars-lavender)",
   },
   errorBanner: {
@@ -817,27 +905,30 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 13,
   },
   subrouteNav: {
-    display: "flex",
+    display: "grid",
+    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
     gap: 12,
-    flexWrap: "wrap",
     marginBottom: 18,
   },
   subrouteLink: {
-    padding: "10px 14px",
-    borderRadius: 999,
-    border: "1px solid rgba(153, 153, 204, 0.22)",
+    padding: "12px 14px",
+    borderRadius: "0 18px 18px 0",
+    border: "1px solid rgba(153, 153, 204, 0.18)",
+    borderLeft: "6px solid rgba(153, 153, 204, 0.18)",
     color: "var(--lcars-lavender)",
     fontFamily: "'Orbitron', sans-serif",
-    fontSize: 11,
-    letterSpacing: "0.12em",
+    fontSize: 10,
+    letterSpacing: "0.18em",
     textDecoration: "none",
-    background: "rgba(255, 255, 255, 0.02)",
+    background: "rgba(10, 12, 24, 0.82)",
+    textAlign: "center",
   },
   subrouteLinkActive: {
     color: "#08111f",
-    background: "var(--lcars-cyan)",
+    background: "linear-gradient(90deg, var(--lcars-cyan), #6de7ff)",
     borderColor: "transparent",
-    boxShadow: "0 0 20px rgba(0, 204, 255, 0.22)",
+    borderLeftColor: "transparent",
+    boxShadow: "0 0 18px rgba(0, 204, 255, 0.18)",
   },
   sectionHeader: {
     display: "flex",
@@ -969,6 +1060,44 @@ const styles: Record<string, CSSProperties> = {
     color: "var(--text-secondary)",
     lineHeight: 1.6,
     marginBottom: 12,
+  },
+  dataGroup: {
+    marginBottom: 10,
+  },
+  dataGroupLabel: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    color: "var(--text-quaternary)",
+    letterSpacing: "1px",
+    textTransform: "uppercase",
+    marginBottom: 6,
+  },
+  tagRow: {
+    display: "flex",
+    gap: 6,
+    flexWrap: "wrap",
+  },
+  dataTag: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 8,
+    color: "var(--lcars-orange)",
+    border: "1px solid rgba(255, 153, 0, 0.24)",
+    padding: "3px 7px",
+    borderRadius: 999,
+    letterSpacing: "1px",
+    textTransform: "uppercase",
+    background: "rgba(255, 153, 0, 0.08)",
+  },
+  dataTagMuted: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 8,
+    color: "var(--lcars-cyan)",
+    border: "1px solid rgba(0, 204, 255, 0.2)",
+    padding: "3px 7px",
+    borderRadius: 999,
+    letterSpacing: "1px",
+    textTransform: "uppercase",
+    background: "rgba(0, 204, 255, 0.08)",
   },
   metaList: {
     display: "grid",

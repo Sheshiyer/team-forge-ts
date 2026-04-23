@@ -112,7 +112,7 @@ function formatDate(dateStr: string | null): string {
 }
 
 function BurndownChart({ points }: { points: SprintBurndownPoint[] }) {
-  if (points.length === 0) return <p style={styles.emptyText}>NO BURNDOWN DATA AVAILABLE</p>;
+  if (points.length === 0) return <p style={styles.emptyText}>NO BURNDOWN DATA</p>;
   const maxVal = Math.max(...points.map((p) => Math.max(p.remaining, p.ideal)), 1);
   const w = 480;
   const h = 160;
@@ -162,7 +162,7 @@ function Sprints() {
       setLoadError(null);
     } catch {
       setLoadError(
-        "COULD NOT LOAD MILESTONES FROM HULY. VERIFY PROJECT SYNC AND HULY CONNECTIVITY.",
+        "MILESTONES UNAVAILABLE.",
       );
     } finally {
       setLoading(false);
@@ -182,7 +182,7 @@ function Sprints() {
     } catch {
       setSprintDetail(null);
       setDetailError(
-        "COULD NOT LOAD SPRINT DETAIL. BURNDOWN, GOALS, AND CAPACITY REQUIRE HULY MILESTONE DETAIL DATA.",
+        "SPRINT DETAIL UNAVAILABLE.",
       );
     } finally {
       setDetailLoading(false);
@@ -234,7 +234,7 @@ function Sprints() {
           <p style={styles.emptyText}>{loadError}</p>
         ) : milestones.length === 0 ? (
           <p style={styles.emptyText}>
-            NO ACTIVE OR PLANNED MILESTONES FOUND IN HULY. SYNC PROJECT MILESTONES TO POPULATE THIS VIEW.
+            NO ACTIVE OR PLANNED MILESTONES.
           </p>
         ) : (
           <table style={styles.table}>
@@ -322,7 +322,7 @@ function Sprints() {
             ) : sprintDetail ? (
               <BurndownChart points={sprintDetail.burndown} />
             ) : (
-              <p style={styles.emptyText}>NO BURNDOWN DATA AVAILABLE</p>
+              <p style={styles.emptyText}>NO BURNDOWN DATA</p>
             )}
           </div>
 
@@ -390,7 +390,7 @@ function Sprints() {
             ) : detailError ? (
               <p style={styles.emptyText}>{detailError}</p>
             ) : (
-              <p style={styles.emptyText}>NO CAPACITY DATA AVAILABLE</p>
+              <p style={styles.emptyText}>NO CAPACITY DATA</p>
             )}
           </div>
 

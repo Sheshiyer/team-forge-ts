@@ -52,7 +52,7 @@ function Live() {
           ))}
         </div>
       ) : presence.length === 0 ? (
-        <p style={styles.emptyText}>NO CREW MEMBERS FOUND. SYNC DATA FIRST.</p>
+        <p style={styles.emptyText}>NO CREW SIGNALS.</p>
       ) : (
         <div style={styles.grid}>
           {presence.map((p) => (

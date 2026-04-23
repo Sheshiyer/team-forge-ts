@@ -422,12 +422,11 @@ function Projects() {
               </p>
             ) : executionSourceError && projects.length === 0 ? (
               <p style={styles.emptyText}>
-                NO CACHED EXECUTION PROJECTS ARE AVAILABLE YET. {executionSourceError}
+                EXECUTION PROJECTS UNAVAILABLE. {executionSourceError}
               </p>
             ) : projects.length === 0 ? (
               <p style={styles.emptyText}>
-                NO EXECUTION PROJECTS FOUND. LINK TEAMFORGE PROJECTS TO GITHUB REPOS OR
-                CLOCKIFY PROJECTS IN THE CONTROL PLANE TO POPULATE THIS DERIVED VIEW.
+                NO EXECUTION PROJECTS.
               </p>
             ) : (
               <table style={styles.table}>
@@ -866,7 +865,7 @@ function Projects() {
                 {!controlPlane ? (
                   <p style={styles.emptyText}>NO PROJECT DETAIL LOADED.</p>
                 ) : controlPlane.entityMappings.length === 0 ? (
-                  <p style={styles.emptyText}>NO MAPPINGS YET. RUN SYNC TO BUILD THE CONTROL PLANE.</p>
+                  <p style={styles.emptyText}>NO ENTITY MAPPINGS YET.</p>
                 ) : (
                   <table style={styles.table}>
                     <thead>

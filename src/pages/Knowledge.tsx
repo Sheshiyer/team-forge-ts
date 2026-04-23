@@ -82,7 +82,7 @@ function Knowledge() {
       setLoadError(null);
     } catch {
       setLoadError(
-        "COULD NOT LOAD KNOWLEDGE ARTICLES. VERIFY HULY DOCUMENT ACCESS AND LOCAL CACHE STATE.",
+        "KNOWLEDGE ARTICLES UNAVAILABLE.",
       );
     } finally {
       setLoading(false);
@@ -217,7 +217,7 @@ function Knowledge() {
         </div>
       ) : articles.length === 0 ? (
         <div style={styles.card}>
-          <p style={styles.emptyText}>NO KNOWLEDGE ARTICLES FOUND IN HULY OR THE LOCAL CACHE.</p>
+          <p style={styles.emptyText}>NO KNOWLEDGE ARTICLES.</p>
         </div>
       ) : filtered.length === 0 ? (
         <div style={styles.card}>

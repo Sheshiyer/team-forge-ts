@@ -1,6 +1,6 @@
 {
   "name": "team-forge-ts",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "description": "LCARS mission-control desktop app with a Cloudflare-backed TeamForge project control plane for GitHub and Huly.",
   "private": true,
   "type": "module",

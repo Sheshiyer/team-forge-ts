@@ -349,7 +349,7 @@ function Onboarding() {
       setLoadError(null);
     } catch {
       setLoadError(
-        "COULD NOT LOAD ONBOARDING FLOWS. VERIFY THE TEAMFORGE CACHE OR WORKER ROUTES FOR CLIENT/EMPLOYEE ONBOARDING.",
+        "ONBOARDING FLOWS UNAVAILABLE.",
       );
     } finally {
       setLoading(false);
@@ -403,8 +403,8 @@ function Onboarding() {
         <div style={styles.infoBannerIcon}>◈</div>
         <div style={styles.infoBannerText}>
           {tab === "client"
-            ? "CLIENT ONBOARDING PREFERS CANONICAL VAULT NOTES AND FALLS BACK TO A CLEARLY-LABELED HEURISTIC VIEW WHEN NO CLIENT FLOW NOTE EXISTS."
-            : "EMPLOYEE ONBOARDING IS NOTE-DRIVEN ONLY. IF NO EMPLOYEE FLOW NOTE EXISTS, THIS TAB STAYS EMPTY RATHER THAN INFERRING PROGRESS FROM UNRELATED TELEMETRY."}
+            ? "VAULT FLOWS FIRST. FALLBACK FLOWS STAY CLEARLY LABELED."
+            : "VAULT FLOWS ONLY. THIS VIEW STAYS EMPTY UNTIL AN EMPLOYEE FLOW NOTE IS READY."}
         </div>
       </div>
 
@@ -463,8 +463,8 @@ function Onboarding() {
         ) : visibleFlows.length === 0 ? (
           <p style={styles.emptyText}>
             {tab === "client"
-              ? "NO CLIENT ONBOARDING FLOWS FOUND. ADD A `client-onboarding-flow` NOTE OR WAIT FOR A CLIENT FALLBACK FLOW TO APPEAR."
-              : "NO EMPLOYEE ONBOARDING FLOWS FOUND. ADD AN `employee-onboarding-flow` NOTE TO THE VAULT TO POPULATE THIS TAB."}
+              ? "NO CLIENT ONBOARDING FLOWS."
+              : "NO EMPLOYEE ONBOARDING FLOWS."}
           </p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>

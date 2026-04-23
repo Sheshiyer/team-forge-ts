@@ -2,6 +2,96 @@
 
 ## Goal
 
+Review the app-wide LCARS UI cleanup as a release candidate, verify the release
+workflow prerequisites, then commit and push the release-ready changes so the
+OTA flow can pick them up.
+
+## Plan
+
+- [x] Review the full diff for accidental data/model changes, broken routes,
+      or release workflow blockers.
+- [x] Re-run frontend and Tauri/Rust verification from the current working
+      tree.
+- [x] Bump release metadata and changelog for the OTA candidate tag.
+- [x] Inspect release workflow state and confirm the commit scope is
+      release-safe.
+- [x] Commit the validated changes, tag the release, and push to the GitHub
+      remote.
+
+## Review
+
+- Release target:
+  - bumped app metadata from `0.1.21` to `0.1.22`
+  - added `CHANGELOG.md` entry for `v0.1.22`
+  - confirmed local `v0.1.21` already points at `origin/main`, so this UI pass
+    needs a new OTA tag instead of retagging the existing release
+  - confirmed no remote `v0.1.22` tag exists before push
+- Release workflow:
+  - `.github/workflows/release.yml` builds on `v*` tags and publishes OTA
+    artifacts for Apple Silicon and Intel
+  - updater artifacts remain enabled in `src-tauri/tauri.conf.json`
+  - workflow still validates required OTA signing and Cloudflare secrets at run
+    time
+- Review findings:
+  - fixed invalid CSS variable alpha strings in the new status/source pill
+    styling before release verification
+  - `git diff --check` passed
+- Verification:
+  - `pnpm build` passed
+  - `cargo check --manifest-path src-tauri/Cargo.toml` passed with existing
+    dead-code warnings only
+
+## Goal
+
+Run an app-wide UI cleanup using the same criteria across every visible
+TeamForge surface:
+
+- remove narrator/debug/meta copy
+- tighten status/error/empty-state language
+- bring older routes up to the current LCARS console standard
+- clean up any obviously rough admin-style layouts that still break the visual
+  system
+
+## Plan
+
+- [x] Audit the shared shell and all major routes for the repeated UI problems:
+      - explanatory sync prose
+      - verbose error strings
+      - weak empty states
+      - inconsistent LCARS section framing
+- [x] Refactor the shared shell and highest-traffic routes first so the app’s
+      core navigation and founder surfaces set the visual language correctly.
+- [x] Scrub the remaining routes for terse, product-grade copy and cleaner
+      layout framing using the same rules.
+- [x] Re-run frontend and Rust verification, then record the validated result
+      and any new UI lessons.
+
+## Review
+
+- High-traffic route cleanup:
+  - rebuilt `Comms` into a roster-first signal console with sync rails, ranked
+    panels, and a crew matrix instead of two isolated tables
+  - rebuilt `Calendar` into split control/data surfaces for leave and holidays
+    with cleaner sync state treatment
+  - rewrote the Team `EmployeeSummaryPanel` as a concise crew profile surface
+    with vault/KPI status pills and tighter section copy
+- App-wide copy sweep:
+  - removed narrator/debug-style sync prose across TeamForge pages including
+    `Onboarding`, `Planner`, `Sprints`, `Knowledge`, `Issues`, `Boards`,
+    `Activity`, `Live`, `Clients`, `Projects`, `Insights`, `Settings`, and
+    several smaller empty states
+  - normalized error and empty-state language toward short product text instead
+    of instructions about caches, worker routes, or manual sync steps
+- Verification:
+  - `pnpm install --frozen-lockfile`
+    - passed after restoring dependencies in the freshly cloned repo
+  - `pnpm build`
+    - passed
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+    - passed with existing dead-code warnings only
+
+## Goal
+
 Wire TeamForge to the real Thoughtseed Paperclip repo path, add a launch
 wrapper that matches the existing Paperclip startup contract, and prepare the
 current repo state for the next tagged release commit.

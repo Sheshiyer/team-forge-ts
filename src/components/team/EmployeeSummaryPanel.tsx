@@ -57,6 +57,41 @@ function MetricTile({
   );
 }
 
+function StatusPill({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "good" | "warn" | "info" | "neutral";
+}) {
+  const colorByTone = {
+    good: "var(--lcars-green)",
+    warn: "var(--lcars-orange)",
+    info: "var(--lcars-cyan)",
+    neutral: "var(--lcars-lavender)",
+  } satisfies Record<typeof tone, string>;
+  const backgroundByTone = {
+    good: "rgba(51, 204, 102, 0.08)",
+    warn: "rgba(255, 153, 0, 0.08)",
+    info: "rgba(0, 204, 255, 0.08)",
+    neutral: "rgba(153, 153, 204, 0.08)",
+  } satisfies Record<typeof tone, string>;
+
+  const color = colorByTone[tone];
+  return (
+    <span
+      style={{
+        ...styles.statusPill,
+        color,
+        borderColor: color,
+        background: backgroundByTone[tone],
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
 function DetailList({
   title,
   emptyLabel,
@@ -143,19 +178,20 @@ export default function EmployeeSummaryPanel({
       : summary?.vaultProfile?.department
         ? [summary.vaultProfile.department]
         : [];
+  const hasEvents = Boolean(summary?.upcomingEvents.length);
+  const hasCurrentLeave = Boolean(summary?.currentLeave);
+  const hasKpi = Boolean(summary?.kpiSnapshot);
+  const hasVaultProfile = Boolean(summary?.vaultProfile);
 
   return (
     <div style={styles.card}>
       <div style={headerRowStyle}>
         <div>
-          <h2 style={styles.sectionTitle}>EMPLOYEE OPERATIONS SUMMARY</h2>
-          <p style={styles.helperText}>
-            Vault-defined role context plus standups, leave, work hours, and
-            near-term schedule for one crew member.
-          </p>
+          <h2 style={styles.sectionTitle}>CREW PROFILE</h2>
+          <div style={styles.sectionCaption}>IDENTITY / WORKLOAD / KPI</div>
         </div>
         <div style={selectorWrapStyle}>
-          <label style={styles.selectorLabel}>Crew Member</label>
+          <label style={styles.selectorLabel}>PROFILE</label>
           <select
             value={selectedEmployeeId}
             onChange={(event) => onSelectEmployee(event.target.value)}
@@ -173,11 +209,9 @@ export default function EmployeeSummaryPanel({
       </div>
       <div style={styles.sectionDivider} />
 
-      {error ? <p style={styles.emptyText}>{error.toUpperCase()}</p> : null}
-      {!error && loading ? <p style={styles.loadingText}>LOADING EMPLOYEE SUMMARY...</p> : null}
-      {!error && !loading && !summary ? (
-        <p style={styles.emptyText}>SELECT A CREW MEMBER TO LOAD THEIR SUMMARY</p>
-      ) : null}
+      {error ? <p style={styles.errorText}>{error.toUpperCase()}</p> : null}
+      {!error && loading ? <p style={styles.loadingText}>LOADING PROFILE...</p> : null}
+      {!error && !loading && !summary ? <p style={styles.emptyText}>SELECT CREW</p> : null}
 
       {!error && !loading && summary ? (
         <>
@@ -198,12 +232,8 @@ export default function EmployeeSummaryPanel({
                           {role.toUpperCase()}
                         </span>
                       ))
-                    : departmentPills.map((department) => (
-                        <span key={department} style={styles.departmentPill}>
-                          {department.toUpperCase()}
-                        </span>
-                      ))}
-                  {departmentPills.length > 0 && rolePills.length > 0
+                    : null}
+                  {departmentPills.length > 0
                     ? departmentPills.map((department) => (
                         <span key={department} style={styles.departmentPill}>
                           {department.toUpperCase()}
@@ -224,61 +254,48 @@ export default function EmployeeSummaryPanel({
             </div>
           </div>
 
+          <div style={styles.statusStrip}>
+            <StatusPill label={hasVaultProfile ? "VAULT LINKED" : "NO VAULT"} tone={hasVaultProfile ? "good" : "warn"} />
+            <StatusPill label={hasKpi ? "KPI READY" : "NO KPI"} tone={hasKpi ? "info" : "neutral"} />
+            <StatusPill label={hasCurrentLeave ? "ON LEAVE" : "AVAILABLE"} tone={hasCurrentLeave ? "warn" : "good"} />
+            <StatusPill label={hasEvents ? "SCHEDULED" : "OPEN CALENDAR"} tone={hasEvents ? "info" : "neutral"} />
+          </div>
+
           <div style={metricsGridStyle}>
             <MetricTile
-              label="WORK THIS WEEK"
+              label="WORK WEEK"
               value={`${summary.workHoursThisWeek.toFixed(1)}H`}
               accent="var(--lcars-orange)"
             />
             <MetricTile
-              label="WORK THIS MONTH"
+              label="WORK MONTH"
               value={`${summary.workHoursThisMonth.toFixed(1)}H`}
               accent="var(--lcars-cyan)"
             />
             <MetricTile
-              label="MEETINGS THIS WEEK"
+              label="MEETING LOAD"
               value={`${summary.meetingsThisWeek} / ${summary.meetingHoursThisWeek.toFixed(1)}H`}
               accent="var(--lcars-yellow)"
             />
             <MetricTile
-              label="STANDUPS 7D"
-              value={
-                summary.standupsLast7Days > 0
-                  ? `${summary.standupsLast7Days} · ${formatDateTime(
-                      summary.lastStandupAt
-                    )}`
-                  : "0 · --"
-              }
+              label="SIGNALS 7D"
+              value={`${summary.standupsLast7Days} STANDUPS · ${summary.messagesLast7Days} MSG`}
               accent="var(--lcars-green)"
-            />
-            <MetricTile
-              label="MESSAGES 7D"
-              value={
-                summary.messagesLast7Days > 0
-                  ? `${summary.messagesLast7Days} · ${formatDateTime(
-                      summary.lastMessageAt
-                    )}`
-                  : "0 · --"
-              }
-              accent="var(--lcars-lavender)"
             />
           </div>
 
           <div style={styles.vaultCard}>
-            <div style={styles.kpiHeader}>
+            <div style={styles.cardHeader}>
               <div>
-                <div style={styles.detailTitle}>Vault Team Profile</div>
-                <div style={styles.detailSubtle}>
-                  Live role and roster metadata from the Obsidian `50-team`
-                  note.
-                </div>
+                <div style={styles.detailTitle}>VAULT PROFILE</div>
+                <div style={styles.sectionCaption}>ROLE / PROJECTS / NOTE</div>
               </div>
               {summary.vaultProfile ? (
-                <div style={styles.kpiMetaStack}>
-                  <span style={styles.kpiMetaPill}>
+                <div style={styles.metaPillRow}>
+                  <span style={styles.metaPill}>
                     {summary.vaultProfile.memberId.toUpperCase()}
                   </span>
-                  <span style={styles.kpiMetaPill}>
+                  <span style={styles.metaPill}>
                     SOURCE {formatDateTime(summary.vaultProfile.sourceLastModifiedAt)}
                   </span>
                 </div>
@@ -294,22 +311,20 @@ export default function EmployeeSummaryPanel({
                       {summary.vaultProfile.displayName.toUpperCase()}
                     </div>
                     <div style={styles.kpiCaption}>
-                      {summary.vaultProfile.role
-                        ? summary.vaultProfile.role
-                        : "Role not specified"}
+                      {summary.vaultProfile.role ?? "Role not set"}
                       {summary.vaultProfile.department
                         ? ` · ${summary.vaultProfile.department}`
                         : ""}
                     </div>
                   </div>
-                  <div style={styles.kpiMetaStack}>
+                  <div style={styles.metaPillRow}>
                     {summary.vaultProfile.joined ? (
-                      <span style={styles.kpiMetaPill}>
+                      <span style={styles.metaPill}>
                         JOINED {formatDate(summary.vaultProfile.joined)}
                       </span>
                     ) : null}
                     {summary.vaultProfile.contractEffective ? (
-                      <span style={styles.kpiMetaPill}>
+                      <span style={styles.metaPill}>
                         CONTRACT {formatDate(summary.vaultProfile.contractEffective)}
                       </span>
                     ) : null}
@@ -341,10 +356,7 @@ export default function EmployeeSummaryPanel({
                 ) : null}
 
                 <div style={detailGridStyle}>
-                  <DetailList
-                    title="Primary Projects"
-                    emptyLabel="NO PRIMARY PROJECTS RECORDED"
-                  >
+                  <DetailList title="PRIMARY PROJECTS" emptyLabel="NO PRIMARY PROJECTS">
                     {summary.vaultProfile.primaryProjects.length > 0 ? (
                       <div style={styles.detailList}>
                         {summary.vaultProfile.primaryProjects.map((item) => (
@@ -356,7 +368,7 @@ export default function EmployeeSummaryPanel({
                     ) : null}
                   </DetailList>
 
-                  <DetailList title="Scope" emptyLabel="NO ROLE SCOPE TAGS RECORDED">
+                  <DetailList title="SCOPE" emptyLabel="NO SCOPE TAGS">
                     {summary.vaultProfile.scope.length > 0 ? (
                       <div style={styles.detailList}>
                         {summary.vaultProfile.scope.map((item) => (
@@ -368,7 +380,7 @@ export default function EmployeeSummaryPanel({
                     ) : null}
                   </DetailList>
 
-                  <DetailList title="Team Tags" emptyLabel="NO TEAM TAGS RECORDED">
+                  <DetailList title="TEAM TAGS" emptyLabel="NO TEAM TAGS">
                     {summary.vaultProfile.teamTags.length > 0 ? (
                       <div style={styles.detailList}>
                         {summary.vaultProfile.teamTags.map((item) => (
@@ -380,7 +392,7 @@ export default function EmployeeSummaryPanel({
                     ) : null}
                   </DetailList>
 
-                  <DetailList title="Source Note" emptyLabel="SOURCE NOTE MISSING">
+                  <DetailList title="SOURCE NOTE" emptyLabel="NO SOURCE NOTE">
                     <div style={styles.detailList}>
                       <div style={styles.detailPrimary}>
                         {summary.vaultProfile.sourceRelativePath}
@@ -395,23 +407,18 @@ export default function EmployeeSummaryPanel({
                 </div>
 
                 {summary.vaultProfile.roleScopeMarkdown ? (
-                  <div style={styles.kpiFooter}>
-                    {summary.vaultProfile.roleScopeMarkdown}
+                  <div style={styles.cardFooter}>
+                    NOTE {summary.vaultProfile.roleScopeMarkdown}
                   </div>
                 ) : null}
               </>
             ) : (
-              <div style={styles.emptyText}>
-                NO OBSIDIAN TEAM PROFILE FOUND FOR THIS CREW MEMBER
-              </div>
+              <div style={styles.emptyText}>NO VAULT PROFILE</div>
             )}
           </div>
 
           <div style={detailGridStyle}>
-            <DetailList
-              title="Current Leave"
-              emptyLabel="NO ACTIVE LEAVE"
-            >
+            <DetailList title="CURRENT LEAVE" emptyLabel="NO ACTIVE LEAVE">
               {summary.currentLeave ? (
                 <div style={styles.detailList}>
                   <div style={detailRowStyle}>
@@ -433,10 +440,7 @@ export default function EmployeeSummaryPanel({
               ) : null}
             </DetailList>
 
-            <DetailList
-              title="Upcoming Leave"
-              emptyLabel="NO UPCOMING LEAVE"
-            >
+            <DetailList title="UPCOMING LEAVE" emptyLabel="NO UPCOMING LEAVE">
               {summary.upcomingLeaves.length > 0 ? (
                 <div style={styles.detailList}>
                   {summary.upcomingLeaves.map((leave) => (
@@ -456,10 +460,7 @@ export default function EmployeeSummaryPanel({
               ) : null}
             </DetailList>
 
-            <DetailList
-              title="Upcoming Schedule"
-              emptyLabel="NO UPCOMING EVENTS"
-            >
+            <DetailList title="UPCOMING SCHEDULE" emptyLabel="NO UPCOMING EVENTS">
               {summary.upcomingEvents.length > 0 ? (
                 <div style={styles.detailList}>
                   {summary.upcomingEvents.map((event) => (
@@ -485,19 +486,17 @@ export default function EmployeeSummaryPanel({
           </div>
 
           <div style={styles.kpiCard}>
-            <div style={styles.kpiHeader}>
+            <div style={styles.cardHeader}>
               <div>
-                <div style={styles.detailTitle}>Latest KPI Snapshot</div>
-                <div style={styles.detailSubtle}>
-                  Latest imported per-employee KPI from the Thoughtseed vault.
-                </div>
+                <div style={styles.detailTitle}>KPI SNAPSHOT</div>
+                <div style={styles.sectionCaption}>MONTH / QUARTER / EVIDENCE</div>
               </div>
               {summary.kpiSnapshot ? (
-                <div style={styles.kpiMetaStack}>
-                  <span style={styles.kpiMetaPill}>
+                <div style={styles.metaPillRow}>
+                  <span style={styles.metaPill}>
                     {summary.kpiSnapshot.kpiVersion.toUpperCase()}
                   </span>
-                  <span style={styles.kpiMetaPill}>
+                  <span style={styles.metaPill}>
                     SOURCE {formatDateTime(summary.kpiSnapshot.sourceLastModifiedAt)}
                   </span>
                 </div>
@@ -513,21 +512,19 @@ export default function EmployeeSummaryPanel({
                       {summary.kpiSnapshot.title.toUpperCase()}
                     </div>
                     <div style={styles.kpiCaption}>
-                      {summary.kpiSnapshot.roleTemplate
-                        ? summary.kpiSnapshot.roleTemplate
-                        : "Role template not set"}
+                      {summary.kpiSnapshot.roleTemplate ?? "Role template not set"}
                       {summary.kpiSnapshot.reportsTo
-                        ? ` · reports to ${summary.kpiSnapshot.reportsTo}`
+                        ? ` · ${summary.kpiSnapshot.reportsTo}`
                         : ""}
                     </div>
                   </div>
-                  <div style={styles.kpiMetaStack}>
+                  <div style={styles.metaPillRow}>
                     {summary.kpiSnapshot.lastReviewed ? (
-                      <span style={styles.kpiMetaPill}>
+                      <span style={styles.metaPill}>
                         REVIEWED {formatDate(summary.kpiSnapshot.lastReviewed)}
                       </span>
                     ) : null}
-                    <span style={styles.kpiMetaPill}>
+                    <span style={styles.metaPill}>
                       IMPORTED {formatDateTime(summary.kpiSnapshot.importedAt)}
                     </span>
                   </div>
@@ -551,7 +548,7 @@ export default function EmployeeSummaryPanel({
 
                 <div style={kpiGridStyle}>
                   <div style={styles.kpiSection}>
-                    <div style={styles.kpiSectionTitle}>Monthly KPIs</div>
+                    <div style={styles.kpiSectionTitle}>MONTHLY KPIS</div>
                     <div style={styles.kpiList}>
                       {summary.kpiSnapshot.monthlyKpis.map((item) => (
                         <div key={item} style={styles.kpiListItem}>
@@ -562,7 +559,7 @@ export default function EmployeeSummaryPanel({
                   </div>
 
                   <div style={styles.kpiSection}>
-                    <div style={styles.kpiSectionTitle}>Quarterly Milestones</div>
+                    <div style={styles.kpiSectionTitle}>QUARTERLY MILESTONES</div>
                     <div style={styles.kpiList}>
                       {summary.kpiSnapshot.quarterlyMilestones.map((item) => (
                         <div key={item} style={styles.kpiListItem}>
@@ -573,7 +570,7 @@ export default function EmployeeSummaryPanel({
                   </div>
 
                   <div style={styles.kpiSection}>
-                    <div style={styles.kpiSectionTitle}>Evidence Sources</div>
+                    <div style={styles.kpiSectionTitle}>EVIDENCE SOURCES</div>
                     <div style={styles.kpiList}>
                       {summary.kpiSnapshot.evidenceSources.map((item) => (
                         <div key={item} style={styles.kpiListItem}>
@@ -584,7 +581,7 @@ export default function EmployeeSummaryPanel({
                   </div>
 
                   <div style={styles.kpiSection}>
-                    <div style={styles.kpiSectionTitle}>Gap Flags</div>
+                    <div style={styles.kpiSectionTitle}>GAP FLAGS</div>
                     <div style={styles.kpiList}>
                       {summary.kpiSnapshot.gapFlags.length > 0 ? (
                         summary.kpiSnapshot.gapFlags.map((item) => (
@@ -593,20 +590,18 @@ export default function EmployeeSummaryPanel({
                           </div>
                         ))
                       ) : (
-                        <div style={styles.emptyText}>NO GAP FLAGS RECORDED</div>
+                        <div style={styles.emptyText}>NO GAP FLAGS</div>
                       )}
                     </div>
                   </div>
                 </div>
 
-                <div style={styles.kpiFooter}>
-                  Source note: {summary.kpiSnapshot.sourceRelativePath}
+                <div style={styles.cardFooter}>
+                  NOTE {summary.kpiSnapshot.sourceRelativePath}
                 </div>
               </>
             ) : (
-              <div style={styles.emptyText}>
-                NO IMPORTED KPI SNAPSHOT FOUND FOR THIS CREW MEMBER
-              </div>
+              <div style={styles.emptyText}>NO KPI SNAPSHOT</div>
             )}
           </div>
         </>
@@ -628,10 +623,12 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap" as const,
   },
   sectionTitle: lcarsPageStyles.sectionTitle,
-  helperText: {
-    ...lcarsPageStyles.helperText,
-    marginBottom: 0,
-    maxWidth: 420,
+  sectionCaption: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    color: "var(--lcars-lavender)",
+    letterSpacing: "1.4px",
+    textTransform: "uppercase" as const,
   },
   selectorWrap: {
     minWidth: 240,
@@ -648,6 +645,10 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--lcars-cyan)",
   },
   emptyText: lcarsPageStyles.emptyText,
+  errorText: {
+    ...lcarsPageStyles.emptyText,
+    color: "var(--lcars-yellow)",
+  },
   identityCard: {
     ...lcarsPageStyles.subtleCard,
     borderLeftColor: "var(--lcars-cyan)",
@@ -655,7 +656,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "space-between",
     alignItems: "flex-start",
     gap: 20,
-    marginBottom: 16,
+    marginBottom: 12,
   },
   identityRow: {
     display: "flex",
@@ -688,20 +689,40 @@ const styles: Record<string, React.CSSProperties> = {
   rolePill: {
     border: "1px solid var(--lcars-cyan)",
     color: "var(--lcars-cyan)",
-    padding: "3px 8px",
+    background: "rgba(0, 204, 255, 0.12)",
+    padding: "4px 9px",
     fontSize: 9,
     fontFamily: "'Orbitron', sans-serif",
     letterSpacing: "1px",
-    borderRadius: 2,
+    borderRadius: 999,
   },
   departmentPill: {
     border: "1px solid rgba(255, 153, 0, 0.45)",
     color: "var(--lcars-orange)",
-    padding: "3px 8px",
+    background: "rgba(255, 153, 0, 0.12)",
+    padding: "4px 9px",
     fontSize: 9,
     fontFamily: "'Orbitron', sans-serif",
     letterSpacing: "1px",
-    borderRadius: 2,
+    borderRadius: 999,
+  },
+  statusStrip: {
+    display: "flex",
+    gap: 10,
+    flexWrap: "wrap" as const,
+    marginBottom: 16,
+  },
+  statusPill: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    border: "1px solid rgba(153, 153, 204, 0.24)",
+    padding: "5px 10px",
+    borderRadius: 999,
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    letterSpacing: "1px",
+    textTransform: "uppercase" as const,
   },
   metricsGrid: {
     display: "grid",
@@ -721,6 +742,28 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     color: "var(--lcars-orange)",
     lineHeight: 1.35,
+  },
+  cardHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+    flexWrap: "wrap" as const,
+  },
+  metaPillRow: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap" as const,
+    justifyContent: "flex-end",
+  },
+  metaPill: {
+    border: "1px solid rgba(153, 153, 204, 0.28)",
+    color: "var(--lcars-cyan)",
+    padding: "4px 8px",
+    fontSize: 10,
+    fontFamily: "'JetBrains Mono', monospace",
+    letterSpacing: "0.6px",
+    borderRadius: 2,
   },
   detailGrid: {
     display: "grid",
@@ -747,34 +790,12 @@ const styles: Record<string, React.CSSProperties> = {
     borderLeftColor: "var(--lcars-orange)",
     marginBottom: 16,
   },
-  kpiHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: 12,
-    flexWrap: "wrap" as const,
-  },
   kpiIdentity: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "flex-start",
     gap: 12,
     flexWrap: "wrap" as const,
-  },
-  kpiMetaStack: {
-    display: "flex",
-    gap: 8,
-    flexWrap: "wrap" as const,
-    justifyContent: "flex-end",
-  },
-  kpiMetaPill: {
-    border: "1px solid rgba(153, 153, 204, 0.28)",
-    color: "var(--lcars-cyan)",
-    padding: "4px 8px",
-    fontSize: 10,
-    fontFamily: "'JetBrains Mono', monospace",
-    letterSpacing: "0.6px",
-    borderRadius: 2,
   },
   kpiTitle: {
     color: "var(--lcars-orange)",
@@ -816,10 +837,12 @@ const styles: Record<string, React.CSSProperties> = {
     paddingBottom: 8,
     borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
   },
-  kpiFooter: {
+  cardFooter: {
     color: "var(--text-quaternary)",
     fontSize: 11,
     marginTop: 12,
+    lineHeight: 1.5,
+    whiteSpace: "pre-wrap" as const,
     wordBreak: "break-word" as const,
   },
   detailTitle: lcarsPageStyles.sectionTitle,

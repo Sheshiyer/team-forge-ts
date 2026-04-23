@@ -2,6 +2,29 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.22 - 2026-04-23
+
+This release cleans up the TeamForge founder console UI so the app reads as a
+cohesive LCARS operations surface instead of a collection of sync/debug views.
+
+### Changed
+
+- Rebuilt the `Comms` page into a roster-first signal console with sync rails,
+  chat/meeting leader panels, and a crew matrix.
+- Rebuilt the `Calendar` page into split control/data surfaces for leave and
+  holiday operations.
+- Tightened the Team crew profile panel with vault/KPI status pills and shorter
+  section language.
+- Swept visible pages for narrator-style sync prose, verbose errors, and weak
+  empty states so founder-facing language stays short and product-grade.
+- Bumped release metadata to `0.1.22` across the frontend package, Tauri config,
+  and Rust crate.
+
+### Verification
+
+- `pnpm build`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+
 ## v0.1.21 - 2026-04-22
 
 This release turns the new TeamForge founder console into a real local-control

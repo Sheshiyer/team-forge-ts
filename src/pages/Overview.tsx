@@ -326,7 +326,7 @@ function Overview() {
           <div style={styles.sectionDivider} />
           {topWeeklyRows.length === 0 ? (
             <p style={styles.emptyText}>
-              NO WEEKLY LOAD DATA AVAILABLE YET.
+              NO WEEKLY LOAD DATA.
             </p>
           ) : (
             <div style={styles.summaryList}>

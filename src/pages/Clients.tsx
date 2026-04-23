@@ -727,7 +727,7 @@ function Clients() {
       setLoadError(null);
     } catch {
       setLoadError(
-        "COULD NOT LOAD CLIENT DATA. CHECK CLOCKIFY CACHE AND GITHUB PLAN SYNC STATE.",
+        "CLIENT DATA UNAVAILABLE.",
       );
     } finally {
       setLoading(false);
@@ -749,7 +749,7 @@ function Clients() {
         setDetail(data);
       } catch {
         setDetailError(
-          "COULD NOT LOAD CLIENT DETAILS FROM THE LOCAL CACHE AND PROJECT SIGNALS.",
+          "CLIENT DETAIL UNAVAILABLE.",
         );
       } finally {
         setDetailLoading(false);
@@ -836,7 +836,7 @@ function Clients() {
           <p style={styles.emptyText}>{loadError}</p>
         ) : clients.length === 0 ? (
           <p style={styles.emptyText}>
-            NO CLIENTS FOUND IN CLOCKIFY OR GITHUB PLANS. SYNC CLOCKIFY TIME DATA OR CONFIGURE GITHUB PLAN SOURCES FIRST.
+            NO CLIENTS FOUND.
           </p>
         ) : (
           <div style={styles.clientGrid}>
@@ -887,7 +887,7 @@ function Clients() {
                 </div>
                 <div style={{ padding: 24 }}>
                   <p style={styles.emptyText}>
-                    {detailError ?? "COULD NOT LOAD CLIENT DETAILS."}
+                    {detailError ?? "CLIENT DETAIL UNAVAILABLE."}
                   </p>
                 </div>
               </div>

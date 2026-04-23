@@ -88,7 +88,7 @@ function Planner() {
       setLoadError(null);
     } catch {
       setLoadError(
-        "COULD NOT BUILD THE DERIVED PLANNER VIEW. VERIFY CLOCKIFY TIME ENTRIES AND HULY TASK SCHEDULING SIGNALS.",
+        "PLANNER VIEW UNAVAILABLE.",
       );
     } finally {
       setLoading(false);
@@ -141,8 +141,7 @@ function Planner() {
       <div style={styles.infoBanner}>
         <div style={styles.infoBannerIcon}>◈</div>
         <div style={styles.infoBannerText}>
-          THIS IS A DERIVED CAPACITY VIEW, NOT HULY&apos;S CANONICAL PLANNER.
-          DATA SHOWN HERE COMBINES CLOCKIFY TIME ENTRIES WITH HULY TASK SCHEDULING SIGNALS.
+          DERIVED CAPACITY VIEW FROM CLOCKIFY AND HULY SIGNALS.
         </div>
       </div>
 
@@ -180,7 +179,7 @@ function Planner() {
             <p style={styles.emptyText}>{loadError}</p>
           ) : slots.length === 0 ? (
             <p style={styles.emptyText}>
-              NO DERIVED PLANNER DATA AVAILABLE. SYNC CLOCKIFY TIME AND HULY TASK SCHEDULING TO POPULATE THIS VIEW.
+              NO PLANNER DATA.
             </p>
           ) : (
             <table style={styles.table}>

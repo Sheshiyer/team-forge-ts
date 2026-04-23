@@ -142,7 +142,7 @@ function Devices() {
       setLoadError(null);
     } catch {
       setLoadError(
-        "COULD NOT LOAD THE DEVICE REGISTRY. CHECK HULY CONNECTIVITY AND RUN A FRESH SYNC.",
+        "DEVICE REGISTRY UNAVAILABLE.",
       );
     } finally {
       setLoading(false);
@@ -315,7 +315,7 @@ function Devices() {
           <p style={styles.emptyText}>{loadError}</p>
         ) : devices.length === 0 ? (
           <p style={styles.emptyText}>
-            NO ACTIVE DEVICE SIGNALS FOUND. CLOSED AND RESOLVED DEVICE WORK IS FILTERED OUT. SYNC HULY TO REFRESH LIVE INVENTORY.
+            NO ACTIVE DEVICE SIGNALS.
           </p>
         ) : filtered.length === 0 ? (
           <p style={styles.emptyText}>

@@ -162,7 +162,7 @@ function Timesheet() {
           <SkeletonTable rows={8} cols={6} />
         ) : sorted.length === 0 ? (
           <p style={styles.emptyText}>
-            NO TIME ENTRIES FOUND FOR THIS PERIOD
+            NO TIME ENTRIES FOR THIS PERIOD
           </p>
         ) : (
           <table style={styles.table}>

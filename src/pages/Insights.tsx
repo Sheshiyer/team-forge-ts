@@ -72,40 +72,35 @@ function Insights() {
       setDiscrepancies(d.value);
     } else {
       setDiscrepancies([]);
-      nextErrors.discrepancies =
-        "CLOCKIFY VS HULY TIME COULD NOT BE CALCULATED. VERIFY BOTH SYNC SOURCES.";
+      nextErrors.discrepancies = "TIME COMPARISON UNAVAILABLE.";
     }
 
     if (a.status === "fulfilled") {
       setAccuracy(a.value);
     } else {
       setAccuracy([]);
-      nextErrors.accuracy =
-        "ESTIMATION ACCURACY COULD NOT LOAD FROM HULY AND CLOCKIFY ISSUE HISTORY.";
+      nextErrors.accuracy = "ESTIMATION VIEW UNAVAILABLE.";
     }
 
     if (p.status === "fulfilled") {
       setPriorities(p.value);
     } else {
       setPriorities([]);
-      nextErrors.priorities =
-        "PRIORITY DISTRIBUTION COULD NOT LOAD FROM HULY TASK DATA.";
+      nextErrors.priorities = "PRIORITY VIEW UNAVAILABLE.";
     }
 
     if (n.status === "fulfilled") {
       setNaming(n.value);
     } else {
       setNaming(null);
-      nextErrors.naming =
-        "TASK NAMING COMPLIANCE COULD NOT LOAD FROM HULY TASK TITLES.";
+      nextErrors.naming = "NAMING VIEW UNAVAILABLE.";
     }
 
     if (s.status === "fulfilled") {
       setStandup(s.value);
     } else {
       setStandup(null);
-      nextErrors.standup =
-        "STANDUP COMPLIANCE COULD NOT LOAD FROM SLACK OR HULY SIGNALS.";
+      nextErrors.standup = "STANDUP VIEW UNAVAILABLE.";
     }
 
     setLoadErrors(nextErrors);
@@ -158,7 +153,7 @@ function Insights() {
         {loadErrors.discrepancies ? (
           <p style={styles.emptyText}>{loadErrors.discrepancies}</p>
         ) : discrepancies.length === 0 ? (
-          <p style={styles.emptyText}>NO TIME DISCREPANCY DATA AVAILABLE</p>
+          <p style={styles.emptyText}>NO TIME DISCREPANCY DATA</p>
         ) : (
           <table style={styles.table}>
             <thead>
@@ -215,7 +210,7 @@ function Insights() {
         {loadErrors.accuracy ? (
           <p style={styles.emptyText}>{loadErrors.accuracy}</p>
         ) : accuracy.length === 0 ? (
-          <p style={styles.emptyText}>NO ESTIMATION DATA AVAILABLE</p>
+          <p style={styles.emptyText}>NO ESTIMATION DATA</p>
         ) : (
           <table style={styles.table}>
             <thead>
@@ -278,7 +273,7 @@ function Insights() {
         {loadErrors.priorities ? (
           <p style={styles.emptyText}>{loadErrors.priorities}</p>
         ) : priorities.length === 0 ? (
-          <p style={styles.emptyText}>NO PRIORITY DATA AVAILABLE</p>
+          <p style={styles.emptyText}>NO PRIORITY DATA</p>
         ) : (
           <>
             {/* Stacked bar */}
@@ -412,7 +407,7 @@ function Insights() {
             </div>
           </>
         ) : (
-          <p style={styles.emptyText}>NO TASK NAMING DATA AVAILABLE</p>
+          <p style={styles.emptyText}>NO TASK NAMING DATA</p>
         )}
       </div>
 
@@ -481,7 +476,7 @@ function Insights() {
             </table>
           </>
         ) : (
-          <p style={styles.emptyText}>NO STANDUP DATA AVAILABLE</p>
+          <p style={styles.emptyText}>NO STANDUP DATA</p>
         )}
       </div>
     </div>

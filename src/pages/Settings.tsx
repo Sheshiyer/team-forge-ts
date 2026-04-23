@@ -958,7 +958,7 @@ function Settings() {
 
           {employees.length === 0 ? (
             <div style={styles.helperText}>
-              RUN A SYNC FIRST TO LOAD THE CREW ROSTER FOR MULTISELECT IGNORING.
+              LOAD CREW FIRST TO USE MULTISELECT IGNORING.
             </div>
           ) : (
             <div
@@ -1837,9 +1837,7 @@ function Settings() {
         <div style={styles.field}>
           <label style={styles.label}>OTA FLOW</label>
           <div style={styles.helperText}>
-            TEAMFORGE CHECKS THE CLOUDFLARE OTA MANIFEST ALREADY CONFIGURED IN
-            TAURI. WHEN A NEW SIGNED RELEASE IS PUBLISHED FOR THIS TARGET, USE
-            CHECK FOR UPDATE, THEN INSTALL &amp; RESTART.
+            CHECK FOR UPDATE, THEN INSTALL &amp; RESTART WHEN A SIGNED BUILD IS READY.
           </div>
         </div>
 
@@ -1963,7 +1961,7 @@ function Settings() {
         <div style={styles.sectionDivider} />
 
         {employees.length === 0 ? (
-          <p style={styles.emptyText}>NO CREW SYNCED YET. RUN A SYNC TO POPULATE.</p>
+          <p style={styles.emptyText}>NO CREW SYNCED YET.</p>
         ) : (
           <table style={styles.table}>
             <thead>

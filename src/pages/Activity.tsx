@@ -399,7 +399,7 @@ function Activity() {
           <SkeletonTable rows={8} cols={3} />
         ) : items.length === 0 ? (
           <p style={styles.emptyText}>
-            NO ACTIVITY YET. SYNC DATA TO POPULATE THE FEED.
+            NO ACTIVITY YET.
           </p>
         ) : (
           <div>

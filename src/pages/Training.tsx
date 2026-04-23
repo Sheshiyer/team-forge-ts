@@ -254,7 +254,7 @@ function Training() {
         <h2 style={styles.sectionTitle}>EMPLOYEE TRAINING STATUS</h2>
         <div style={styles.sectionDivider} />
         {statuses.length === 0 ? (
-          <p style={styles.emptyText}>NO TRAINING STATUS DATA AVAILABLE</p>
+          <p style={styles.emptyText}>NO TRAINING STATUS DATA</p>
         ) : (
           <table style={styles.table}>
             <thead>
@@ -342,7 +342,7 @@ function Training() {
         <h2 style={styles.sectionTitle}>SKILLS MATRIX</h2>
         <div style={styles.sectionDivider} />
         {matrix.length === 0 ? (
-          <p style={styles.emptyText}>NO SKILLS MATRIX DATA AVAILABLE</p>
+          <p style={styles.emptyText}>NO SKILLS MATRIX DATA</p>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={styles.table}>

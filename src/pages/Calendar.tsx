@@ -1,5 +1,10 @@
-import type React from "react";
-import { useState, useEffect, useCallback } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  type CSSProperties,
+  type FormEvent,
+} from "react";
 import Avatar from "../components/ui/Avatar";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import { useInvoke } from "../hooks/useInvoke";
@@ -33,34 +38,30 @@ const EMPTY_HOLIDAY_FORM: ManualHolidayInput = {
 
 function StatusPill({ status }: { status: string }) {
   let borderColor = "var(--text-quaternary)";
+  let background = "rgba(153, 153, 204, 0.08)";
 
   switch (status.toLowerCase()) {
     case "approved":
       borderColor = "var(--lcars-green)";
+      background = "rgba(51, 204, 102, 0.08)";
       break;
     case "pending":
       borderColor = "var(--lcars-yellow)";
+      background = "rgba(255, 204, 0, 0.08)";
       break;
     case "rejected":
       borderColor = "var(--lcars-red)";
+      background = "rgba(204, 51, 51, 0.08)";
       break;
   }
 
   return (
     <span
       style={{
-        display: "inline-block",
-        padding: "2px 10px",
-        borderRadius: 2,
-        border: `1px solid ${borderColor}`,
+        ...styles.statusPill,
+        borderColor,
         color: borderColor,
-        fontSize: 10,
-        fontWeight: 600,
-        fontFamily: "'Orbitron', sans-serif",
-        lineHeight: "18px",
-        letterSpacing: "1px",
-        textTransform: "uppercase" as const,
-        boxShadow: `0 0 8px ${borderColor}33`,
+        background,
       }}
     >
       {status.toUpperCase()}
@@ -71,20 +72,17 @@ function StatusPill({ status }: { status: string }) {
 function SourcePill({ source }: { source: string }) {
   const isManual = source.toLowerCase() === "manual";
   const color = isManual ? "var(--lcars-cyan)" : "var(--lcars-lavender)";
+  const background = isManual
+    ? "rgba(0, 204, 255, 0.08)"
+    : "rgba(153, 153, 204, 0.08)";
 
   return (
     <span
       style={{
-        display: "inline-block",
-        padding: "2px 8px",
-        borderRadius: 2,
-        border: `1px solid ${color}`,
+        ...styles.sourcePill,
+        borderColor: color,
         color,
-        fontSize: 9,
-        fontWeight: 600,
-        fontFamily: "'Orbitron', sans-serif",
-        letterSpacing: "1px",
-        textTransform: "uppercase" as const,
+        background,
       }}
     >
       {isManual ? "LOCAL" : "HULY"}
@@ -92,19 +90,22 @@ function SourcePill({ source }: { source: string }) {
   );
 }
 
-function MetricTile({
+function MetricCard({
   label,
   value,
-  accent,
+  meta,
+  tone,
 }: {
   label: string;
   value: string;
-  accent: string;
+  meta: string;
+  tone: string;
 }) {
   return (
-    <div style={{ ...styles.metricTile, borderLeftColor: accent }}>
+    <div style={{ ...styles.metricCard, borderLeftColor: tone }}>
       <div style={styles.metricLabel}>{label}</div>
-      <div style={{ ...styles.metricValue, color: accent }}>{value}</div>
+      <div style={{ ...styles.metricValue, color: tone }}>{value}</div>
+      <div style={styles.metricMeta}>{meta}</div>
     </div>
   );
 }
@@ -194,8 +195,6 @@ export default function Calendar() {
   const [selectedHolidayYear, setSelectedHolidayYear] = useState<number>(
     new Date().getFullYear()
   );
-  const isCompactLayout = viewportWidth < 1180;
-  const isTightForms = viewportWidth < 920;
 
   const applySnapshot = useCallback((snapshot: TeamSnapshotView) => {
     setLeaves(snapshot.leaves);
@@ -224,7 +223,7 @@ export default function Calendar() {
       );
     } catch (err) {
       setEmployees([]);
-      setSnapshotMessage(`Team roster read failed: ${String(err)}`);
+      setSnapshotMessage(`CALENDAR ERROR • ${String(err)}`);
     }
 
     try {
@@ -232,14 +231,14 @@ export default function Calendar() {
       applySnapshot(cachedSnapshot);
       setSnapshotMessage(
         cachedSnapshot.cacheUpdatedAt
-          ? "Showing cached calendar data while live Huly refresh runs."
-          : "No calendar cache yet. Hydrating Team data from Huly."
+          ? "USING CACHED CALENDAR DATA"
+          : "LOADING CALENDAR DATA"
       );
     } catch (err) {
       setLeaves([]);
       setHolidays([]);
       setCacheUpdatedAt(null);
-      setSnapshotMessage(`Calendar cache read failed: ${String(err)}`);
+      setSnapshotMessage(`CALENDAR ERROR • ${String(err)}`);
     } finally {
       setLoading(false);
     }
@@ -248,19 +247,15 @@ export default function Calendar() {
       const refreshed = await api.refreshTeamSnapshot();
       applySnapshot(refreshed);
       if (refreshed.hulyError) {
-        setSnapshotMessage(
-          `Live Huly refresh failed. Showing cached calendar data. Details: ${refreshed.hulyError}`
-        );
+        setSnapshotMessage(`CACHE ACTIVE • ${refreshed.hulyError}`);
       } else {
-        setSnapshotMessage("Live calendar refresh complete.");
+        setSnapshotMessage("CALENDAR DATA CURRENT");
       }
     } catch (err) {
       if (cachedSnapshot?.cacheUpdatedAt) {
-        setSnapshotMessage(
-          `Live Huly refresh failed. Showing cached calendar data. Details: ${String(err)}`
-        );
+        setSnapshotMessage(`CACHE ACTIVE • ${String(err)}`);
       } else {
-        setSnapshotMessage(`Live calendar refresh failed: ${String(err)}`);
+        setSnapshotMessage(`CALENDAR ERROR • ${String(err)}`);
       }
     } finally {
       setRefreshing(false);
@@ -278,6 +273,7 @@ export default function Calendar() {
   const pendingLeaveCount = leaves.filter(
     (leave) => leave.status.toLowerCase() === "pending"
   ).length;
+  const editableLeaveCount = leaves.filter((leave) => leave.editable).length;
   const holidayYears = Array.from(
     new Set([
       selectedHolidayYear,
@@ -285,9 +281,19 @@ export default function Calendar() {
       ...holidays.map((holiday) => yearFromDate(holiday.date)),
     ])
   ).sort((left, right) => left - right);
-  const yearHolidays = holidays.filter(
-    (holiday) => yearFromDate(holiday.date) === selectedHolidayYear
-  );
+  const yearHolidays = [...holidays]
+    .filter((holiday) => yearFromDate(holiday.date) === selectedHolidayYear)
+    .sort((left, right) => left.date.localeCompare(right.date));
+  const nextHoliday =
+    [...holidays]
+      .filter((holiday) => {
+        const date = parseCalendarDate(holiday.date);
+        date.setHours(0, 0, 0, 0);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        return date >= today;
+      })
+      .sort((left, right) => left.date.localeCompare(right.date))[0] ?? null;
   const holidayMonths = Array.from({ length: 12 }, (_, monthIndex) => ({
     monthIndex,
     label: formatMonthLabel(selectedHolidayYear, monthIndex),
@@ -295,16 +301,6 @@ export default function Calendar() {
       (holiday) => monthFromDate(holiday.date) === monthIndex
     ),
   }));
-  const editorGridStyle = {
-    ...styles.editorGrid,
-    gridTemplateColumns: isTightForms ? "1fr" : styles.editorGrid.gridTemplateColumns,
-  };
-  const holidayCalendarGridStyle = {
-    ...styles.yearCalendarGrid,
-    gridTemplateColumns: isCompactLayout
-      ? "repeat(auto-fit, minmax(180px, 1fr))"
-      : styles.yearCalendarGrid.gridTemplateColumns,
-  };
 
   useEffect(() => {
     if (activeEmployees.length === 0) return;
@@ -342,7 +338,7 @@ export default function Calendar() {
       status: leave.status,
       note: leave.note ?? "",
     });
-    setActionMessage(`Editing local leave entry for ${leave.employeeName}.`);
+    setActionMessage(`EDITING LEAVE • ${leave.employeeName.toUpperCase()}`);
   }
 
   function beginEditHoliday(holiday: HolidayView) {
@@ -353,10 +349,10 @@ export default function Calendar() {
       note: holiday.note ?? "",
     });
     setSelectedHolidayYear(yearFromDate(holiday.date));
-    setActionMessage(`Editing local holiday ${holiday.title}.`);
+    setActionMessage(`EDITING HOLIDAY • ${holiday.title.toUpperCase()}`);
   }
 
-  async function handleSaveLeave(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSaveLeave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLeaveSaving(true);
     setActionMessage(null);
@@ -368,9 +364,9 @@ export default function Calendar() {
       });
       applySnapshot(snapshot);
       resetLeaveForm();
-      setActionMessage("Local leave tracker updated.");
+      setActionMessage("LEAVE UPDATED");
     } catch (err) {
-      setActionMessage(`Leave save failed: ${String(err)}`);
+      setActionMessage(`LEAVE SAVE FAILED • ${String(err)}`);
     } finally {
       setLeaveSaving(false);
     }
@@ -386,15 +382,15 @@ export default function Calendar() {
       if (leaveForm.id === id) {
         resetLeaveForm();
       }
-      setActionMessage("Local leave entry removed.");
+      setActionMessage("LEAVE REMOVED");
     } catch (err) {
-      setActionMessage(`Leave delete failed: ${String(err)}`);
+      setActionMessage(`LEAVE DELETE FAILED • ${String(err)}`);
     } finally {
       setLeaveSaving(false);
     }
   }
 
-  async function handleSaveHoliday(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSaveHoliday(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setHolidaySaving(true);
     setActionMessage(null);
@@ -409,9 +405,9 @@ export default function Calendar() {
         setSelectedHolidayYear(yearFromDate(holidayForm.date));
       }
       resetHolidayForm();
-      setActionMessage("Holiday calendar updated.");
+      setActionMessage("HOLIDAY UPDATED");
     } catch (err) {
-      setActionMessage(`Holiday save failed: ${String(err)}`);
+      setActionMessage(`HOLIDAY SAVE FAILED • ${String(err)}`);
     } finally {
       setHolidaySaving(false);
     }
@@ -427,9 +423,9 @@ export default function Calendar() {
       if (holidayForm.id === id) {
         resetHolidayForm();
       }
-      setActionMessage("Local holiday removed.");
+      setActionMessage("HOLIDAY REMOVED");
     } catch (err) {
-      setActionMessage(`Holiday delete failed: ${String(err)}`);
+      setActionMessage(`HOLIDAY DELETE FAILED • ${String(err)}`);
     } finally {
       setHolidaySaving(false);
     }
@@ -447,11 +443,44 @@ export default function Calendar() {
           <SkeletonTable rows={5} cols={6} />
         </div>
         <div style={styles.card}>
-          <SkeletonTable rows={3} cols={2} />
+          <SkeletonTable rows={3} cols={3} />
         </div>
       </div>
     );
   }
+
+  const statusTone = snapshotMessage?.includes("ERROR")
+    ? "var(--lcars-red)"
+    : refreshing
+      ? "var(--lcars-cyan)"
+      : cacheUpdatedAt
+        ? "var(--lcars-green)"
+        : "var(--lcars-orange)";
+  const statusLabel = snapshotMessage?.includes("ERROR")
+    ? "ERROR"
+    : refreshing
+      ? "UPDATING"
+      : cacheUpdatedAt
+        ? "CACHE READY"
+        : "LIVE";
+
+  const metricsGridStyle = {
+    ...styles.metricsGrid,
+    gridTemplateColumns:
+      viewportWidth < 760 ? "repeat(2, minmax(0, 1fr))" : styles.metricsGrid.gridTemplateColumns,
+  };
+  const splitGridStyle = {
+    ...styles.splitGrid,
+    gridTemplateColumns:
+      viewportWidth < 1040 ? "1fr" : (styles.splitGrid.gridTemplateColumns as string),
+  };
+  const monthGridStyle = {
+    ...styles.monthGrid,
+    gridTemplateColumns:
+      viewportWidth < 1180
+        ? "repeat(auto-fit, minmax(180px, 1fr))"
+        : (styles.monthGrid.gridTemplateColumns as string),
+  };
 
   return (
     <div>
@@ -459,18 +488,16 @@ export default function Calendar() {
       <div style={styles.pageTitleBar} />
 
       {(snapshotMessage || cacheUpdatedAt || refreshing) && (
-        <div style={styles.statusBanner}>
+        <div style={{ ...styles.statusBanner, borderLeftColor: statusTone }}>
           <div>
-            <div style={styles.statusBannerLabel}>
-              {refreshing ? "SYNCING SQLITE CACHE" : "CALENDAR CACHE"}
-            </div>
+            <div style={{ ...styles.statusLabel, color: statusTone }}>{statusLabel}</div>
             {snapshotMessage ? (
-              <div style={styles.statusBannerText}>{snapshotMessage}</div>
+              <div style={styles.statusText}>{snapshotMessage}</div>
             ) : null}
           </div>
           {cacheUpdatedAt ? (
-            <div style={styles.statusBannerMeta}>
-              LAST CACHE {formatSnapshotTimestamp(cacheUpdatedAt)}
+            <div style={styles.statusMeta}>
+              CACHE {formatSnapshotTimestamp(cacheUpdatedAt)}
             </div>
           ) : null}
         </div>
@@ -478,404 +505,402 @@ export default function Calendar() {
 
       {actionMessage ? <div style={styles.actionBanner}>{actionMessage}</div> : null}
 
-      <div style={styles.metricsGrid}>
-        <MetricTile
+      <div style={metricsGridStyle}>
+        <MetricCard
+          label="CREW WINDOW"
+          value={`${activeEmployees.length}`}
+          meta={`${leaves.length} LEAVE ROWS`}
+          tone="var(--lcars-cyan)"
+        />
+        <MetricCard
           label="ACTIVE LEAVE"
           value={`${activeLeaveCount}`}
-          accent="var(--lcars-green)"
+          meta={`${pendingLeaveCount} PENDING`}
+          tone="var(--lcars-green)"
         />
-        <MetricTile
-          label="PENDING REQUESTS"
-          value={`${pendingLeaveCount}`}
-          accent="var(--lcars-yellow)"
-        />
-        <MetricTile
-          label={`HOLIDAYS ${selectedHolidayYear}`}
+        <MetricCard
+          label="HOLIDAY WINDOW"
           value={`${yearHolidays.length}`}
-          accent="var(--lcars-orange)"
+          meta={`${selectedHolidayYear}`}
+          tone="var(--lcars-orange)"
         />
-        <MetricTile
-          label="ACTIVE CREW"
-          value={`${activeEmployees.length}`}
-          accent="var(--lcars-cyan)"
+        <MetricCard
+          label="NEXT HOLIDAY"
+          value={nextHoliday ? formatDate(nextHoliday.date).toUpperCase() : "NONE"}
+          meta={nextHoliday ? nextHoliday.title.toUpperCase() : "CLEAR"}
+          tone="var(--lcars-yellow)"
         />
       </div>
 
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-green)" }}>
-        <div style={styles.sectionHeaderRow}>
+      <div style={styles.card}>
+        <div style={styles.panelHeader}>
           <div>
-            <h2 style={styles.sectionTitle}>LEAVE TRACKER</h2>
-            <p style={styles.sectionHelperText}>
-              Local leave ops live here now. Huly leave rows stay visible but
-              read-only.
-            </p>
+            <div style={styles.sectionTitle}>LEAVE CONTROL</div>
+            <div style={styles.sectionCaption}>LOCAL TRACKER / HULY OVERLAY</div>
           </div>
+          <div style={styles.headerMeta}>{editableLeaveCount} LOCAL EDITS</div>
         </div>
         <div style={styles.sectionDivider} />
-        <form onSubmit={handleSaveLeave} style={editorGridStyle}>
-          <div style={styles.field}>
-            <label style={styles.label}>Crew Member</label>
-            <select
-              value={leaveForm.employeeId}
-              onChange={(event) =>
-                setLeaveForm((current) => ({
-                  ...current,
-                  employeeId: event.target.value,
-                }))
-              }
-              style={styles.input}
-              disabled={leaveSaving || activeEmployees.length === 0}
-            >
-              {activeEmployees.length === 0 ? (
-                <option value="">No active crew available</option>
-              ) : null}
-              {activeEmployees.map((employee) => (
-                <option key={employee.id} value={employee.id}>
-                  {employee.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div style={styles.field}>
-            <label style={styles.label}>Leave Type</label>
-            <input
-              value={leaveForm.leaveType}
-              onChange={(event) =>
-                setLeaveForm((current) => ({
-                  ...current,
-                  leaveType: event.target.value,
-                }))
-              }
-              placeholder="Vacation"
-              style={styles.input}
-              disabled={leaveSaving}
-            />
-          </div>
-          <div style={styles.field}>
-            <label style={styles.label}>From</label>
-            <input
-              type="date"
-              value={leaveForm.dateFrom}
-              onChange={(event) =>
-                setLeaveForm((current) => ({
-                  ...current,
-                  dateFrom: event.target.value,
-                }))
-              }
-              style={styles.input}
-              disabled={leaveSaving}
-            />
-          </div>
-          <div style={styles.field}>
-            <label style={styles.label}>To</label>
-            <input
-              type="date"
-              value={leaveForm.dateTo}
-              onChange={(event) =>
-                setLeaveForm((current) => ({
-                  ...current,
-                  dateTo: event.target.value,
-                }))
-              }
-              style={styles.input}
-              disabled={leaveSaving}
-            />
-          </div>
-          <div style={styles.field}>
-            <label style={styles.label}>Status</label>
-            <select
-              value={leaveForm.status}
-              onChange={(event) =>
-                setLeaveForm((current) => ({
-                  ...current,
-                  status: event.target.value,
-                }))
-              }
-              style={styles.input}
-              disabled={leaveSaving}
-            >
-              <option value="Approved">Approved</option>
-              <option value="Pending">Pending</option>
-              <option value="Rejected">Rejected</option>
-            </select>
-          </div>
-          <div style={{ ...styles.field, gridColumn: "1 / -1" }}>
-            <label style={styles.label}>Note</label>
-            <textarea
-              value={leaveForm.note ?? ""}
-              onChange={(event) =>
-                setLeaveForm((current) => ({
-                  ...current,
-                  note: event.target.value,
-                }))
-              }
-              placeholder="Optional context for the leave entry"
-              style={{ ...styles.input, minHeight: 76, resize: "vertical" }}
-              disabled={leaveSaving}
-            />
-          </div>
-          <div style={styles.buttonRow}>
-            <button
-              type="submit"
-              disabled={leaveSaving || activeEmployees.length === 0}
-              style={{
-                ...styles.primaryButton,
-                opacity: leaveSaving || activeEmployees.length === 0 ? 0.55 : 1,
-              }}
-            >
-              {leaveSaving
-                ? "Saving..."
-                : leaveForm.id
-                  ? "Update Leave"
-                  : "Add Leave"}
-            </button>
-            <button
-              type="button"
-              onClick={resetLeaveForm}
-              style={styles.ghostButton}
-              disabled={leaveSaving}
-            >
-              Clear
-            </button>
-          </div>
-        </form>
-        {leaves.length === 0 ? (
-          <p style={styles.emptyText}>NO LEAVE REQUESTS FOUND</p>
-        ) : (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>CREW MEMBER</th>
-                <th style={styles.th}>SOURCE</th>
-                <th style={styles.th}>TYPE</th>
-                <th style={styles.th}>FROM</th>
-                <th style={styles.th}>TO</th>
-                <th style={styles.th}>DAYS</th>
-                <th style={styles.th}>STATUS</th>
-                <th style={styles.th}>ACTIONS</th>
-              </tr>
-            </thead>
-            <tbody>
-              {leaves.map((leave) => {
-                const onLeave = isCurrentlyOnLeave(leave.dateFrom, leave.dateTo);
-                return (
-                  <tr
-                    key={leave.id}
-                    style={{
-                      backgroundColor: onLeave
-                        ? "rgba(51, 204, 102, 0.04)"
-                        : "transparent",
-                    }}
+        <div style={splitGridStyle}>
+          <div style={styles.controlCard}>
+            <div style={styles.controlTitle}>
+              {leaveForm.id ? "EDIT LEAVE" : "ADD LEAVE"}
+            </div>
+            <div style={styles.controlCaption}>MANUAL ENTRIES STAY EDITABLE</div>
+            <form onSubmit={handleSaveLeave} style={styles.formStack}>
+              <div style={styles.field}>
+                <label style={styles.label}>Crew Member</label>
+                <select
+                  value={leaveForm.employeeId}
+                  onChange={(event) =>
+                    setLeaveForm((current) => ({
+                      ...current,
+                      employeeId: event.target.value,
+                    }))
+                  }
+                  style={styles.input}
+                  disabled={leaveSaving || activeEmployees.length === 0}
+                >
+                  {activeEmployees.length === 0 ? (
+                    <option value="">No active crew</option>
+                  ) : null}
+                  {activeEmployees.map((employee) => (
+                    <option key={employee.id} value={employee.id}>
+                      {employee.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div style={styles.fieldRow}>
+                <div style={styles.field}>
+                  <label style={styles.label}>Leave Type</label>
+                  <input
+                    value={leaveForm.leaveType}
+                    onChange={(event) =>
+                      setLeaveForm((current) => ({
+                        ...current,
+                        leaveType: event.target.value,
+                      }))
+                    }
+                    placeholder="Vacation"
+                    style={styles.input}
+                    disabled={leaveSaving}
+                  />
+                </div>
+                <div style={styles.field}>
+                  <label style={styles.label}>Status</label>
+                  <select
+                    value={leaveForm.status}
+                    onChange={(event) =>
+                      setLeaveForm((current) => ({
+                        ...current,
+                        status: event.target.value,
+                      }))
+                    }
+                    style={styles.input}
+                    disabled={leaveSaving}
                   >
-                    <td style={styles.td}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <Avatar name={leave.employeeName} size={24} />
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ color: "var(--lcars-orange)" }}>
-                            {leave.employeeName}
-                          </div>
-                          {leave.note ? (
-                            <div style={styles.inlineNote}>{leave.note}</div>
-                          ) : null}
-                        </div>
-                      </div>
-                    </td>
-                    <td style={styles.td}>
-                      <SourcePill source={leave.source} />
-                    </td>
-                    <td style={{ ...styles.td, textTransform: "uppercase" as const }}>
-                      {leave.leaveType}
-                    </td>
-                    <td style={styles.tdMono}>{formatDate(leave.dateFrom)}</td>
-                    <td style={styles.tdMono}>{formatDate(leave.dateTo)}</td>
-                    <td style={styles.tdMono}>{leave.days}</td>
-                    <td style={styles.td}>
-                      <StatusPill status={leave.status} />
-                    </td>
-                    <td style={styles.td}>
-                      {leave.editable ? (
-                        <div style={styles.inlineActionRow}>
-                          <button
-                            type="button"
-                            onClick={() => beginEditLeave(leave)}
-                            style={styles.inlineActionButton}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteLeave(leave.id)}
-                            style={styles.inlineActionButton}
-                            disabled={leaveSaving}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ) : (
-                        <span style={styles.rowMetaText}>SYNCED</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
+                    <option value="Approved">Approved</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Rejected">Rejected</option>
+                  </select>
+                </div>
+              </div>
+              <div style={styles.fieldRow}>
+                <div style={styles.field}>
+                  <label style={styles.label}>From</label>
+                  <input
+                    type="date"
+                    value={leaveForm.dateFrom}
+                    onChange={(event) =>
+                      setLeaveForm((current) => ({
+                        ...current,
+                        dateFrom: event.target.value,
+                      }))
+                    }
+                    style={styles.input}
+                    disabled={leaveSaving}
+                  />
+                </div>
+                <div style={styles.field}>
+                  <label style={styles.label}>To</label>
+                  <input
+                    type="date"
+                    value={leaveForm.dateTo}
+                    onChange={(event) =>
+                      setLeaveForm((current) => ({
+                        ...current,
+                        dateTo: event.target.value,
+                      }))
+                    }
+                    style={styles.input}
+                    disabled={leaveSaving}
+                  />
+                </div>
+              </div>
+              <div style={styles.field}>
+                <label style={styles.label}>Note</label>
+                <textarea
+                  value={leaveForm.note ?? ""}
+                  onChange={(event) =>
+                    setLeaveForm((current) => ({
+                      ...current,
+                      note: event.target.value,
+                    }))
+                  }
+                  placeholder="Optional context"
+                  style={styles.textarea}
+                  disabled={leaveSaving}
+                />
+              </div>
+              <div style={styles.buttonRow}>
+                <button
+                  type="submit"
+                  disabled={leaveSaving || activeEmployees.length === 0}
+                  style={{
+                    ...styles.primaryButton,
+                    opacity: leaveSaving || activeEmployees.length === 0 ? 0.55 : 1,
+                  }}
+                >
+                  {leaveSaving ? "Saving..." : leaveForm.id ? "Update Leave" : "Add Leave"}
+                </button>
+                <button
+                  type="button"
+                  onClick={resetLeaveForm}
+                  style={styles.ghostButton}
+                  disabled={leaveSaving}
+                >
+                  Clear
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <div style={styles.surfaceCard}>
+            <div style={styles.surfaceHeader}>
+              <div style={styles.controlTitle}>LEAVE WATCH</div>
+              <div style={styles.headerMeta}>{activeLeaveCount} ACTIVE</div>
+            </div>
+            <div style={styles.sectionDivider} />
+            {leaves.length === 0 ? (
+              <div style={styles.emptyText}>NO LEAVE REQUESTS</div>
+            ) : (
+              <div style={styles.tableWrap}>
+                <table style={styles.table}>
+                  <thead>
+                    <tr>
+                      <th style={styles.th}>CREW</th>
+                      <th style={styles.th}>SOURCE</th>
+                      <th style={styles.th}>TYPE</th>
+                      <th style={styles.th}>WINDOW</th>
+                      <th style={styles.th}>DAYS</th>
+                      <th style={styles.th}>STATUS</th>
+                      <th style={styles.th}>ACTIONS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {leaves.map((leave) => {
+                      const onLeave = isCurrentlyOnLeave(leave.dateFrom, leave.dateTo);
+                      return (
+                        <tr
+                          key={leave.id}
+                          style={{
+                            backgroundColor: onLeave
+                              ? "rgba(51, 204, 102, 0.04)"
+                              : "transparent",
+                          }}
+                        >
+                          <td style={styles.td}>
+                            <div style={styles.personWrap}>
+                              <Avatar name={leave.employeeName} size={24} />
+                              <div>
+                                <div style={styles.tablePrimary}>{leave.employeeName}</div>
+                                {leave.note ? (
+                                  <div style={styles.tableSecondary}>{leave.note}</div>
+                                ) : null}
+                              </div>
+                            </div>
+                          </td>
+                          <td style={styles.td}>
+                            <SourcePill source={leave.source} />
+                          </td>
+                          <td style={styles.td}>{leave.leaveType.toUpperCase()}</td>
+                          <td style={styles.tdMono}>
+                            {formatDate(leave.dateFrom)} to {formatDate(leave.dateTo)}
+                          </td>
+                          <td style={styles.tdMono}>{leave.days}</td>
+                          <td style={styles.td}>
+                            <StatusPill status={leave.status} />
+                          </td>
+                          <td style={styles.td}>
+                            {leave.editable ? (
+                              <div style={styles.inlineActionRow}>
+                                <button
+                                  type="button"
+                                  onClick={() => beginEditLeave(leave)}
+                                  style={styles.inlineActionButton}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteLeave(leave.id)}
+                                  style={styles.inlineActionButton}
+                                  disabled={leaveSaving}
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ) : (
+                              <span style={styles.rowMetaText}>SYNCED</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-orange)" }}>
-        <div style={styles.sectionHeaderRow}>
+      <div style={styles.card}>
+        <div style={styles.panelHeader}>
           <div>
-            <h2 style={styles.sectionTitle}>HOLIDAY TRACKER</h2>
-            <p style={styles.sectionHelperText}>
-              Maintain the yearly holiday calendar here. Huly holidays stay
-              read-only and merge into the same route.
-            </p>
+            <div style={styles.sectionTitle}>HOLIDAY CALENDAR</div>
+            <div style={styles.sectionCaption}>YEAR VIEW / LOCAL OVERRIDES</div>
           </div>
+          <div style={styles.headerMeta}>{yearHolidays.length} IN VIEW</div>
         </div>
         <div style={styles.sectionDivider} />
-        <form onSubmit={handleSaveHoliday} style={editorGridStyle}>
-          <div style={styles.field}>
-            <label style={styles.label}>Holiday Name</label>
-            <input
-              value={holidayForm.title}
-              onChange={(event) =>
-                setHolidayForm((current) => ({
-                  ...current,
-                  title: event.target.value,
-                }))
-              }
-              placeholder="Republic Day"
-              style={styles.input}
-              disabled={holidaySaving}
-            />
+        <div style={splitGridStyle}>
+          <div style={styles.controlCard}>
+            <div style={styles.controlTitle}>
+              {holidayForm.id ? "EDIT HOLIDAY" : "ADD HOLIDAY"}
+            </div>
+            <div style={styles.controlCaption}>LOCAL HOLIDAYS MERGE INTO THE SHARED VIEW</div>
+            <div style={styles.field}>
+              <label style={styles.label}>Year View</label>
+              <select
+                value={selectedHolidayYear}
+                onChange={(event) => setSelectedHolidayYear(Number(event.target.value))}
+                style={styles.input}
+              >
+                {holidayYears.map((year) => (
+                  <option key={year} value={year}>
+                    {year}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <form onSubmit={handleSaveHoliday} style={styles.formStack}>
+              <div style={styles.field}>
+                <label style={styles.label}>Holiday Name</label>
+                <input
+                  value={holidayForm.title}
+                  onChange={(event) =>
+                    setHolidayForm((current) => ({
+                      ...current,
+                      title: event.target.value,
+                    }))
+                  }
+                  placeholder="Republic Day"
+                  style={styles.input}
+                  disabled={holidaySaving}
+                />
+              </div>
+              <div style={styles.field}>
+                <label style={styles.label}>Date</label>
+                <input
+                  type="date"
+                  value={holidayForm.date}
+                  onChange={(event) =>
+                    setHolidayForm((current) => ({
+                      ...current,
+                      date: event.target.value,
+                    }))
+                  }
+                  style={styles.input}
+                  disabled={holidaySaving}
+                />
+              </div>
+              <div style={styles.field}>
+                <label style={styles.label}>Note</label>
+                <textarea
+                  value={holidayForm.note ?? ""}
+                  onChange={(event) =>
+                    setHolidayForm((current) => ({
+                      ...current,
+                      note: event.target.value,
+                    }))
+                  }
+                  placeholder="Office closure or regional note"
+                  style={styles.textarea}
+                  disabled={holidaySaving}
+                />
+              </div>
+              <div style={styles.buttonRow}>
+                <button
+                  type="submit"
+                  disabled={holidaySaving}
+                  style={{ ...styles.primaryButton, opacity: holidaySaving ? 0.55 : 1 }}
+                >
+                  {holidaySaving
+                    ? "Saving..."
+                    : holidayForm.id
+                      ? "Update Holiday"
+                      : "Add Holiday"}
+                </button>
+                <button
+                  type="button"
+                  onClick={resetHolidayForm}
+                  style={styles.ghostButton}
+                  disabled={holidaySaving}
+                >
+                  Clear
+                </button>
+              </div>
+            </form>
           </div>
-          <div style={styles.field}>
-            <label style={styles.label}>Date</label>
-            <input
-              type="date"
-              value={holidayForm.date}
-              onChange={(event) =>
-                setHolidayForm((current) => ({
-                  ...current,
-                  date: event.target.value,
-                }))
-              }
-              style={styles.input}
-              disabled={holidaySaving}
-            />
-          </div>
-          <div style={{ ...styles.field, gridColumn: "1 / -1" }}>
-            <label style={styles.label}>Note</label>
-            <textarea
-              value={holidayForm.note ?? ""}
-              onChange={(event) =>
-                setHolidayForm((current) => ({
-                  ...current,
-                  note: event.target.value,
-                }))
-              }
-              placeholder="Optional note or office-closure context"
-              style={{ ...styles.input, minHeight: 76, resize: "vertical" }}
-              disabled={holidaySaving}
-            />
-          </div>
-          <div style={styles.buttonRow}>
-            <button
-              type="submit"
-              disabled={holidaySaving}
-              style={{
-                ...styles.primaryButton,
-                opacity: holidaySaving ? 0.55 : 1,
-              }}
-            >
-              {holidaySaving
-                ? "Saving..."
-                : holidayForm.id
-                  ? "Update Holiday"
-                  : "Add Holiday"}
-            </button>
-            <button
-              type="button"
-              onClick={resetHolidayForm}
-              style={styles.ghostButton}
-              disabled={holidaySaving}
-            >
-              Clear
-            </button>
-          </div>
-        </form>
-        <div style={styles.yearToolbar}>
-          <div style={styles.yearToolbarLabel}>Year View</div>
-          <select
-            value={selectedHolidayYear}
-            onChange={(event) => setSelectedHolidayYear(Number(event.target.value))}
-            style={{ ...styles.input, width: 180 }}
-          >
-            {holidayYears.map((year) => (
-              <option key={year} value={year}>
-                {year}
-              </option>
-            ))}
-          </select>
-          <div style={styles.rowMetaText}>
-            {yearHolidays.length} HOLIDAY{yearHolidays.length === 1 ? "" : "S"} IN{" "}
-            {selectedHolidayYear}
-          </div>
-        </div>
-        {holidays.length === 0 ? (
-          <p style={styles.emptyText}>NO HOLIDAYS CONFIGURED</p>
-        ) : (
-          <>
-            <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-              {yearHolidays.length === 0 ? (
-                <p style={styles.emptyText}>
-                  NO HOLIDAYS SAVED FOR {selectedHolidayYear}
-                </p>
-              ) : (
-                yearHolidays.map((holiday) => (
+
+          <div style={styles.surfaceCard}>
+            <div style={styles.surfaceHeader}>
+              <div style={styles.controlTitle}>HOLIDAY WINDOW</div>
+              <div style={styles.headerMeta}>{selectedHolidayYear}</div>
+            </div>
+            <div style={styles.sectionDivider} />
+            {holidays.length === 0 ? (
+              <div style={styles.emptyText}>NO HOLIDAYS CONFIGURED</div>
+            ) : yearHolidays.length === 0 ? (
+              <div style={styles.emptyText}>NO HOLIDAYS FOR {selectedHolidayYear}</div>
+            ) : (
+              <div style={styles.holidayList}>
+                {yearHolidays.map((holiday) => (
                   <div
                     key={holiday.id}
                     style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      padding: "8px 12px",
+                      ...styles.holidayRow,
                       background: isToday(holiday.date)
                         ? "rgba(255, 153, 0, 0.06)"
                         : "transparent",
-                      borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
                     }}
                   >
                     <div>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          marginBottom: holiday.note ? 4 : 0,
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: 13,
-                            color: "var(--lcars-orange)",
-                            fontWeight: 500,
-                          }}
-                        >
-                          {holiday.title.toUpperCase()}
-                        </span>
+                      <div style={styles.holidayTitleRow}>
+                        <span style={styles.tablePrimary}>{holiday.title.toUpperCase()}</span>
                         <SourcePill source={holiday.source} />
                         {isToday(holiday.date) ? (
                           <span style={styles.todayPill}>TODAY</span>
                         ) : null}
                       </div>
+                      <div style={styles.tableSecondary}>{formatDate(holiday.date)}</div>
                       {holiday.note ? (
-                        <div style={styles.inlineNote}>{holiday.note}</div>
+                        <div style={styles.tableSecondary}>{holiday.note}</div>
                       ) : null}
                     </div>
                     <div style={styles.inlineActionRow}>
-                      <span style={styles.dateMeta}>{formatDate(holiday.date)}</span>
                       {holiday.editable ? (
                         <>
                           <button
@@ -894,13 +919,16 @@ export default function Calendar() {
                             Remove
                           </button>
                         </>
-                      ) : null}
+                      ) : (
+                        <span style={styles.rowMetaText}>SYNCED</span>
+                      )}
                     </div>
                   </div>
-                ))
-              )}
-            </div>
-            <div style={holidayCalendarGridStyle}>
+                ))}
+              </div>
+            )}
+
+            <div style={monthGridStyle}>
               {holidayMonths.map((month) => (
                 <div key={month.monthIndex} style={styles.monthCard}>
                   <div style={styles.monthCardHeader}>{month.label}</div>
@@ -924,121 +952,217 @@ export default function Calendar() {
                 </div>
               ))}
             </div>
-          </>
-        )}
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
+const styles: Record<string, CSSProperties> = {
   pageTitle: lcarsPageStyles.pageTitle,
   pageTitleBar: lcarsPageStyles.pageTitleBar,
   card: lcarsPageStyles.card,
-  metricTile: {
-    ...lcarsPageStyles.subtleCard,
-    padding: 16,
+  sectionTitle: lcarsPageStyles.sectionTitle,
+  sectionCaption: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    color: "var(--lcars-lavender)",
+    letterSpacing: "1.4px",
+    textTransform: "uppercase",
   },
-  metricLabel: lcarsPageStyles.metricLabel,
-  metricValue: {
-    fontFamily: "'JetBrains Mono', monospace",
-    fontSize: 22,
-    fontWeight: 600,
-    color: "var(--lcars-orange)",
-  },
-  metricsGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-    gap: 12,
-    marginBottom: 20,
-  },
+  sectionDivider: lcarsPageStyles.sectionDivider,
   statusBanner: {
+    ...lcarsPageStyles.subtleCard,
+    borderLeftWidth: 8,
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    flexWrap: "wrap" as const,
     gap: 16,
-    marginBottom: 20,
-    padding: "12px 16px",
-    background: "var(--bg-console-soft)",
-    border: "1px solid rgba(153, 153, 204, 0.16)",
-    borderLeft: "8px solid var(--lcars-cyan)",
-    borderRadius: "0 18px 18px 0",
-    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+    flexWrap: "wrap",
+    marginBottom: 18,
   },
-  statusBannerLabel: {
+  statusLabel: {
     fontFamily: "'Orbitron', sans-serif",
     fontSize: 10,
-    color: "var(--lcars-cyan)",
-    letterSpacing: "1.6px",
-    textTransform: "uppercase" as const,
-    marginBottom: 4,
+    letterSpacing: "0.18em",
+    textTransform: "uppercase",
+    marginBottom: 6,
   },
-  statusBannerText: {
-    fontSize: 12,
+  statusText: {
     color: "var(--lcars-tan)",
-    lineHeight: 1.5,
+    fontSize: 12,
+    lineHeight: 1.6,
   },
-  statusBannerMeta: {
+  statusMeta: {
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: 11,
     color: "var(--lcars-lavender)",
-    whiteSpace: "nowrap" as const,
   },
   actionBanner: {
-    marginBottom: 20,
-    padding: "10px 14px",
-    background: "var(--bg-console-soft)",
-    border: "1px solid rgba(0, 204, 255, 0.18)",
-    borderLeft: "8px solid var(--lcars-cyan)",
+    ...lcarsPageStyles.subtleCard,
+    borderLeftColor: "var(--lcars-cyan)",
+    borderLeftWidth: 8,
+    marginBottom: 18,
     color: "var(--lcars-tan)",
     fontSize: 12,
     lineHeight: 1.5,
-    borderRadius: "0 16px 16px 0",
   },
-  sectionTitle: lcarsPageStyles.sectionTitle,
-  sectionDivider: lcarsPageStyles.sectionDivider,
-  sectionHeaderRow: {
+  metricsGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+    gap: 12,
+    marginBottom: 18,
+  },
+  metricCard: {
+    ...lcarsPageStyles.subtleCard,
+    minHeight: 102,
+    padding: "14px 16px",
+  },
+  metricLabel: {
+    ...lcarsPageStyles.metricLabel,
+    marginBottom: 10,
+  },
+  metricValue: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 24,
+    fontWeight: 700,
+    lineHeight: 1,
+    letterSpacing: "-0.04em",
+  },
+  metricMeta: {
+    marginTop: 10,
+    fontSize: 10,
+    color: "var(--lcars-lavender)",
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    lineHeight: 1.5,
+  },
+  panelHeader: {
     display: "flex",
-    alignItems: "flex-start",
     justifyContent: "space-between",
-    flexWrap: "wrap" as const,
+    alignItems: "flex-start",
     gap: 16,
+    flexWrap: "wrap",
   },
-  sectionHelperText: {
-    ...lcarsPageStyles.helperText,
-    marginBottom: 8,
+  headerMeta: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-lavender)",
+  },
+  splitGrid: {
+    display: "grid",
+    gridTemplateColumns: "360px minmax(0, 1fr)",
+    gap: 18,
+  },
+  controlCard: {
+    ...lcarsPageStyles.subtleCard,
+    borderLeftColor: "var(--lcars-cyan)",
+  },
+  surfaceCard: {
+    ...lcarsPageStyles.subtleCard,
+    borderLeftColor: "var(--lcars-orange)",
+  },
+  controlTitle: {
+    color: "var(--lcars-orange)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 12,
+    letterSpacing: "0.12em",
+  },
+  controlCaption: {
+    marginTop: 6,
+    marginBottom: 14,
+    fontSize: 11,
+    color: "var(--lcars-lavender)",
+    lineHeight: 1.6,
+  },
+  surfaceHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap",
+  },
+  formStack: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
   },
   field: {
-    marginBottom: 14,
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
   },
-  label: lcarsPageStyles.metricLabel,
-  input: lcarsPageStyles.input,
-  editorGrid: {
+  fieldRow: {
     display: "grid",
-    gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
     gap: 12,
-    marginBottom: 20,
+  },
+  label: {
+    ...lcarsPageStyles.metricLabel,
+    marginBottom: 0,
+  },
+  input: lcarsPageStyles.input,
+  textarea: {
+    ...lcarsPageStyles.input,
+    minHeight: 78,
+    resize: "vertical",
   },
   buttonRow: lcarsPageStyles.buttonRow,
   primaryButton: lcarsPageStyles.primaryButton,
   ghostButton: lcarsPageStyles.ghostButton,
-  table: lcarsPageStyles.table,
+  emptyText: lcarsPageStyles.emptyText,
+  tableWrap: {
+    overflowX: "auto",
+  },
+  table: {
+    ...lcarsPageStyles.table,
+    minWidth: 840,
+  },
   th: lcarsPageStyles.th,
   td: lcarsPageStyles.td,
   tdMono: lcarsPageStyles.tdMono,
-  emptyText: lcarsPageStyles.emptyText,
-  inlineNote: {
+  personWrap: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    minWidth: 0,
+  },
+  tablePrimary: {
+    color: "var(--lcars-tan)",
+    fontSize: 12,
+  },
+  tableSecondary: {
+    marginTop: 4,
     fontSize: 11,
     color: "var(--text-quaternary)",
-    lineHeight: 1.4,
-    marginTop: 3,
+    lineHeight: 1.5,
+  },
+  statusPill: {
+    display: "inline-flex",
+    alignItems: "center",
+    border: "1px solid rgba(153, 153, 204, 0.24)",
+    padding: "3px 8px",
+    borderRadius: 999,
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    letterSpacing: "1px",
+  },
+  sourcePill: {
+    display: "inline-flex",
+    alignItems: "center",
+    border: "1px solid rgba(153, 153, 204, 0.24)",
+    padding: "3px 8px",
+    borderRadius: 999,
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    letterSpacing: "1px",
   },
   inlineActionRow: {
     display: "flex",
     alignItems: "center",
     gap: 8,
-    flexWrap: "wrap" as const,
+    flexWrap: "wrap",
   },
   inlineActionButton: {
     background: "transparent",
@@ -1056,21 +1180,26 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--text-quaternary)",
     letterSpacing: "1px",
   },
-  yearToolbar: {
+  holidayList: {
     display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    marginBottom: 18,
+  },
+  holidayRow: {
+    display: "flex",
+    justifyContent: "space-between",
     alignItems: "center",
     gap: 12,
-    flexWrap: "wrap" as const,
-    marginBottom: 16,
+    padding: "10px 12px",
+    borderBottom: "1px solid rgba(153, 153, 204, 0.08)",
   },
-  yearToolbarLabel: {
-    ...lcarsPageStyles.metricLabel,
-    marginBottom: 0,
-  },
-  dateMeta: {
-    fontSize: 12,
-    fontFamily: "'JetBrains Mono', monospace",
-    color: "var(--lcars-lavender)",
+  holidayTitleRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+    marginBottom: 4,
   },
   todayPill: {
     fontFamily: "'Orbitron', sans-serif",
@@ -1079,18 +1208,17 @@ const styles: Record<string, React.CSSProperties> = {
     color: "var(--lcars-cyan)",
     border: "1px solid var(--lcars-cyan)",
     padding: "1px 6px",
-    borderRadius: 2,
+    borderRadius: 999,
     letterSpacing: "1px",
   },
-  yearCalendarGrid: {
+  monthGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
     gap: 12,
-    marginTop: 20,
   },
   monthCard: {
     ...lcarsPageStyles.subtleCard,
-    borderLeftColor: "var(--lcars-orange)",
+    borderLeftColor: "var(--lcars-peach)",
   },
   monthCardHeader: {
     fontFamily: "'Orbitron', sans-serif",
@@ -1121,6 +1249,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   monthHolidayTitle: {
     color: "var(--lcars-tan)",
-    textAlign: "right" as const,
+    lineHeight: 1.45,
+    textAlign: "right",
   },
 };
