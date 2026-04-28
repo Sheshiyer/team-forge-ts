@@ -2,6 +2,32 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.24 - 2026-04-28
+
+This release hardens the OTA publication path by separating release publish
+authorization from the generic internal webhook callback secret.
+
+### Changed
+
+- Introduced a dedicated `TF_RELEASE_PUBLISH_TOKEN` for
+  `POST /internal/releases/publish`.
+- Updated the Cloudflare Worker so OTA release publication no longer shares the
+  same bearer secret as the general `/internal/*` callback surfaces.
+- Updated `scripts/publish-ota-release.mjs` and the GitHub Actions release
+  workflow to require the dedicated release token for OTA publish callbacks.
+- Updated the release/auth contracts and TeamForge release runbook to document
+  the new trust boundary.
+- Bumped release metadata to `0.1.24` across the frontend package, Tauri config,
+  and Rust crate.
+
+### Verification
+
+- `pnpm build`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+- `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit`
+- `TF_RELEASE_PUBLISH_TOKEN=test-token node scripts/publish-ota-release.mjs --dry-run ...`
+- `git diff --check`
+
 ## v0.1.23 - 2026-04-28
 
 This release removes stale heuristic-first product surfaces, promotes the new

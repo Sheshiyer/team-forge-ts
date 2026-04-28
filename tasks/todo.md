@@ -2,18 +2,50 @@
 
 ## Goal
 
+Ship `v0.1.24` from the hardened OTA publish path so the next release validates
+the dedicated `TF_RELEASE_PUBLISH_TOKEN` contract in the real GitHub Actions
+workflow.
+
+## Plan
+
+- [x] Bump TeamForge release metadata from `0.1.23` to `0.1.24` and add the
+      release entry for the OTA publish-token hardening.
+- [x] Verify the `0.1.24` release snapshot locally with the normal frontend and
+      Rust checks.
+- [ ] Commit the `0.1.24` snapshot, tag `v0.1.24`, and push it to trigger the
+      hardened release workflow.
+- [ ] Watch the GitHub Actions run through OTA publish and record the outcome
+      in `tasks/todo.md`.
+
+## Goal
+
 Provision the new `TF_RELEASE_PUBLISH_TOKEN` in both Cloudflare and GitHub,
 then rerun the failed `v0.1.23` release workflow to verify OTA publication can
 use the dedicated release token end to end.
 
 ## Plan
 
-- [ ] Generate a fresh release publish token and store it in Cloudflare Worker
+- [x] Generate a fresh release publish token and store it in Cloudflare Worker
       secrets.
-- [ ] Store the same token in GitHub Actions secrets for this repo.
-- [ ] Rerun the failed `v0.1.23` release workflow and verify whether OTA
-      publication advances past the previous auth failure.
-- [ ] Record the provisioning and rerun result in `tasks/todo.md`.
+- [x] Store the same token in GitHub Actions secrets for this repo.
+- [x] Verify the live release-publish route accepts the new token, then note
+      the boundary for the next tagged release.
+- [x] Record the provisioning result in `tasks/todo.md`.
+
+## Review
+
+- Provisioning:
+  - created a fresh `TF_RELEASE_PUBLISH_TOKEN`
+  - stored it in Cloudflare Worker secrets with Wrangler
+  - stored the same value in GitHub Actions secrets with `gh secret set`
+- Live verification:
+  - deployed the Worker after the auth split
+  - verified the live `/internal/releases/publish` route accepts the dedicated
+    bearer token by observing `400 missing_fields` instead of
+    `403 invalid_authorization`
+- Important boundary:
+  - the already-published `v0.1.23` run used the pre-hardening release tag, so
+    the next real CI validation must happen on a new tag from `main`
 
 ## Goal
 
