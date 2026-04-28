@@ -12,10 +12,32 @@ workflow.
       release entry for the OTA publish-token hardening.
 - [x] Verify the `0.1.24` release snapshot locally with the normal frontend and
       Rust checks.
-- [ ] Commit the `0.1.24` snapshot, tag `v0.1.24`, and push it to trigger the
+- [x] Commit the `0.1.24` snapshot, tag `v0.1.24`, and push it to trigger the
       hardened release workflow.
-- [ ] Watch the GitHub Actions run through OTA publish and record the outcome
+- [x] Watch the GitHub Actions run through OTA publish and record the outcome
       in `tasks/todo.md`.
+
+## Review
+
+- Release snapshot:
+  - committed as `12dda10` with
+    `release(0.1.24): harden OTA publish auth`
+  - pushed `main` and tag `v0.1.24` to `origin`
+- Local verification:
+  - `pnpm build` passed
+  - `cargo check --manifest-path src-tauri/Cargo.toml` passed
+  - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit` passed
+  - `git diff --check` passed before tagging
+- CI release outcome:
+  - GitHub Actions run `25069353782` completed successfully:
+    - [Build & Release #25069353782](https://github.com/Sheshiyer/team-forge-ts/actions/runs/25069353782)
+  - `Publish OTA release (Apple Silicon)` passed
+  - `Publish OTA release (Intel)` passed
+  - the dedicated `TF_RELEASE_PUBLISH_TOKEN` hardening cleared the exact auth
+    boundary that failed in `v0.1.23`
+- Published release:
+  - `v0.1.24`
+  - [GitHub Release v0.1.24](https://github.com/Sheshiyer/team-forge-ts/releases/tag/v0.1.24)
 
 ## Goal
 
