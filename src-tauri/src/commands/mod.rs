@@ -75,16 +75,6 @@ fn normalize_multi_id_value(value: &str) -> String {
         .join(", ")
 }
 
-fn normalize_github_repo_list(value: &str) -> String {
-    let mut seen = HashSet::new();
-    parse_multi_value_setting(value)
-        .into_iter()
-        .filter_map(|item| normalize_github_repo_input(&item))
-        .filter(|item| seen.insert(item.clone()))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 fn slack_required_scopes_label() -> String {
     SLACK_REQUIRED_SCOPES.join(", ")
 }
@@ -1285,6 +1275,7 @@ async fn bridge_teamforge_graph_to_github_configs(
 #[tauri::command]
 pub async fn get_settings(db: State<'_, DbPool>) -> Result<HashMap<String, String>, String> {
     let pool = &db.0;
+    clear_deprecated_github_repo_setting(pool).await?;
     let rows: Vec<Setting> = sqlx::query_as::<_, Setting>("SELECT key, value FROM settings")
         .fetch_all(pool)
         .await
@@ -1295,6 +1286,12 @@ pub async fn get_settings(db: State<'_, DbPool>) -> Result<HashMap<String, Strin
         map.insert(row.key, row.value);
     }
     Ok(map)
+}
+
+async fn clear_deprecated_github_repo_setting(pool: &sqlx::SqlitePool) -> Result<(), String> {
+    queries::delete_setting(pool, "github_repos")
+        .await
+        .map_err(|e| format!("delete deprecated github repo setting: {e}"))
 }
 
 #[derive(Debug, Serialize)]
@@ -1373,6 +1370,11 @@ fn paperclip_shell_interpreter(path: &Path) -> Option<&'static str> {
 #[tauri::command]
 pub async fn save_setting(db: State<'_, DbPool>, key: String, value: String) -> Result<(), String> {
     let pool = &db.0;
+    if key == "github_repos" {
+        clear_deprecated_github_repo_setting(pool).await?;
+        return Ok(());
+    }
+
     let value_to_store = if key == "clockify_ignored_emails" {
         let normalized = normalize_ignored_email_value(&value);
         if normalized.is_empty() {
@@ -1382,8 +1384,6 @@ pub async fn save_setting(db: State<'_, DbPool>, key: String, value: String) -> 
         }
     } else if key == "clockify_ignored_employee_ids" {
         normalize_multi_id_value(&value)
-    } else if key == "github_repos" {
-        normalize_github_repo_list(&value)
     } else {
         normalize_local_workspace_setting(&key, &value)
     };
@@ -1531,38 +1531,6 @@ pub async fn open_paperclip_ui(
 pub async fn sync_github_plans(db: State<'_, DbPool>) -> Result<Vec<GithubSyncReport>, String> {
     let pool = &db.0;
     run_github_sync_from_settings(pool).await
-}
-
-async fn seed_configured_github_repos(pool: &sqlx::SqlitePool) -> Result<(), String> {
-    let Some(repos) = queries::get_setting(pool, "github_repos")
-        .await
-        .map_err(|e| format!("read github repos: {e}"))?
-    else {
-        return Ok(());
-    };
-    let now = Utc::now().to_rfc3339();
-
-    for repo in parse_multi_value_setting(&repos)
-        .into_iter()
-        .filter_map(|value| normalize_github_repo_input(&value))
-    {
-        let config = GithubRepoConfig {
-            repo: repo.clone(),
-            display_name: repo,
-            client_name: None,
-            default_milestone_number: None,
-            huly_project_id: None,
-            clockify_project_id: None,
-            enabled: true,
-            created_at: now.clone(),
-            updated_at: now.clone(),
-        };
-        queries::upsert_github_repo_config(pool, &config)
-            .await
-            .map_err(|e| format!("upsert github repo config: {e}"))?;
-    }
-
-    Ok(())
 }
 
 // ─── Dashboard commands ─────────────────────────────────────────
@@ -6120,26 +6088,33 @@ pub async fn get_standup_report(db: State<'_, DbPool>) -> Result<StandupReport, 
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ClientView {
-    pub id: String,
-    pub name: String,
-    pub tier: String,
-    pub industry: Option<String>,
+pub struct ClientOperationalSignalsView {
+    pub sources: Vec<String>,
     pub month_billable_hours: f64,
     pub active_projects: u32,
-    pub planning_source: String,
     pub github_projects: u32,
     pub github_open_issues: u32,
     pub github_total_issues: u32,
-    pub primary_contact: Option<String>,
-    pub contract_status: String,
+    pub latest_activity_at: Option<String>,
+    pub inferred_tier: Option<String>,
+    pub inferred_industry: Option<String>,
+    pub inferred_primary_contact: Option<String>,
+    pub inferred_contract_status: Option<String>,
     pub contract_end_date: Option<String>,
     pub days_remaining: Option<i32>,
-    pub latest_activity_at: Option<String>,
-    pub tech_stack: Vec<String>,
+    pub inferred_tech_stack: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientView {
+    pub id: String,
+    pub name: String,
+    pub registry_status: String,
     pub drive_link: Option<String>,
     pub chrome_profile: Option<String>,
     pub profile: Option<TeamforgeClientProfileView>,
+    pub operational_signals: ClientOperationalSignalsView,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -6242,19 +6217,6 @@ fn most_recent_datetime(left: Option<String>, right: Option<String>) -> Option<S
             }
         }
     }
-}
-
-fn merge_planning_source(existing: &str, incoming: &str) -> String {
-    if existing == incoming {
-        return existing.to_string();
-    }
-    if existing.contains(incoming) {
-        return existing.to_string();
-    }
-    if incoming.contains(existing) {
-        return incoming.to_string();
-    }
-    format!("{existing}+{incoming}")
 }
 
 fn push_unique_tag(tags: &mut Vec<String>, tag: &str) {
@@ -6536,32 +6498,35 @@ async fn load_clients(pool: &sqlx::SqlitePool) -> Result<Vec<ClientView>, String
         let project_names = parse_csv_values(row.project_names_csv);
         let active_projects = row.active_projects.max(0) as u32;
         let month_billable_hours = row.month_billable_seconds as f64 / 3600.0;
-        let tier = infer_client_tier(month_billable_hours, active_projects);
-        let industry = infer_client_industry(&client_name, &project_names);
-        let tech_stack = infer_client_tech_stack(&project_names);
+        let inferred_tier = infer_client_tier(month_billable_hours, active_projects);
+        let inferred_industry = infer_client_industry(&client_name, &project_names);
+        let inferred_tech_stack = infer_client_tech_stack(&project_names);
         let (contract_status, contract_end_date, days_remaining) =
             infer_contract_health(row.last_activity_at.as_deref());
 
         clients.push(ClientView {
             id: format!("client-{client_slug}"),
             name: client_name.clone(),
-            tier,
-            industry,
-            month_billable_hours,
-            active_projects,
-            planning_source: "clockify".to_string(),
-            github_projects: 0,
-            github_open_issues: 0,
-            github_total_issues: 0,
-            primary_contact: primary_contact_by_client.get(&client_name).cloned(),
-            contract_status,
-            contract_end_date,
-            days_remaining,
-            latest_activity_at: row.last_activity_at,
-            tech_stack,
+            registry_status: "operational".to_string(),
             drive_link: get_client_setting_value(pool, &client_slug, "drive_link").await?,
             chrome_profile: get_client_setting_value(pool, &client_slug, "chrome_profile").await?,
             profile: None,
+            operational_signals: ClientOperationalSignalsView {
+                sources: vec!["clockify".to_string()],
+                month_billable_hours,
+                active_projects,
+                github_projects: 0,
+                github_open_issues: 0,
+                github_total_issues: 0,
+                latest_activity_at: row.last_activity_at,
+                inferred_tier: Some(inferred_tier),
+                inferred_industry,
+                inferred_primary_contact: primary_contact_by_client.get(&client_name).cloned(),
+                inferred_contract_status: Some(contract_status),
+                contract_end_date,
+                days_remaining,
+                inferred_tech_stack,
+            },
         });
     }
 
@@ -6611,50 +6576,71 @@ async fn load_clients(pool: &sqlx::SqlitePool) -> Result<Vec<ClientView>, String
             .copied()
         {
             let client = &mut clients[index];
-            client.planning_source = merge_planning_source(&client.planning_source, "github");
-            client.github_projects = client.github_projects.saturating_add(github_projects);
-            client.github_open_issues = client.github_open_issues.saturating_add(open_issues);
-            client.github_total_issues = client.github_total_issues.saturating_add(total_issues);
-            client.active_projects = client.active_projects.max(client.github_projects);
-            client.latest_activity_at =
-                most_recent_datetime(client.latest_activity_at.clone(), row.latest_activity_at);
+            push_unique_tag(&mut client.operational_signals.sources, "github");
+            client.operational_signals.github_projects = client
+                .operational_signals
+                .github_projects
+                .saturating_add(github_projects);
+            client.operational_signals.github_open_issues = client
+                .operational_signals
+                .github_open_issues
+                .saturating_add(open_issues);
+            client.operational_signals.github_total_issues = client
+                .operational_signals
+                .github_total_issues
+                .saturating_add(total_issues);
+            client.operational_signals.active_projects = client
+                .operational_signals
+                .active_projects
+                .max(client.operational_signals.github_projects);
+            client.operational_signals.latest_activity_at = most_recent_datetime(
+                client.operational_signals.latest_activity_at.clone(),
+                row.latest_activity_at,
+            );
             let (contract_status, contract_end_date, days_remaining) =
-                infer_contract_health(client.latest_activity_at.as_deref());
-            client.contract_status = contract_status;
-            client.contract_end_date = contract_end_date;
-            client.days_remaining = days_remaining;
-            push_unique_tag(&mut client.tech_stack, "GitHub Plans");
-            if client.industry.is_none() {
-                client.industry = infer_client_industry(&client.name, &project_names);
+                infer_contract_health(client.operational_signals.latest_activity_at.as_deref());
+            client.operational_signals.inferred_contract_status = Some(contract_status);
+            client.operational_signals.contract_end_date = contract_end_date;
+            client.operational_signals.days_remaining = days_remaining;
+            push_unique_tag(
+                &mut client.operational_signals.inferred_tech_stack,
+                "GitHub Plans",
+            );
+            if client.operational_signals.inferred_industry.is_none() {
+                client.operational_signals.inferred_industry =
+                    infer_client_industry(&client.name, &project_names);
             }
         } else {
             let client_slug = slugify_client_name(&client_name);
-            let mut tech_stack = infer_client_tech_stack(&project_names);
-            push_unique_tag(&mut tech_stack, "GitHub Plans");
+            let mut inferred_tech_stack = infer_client_tech_stack(&project_names);
+            push_unique_tag(&mut inferred_tech_stack, "GitHub Plans");
             let active_projects = github_projects;
             let (contract_status, contract_end_date, days_remaining) =
                 infer_contract_health(row.latest_activity_at.as_deref());
             let client = ClientView {
                 id: format!("client-{client_slug}"),
                 name: client_name.clone(),
-                tier: infer_client_tier(0.0, active_projects),
-                industry: infer_client_industry(&client_name, &project_names),
-                month_billable_hours: 0.0,
-                active_projects,
-                planning_source: "github".to_string(),
-                github_projects,
-                github_open_issues: open_issues,
-                github_total_issues: total_issues,
-                primary_contact: None,
-                contract_status,
-                contract_end_date,
-                days_remaining,
-                latest_activity_at: row.latest_activity_at,
-                tech_stack,
+                registry_status: "operational".to_string(),
                 drive_link: get_client_setting_value(pool, &client_slug, "drive_link").await?,
                 chrome_profile: get_client_setting_value(pool, &client_slug, "chrome_profile")
                     .await?,
                 profile: None,
+                operational_signals: ClientOperationalSignalsView {
+                    sources: vec!["github".to_string()],
+                    month_billable_hours: 0.0,
+                    active_projects,
+                    github_projects,
+                    github_open_issues: open_issues,
+                    github_total_issues: total_issues,
+                    latest_activity_at: row.latest_activity_at,
+                    inferred_tier: Some(infer_client_tier(0.0, active_projects)),
+                    inferred_industry: infer_client_industry(&client_name, &project_names),
+                    inferred_primary_contact: None,
+                    inferred_contract_status: Some(contract_status),
+                    contract_end_date,
+                    days_remaining,
+                    inferred_tech_stack,
+                },
             };
             client_index_by_name.insert(client.name.to_lowercase(), clients.len());
             clients.push(client);
@@ -6668,60 +6654,64 @@ async fn load_clients(pool: &sqlx::SqlitePool) -> Result<Vec<ClientView>, String
         let profile_key = normalize_teamforge_match_key(&profile.client_name);
         if let Some(index) = client_index_by_name.get(&profile_key).copied() {
             let client = &mut clients[index];
-            if profile.industry.is_some() {
-                client.industry = profile.industry.clone();
-            }
-            if profile.primary_contact.is_some() {
-                client.primary_contact = profile.primary_contact.clone();
-            }
+            client.registry_status = "canonical".to_string();
             client.profile = Some(profile);
             continue;
         }
 
-        let active_projects = profile.project_ids.len() as u32;
-        let tier = infer_client_tier(0.0, active_projects);
         let client_name = profile.client_name.clone();
         let client_slug = slugify_client_name(&client_name);
-        let latest_activity_at = if profile.updated_at.trim().is_empty() {
-            None
+        let client_id = if profile.client_id.trim().is_empty() {
+            format!("client-{client_slug}")
         } else {
-            Some(profile.updated_at.clone())
+            profile.client_id.clone()
         };
 
         client_index_by_name.insert(profile_key, clients.len());
         clients.push(ClientView {
-            id: format!("client-{client_slug}"),
+            id: client_id,
             name: client_name,
-            tier,
-            industry: profile.industry.clone(),
-            month_billable_hours: 0.0,
-            active_projects,
-            planning_source: "vault".to_string(),
-            github_projects: 0,
-            github_open_issues: 0,
-            github_total_issues: 0,
-            primary_contact: profile.primary_contact.clone(),
-            contract_status: if profile.active {
-                "active".to_string()
-            } else {
-                "inactive".to_string()
-            },
-            contract_end_date: None,
-            days_remaining: None,
-            latest_activity_at,
-            tech_stack: Vec::new(),
+            registry_status: "canonical".to_string(),
             drive_link: None,
             chrome_profile: None,
             profile: Some(profile),
+            operational_signals: ClientOperationalSignalsView {
+                sources: Vec::new(),
+                month_billable_hours: 0.0,
+                active_projects: 0,
+                github_projects: 0,
+                github_open_issues: 0,
+                github_total_issues: 0,
+                latest_activity_at: None,
+                inferred_tier: None,
+                inferred_industry: None,
+                inferred_primary_contact: None,
+                inferred_contract_status: None,
+                contract_end_date: None,
+                days_remaining: None,
+                inferred_tech_stack: Vec::new(),
+            },
         });
     }
 
     clients.sort_by(|left, right| {
         right
-            .month_billable_hours
-            .partial_cmp(&left.month_billable_hours)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(right.active_projects.cmp(&left.active_projects))
+            .profile
+            .is_some()
+            .cmp(&left.profile.is_some())
+            .then(
+                right
+                    .operational_signals
+                    .month_billable_hours
+                    .partial_cmp(&left.operational_signals.month_billable_hours)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then(
+                right
+                    .operational_signals
+                    .active_projects
+                    .cmp(&left.operational_signals.active_projects),
+            )
             .then(left.name.cmp(&right.name))
     });
 
@@ -7944,164 +7934,6 @@ async fn load_devices(pool: &sqlx::SqlitePool) -> Result<Vec<DeviceView>, String
     Ok(rows)
 }
 
-#[tauri::command]
-pub async fn get_devices(db: State<'_, DbPool>) -> Result<Vec<DeviceView>, String> {
-    if let Err(error) = get_huly_client(&db.0).await {
-        return Err(format!("huly devices unavailable: {error}"));
-    }
-    load_devices(&db.0).await
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KnowledgeArticleView {
-    pub id: String,
-    pub title: String,
-    pub category: String,
-    pub author: Option<String>,
-    pub updated_at: String,
-    pub tags: Vec<String>,
-    pub content_preview: String,
-    pub content: Option<String>,
-}
-
-#[tauri::command]
-pub async fn get_knowledge_articles(
-    db: State<'_, DbPool>,
-) -> Result<Vec<KnowledgeArticleView>, String> {
-    let pool = &db.0;
-    let client = match get_huly_client(pool).await {
-        Ok(c) => c,
-        Err(error) => return Err(format!("huly knowledge articles unavailable: {error}")),
-    };
-
-    let people = client.get_persons().await.unwrap_or_default();
-    let person_name_by_id: HashMap<String, String> = people
-        .into_iter()
-        .map(|person| {
-            (
-                person.id,
-                person
-                    .name
-                    .unwrap_or_else(|| "Unknown".to_string())
-                    .trim()
-                    .to_string(),
-            )
-        })
-        .collect();
-
-    let documents = client.get_documents().await.unwrap_or_default();
-    let mut rows: Vec<KnowledgeArticleView> = documents
-        .into_iter()
-        .map(|document| {
-            let title = document
-                .title
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or("Untitled")
-                .to_string();
-            let content = document
-                .content
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or("")
-                .to_string();
-            let preview = if content.is_empty() {
-                "No preview available.".to_string()
-            } else {
-                let snippet = content
-                    .split_whitespace()
-                    .take(28)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                if content.split_whitespace().count() > 28 {
-                    format!("{snippet}...")
-                } else {
-                    snippet
-                }
-            };
-            let category = infer_knowledge_category(document.space.as_deref(), &content);
-            let mut tags = Vec::new();
-            if let Some(space) = document
-                .space
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                tags.push(space.to_string());
-            }
-            if let Some(class) = document
-                .class
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                tags.push(class.replace(':', "-"));
-            }
-            tags.sort();
-            tags.dedup();
-
-            let updated_at = document
-                .modified_on
-                .and_then(ms_to_datetime_string)
-                .unwrap_or_else(|| Utc::now().to_rfc3339());
-
-            KnowledgeArticleView {
-                id: document.id,
-                title,
-                category,
-                author: document
-                    .created_by
-                    .as_deref()
-                    .and_then(|id| person_name_by_id.get(id))
-                    .cloned(),
-                updated_at,
-                tags,
-                content_preview: preview,
-                content: if content.is_empty() {
-                    None
-                } else {
-                    Some(content)
-                },
-            }
-        })
-        .collect();
-
-    rows.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-    Ok(rows)
-}
-
-fn infer_knowledge_category(space: Option<&str>, content: &str) -> String {
-    let haystack = format!(
-        "{} {}",
-        space.unwrap_or_default().to_lowercase(),
-        content.to_lowercase()
-    );
-    if haystack.contains("faq") {
-        return "FAQ".to_string();
-    }
-    if haystack.contains("client") {
-        return "Client Doc".to_string();
-    }
-    if haystack.contains("sop") || haystack.contains("runbook") {
-        return "SOP".to_string();
-    }
-    if haystack.contains("tool") || haystack.contains("integration") {
-        return "Tool Discovery".to_string();
-    }
-    if haystack.contains("training") || haystack.contains("onboarding") {
-        return "Training".to_string();
-    }
-    if haystack.contains("guide") || haystack.contains("api") || haystack.contains("architecture") {
-        return "Technical Guide".to_string();
-    }
-    if haystack.contains("http://") || haystack.contains("https://") {
-        return "Resource Link".to_string();
-    }
-    "Technical Guide".to_string()
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SprintBurndownPoint {
@@ -8457,77 +8289,6 @@ pub async fn get_monthly_hours(db: State<'_, DbPool>) -> Result<Vec<MonthlyHours
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TrainingTrackView {
-    pub id: String,
-    pub name: String,
-    pub total_modules: u32,
-    pub completion_rate: f64,
-    pub overdue_count: u32,
-}
-
-#[tauri::command]
-pub async fn get_training_tracks(db: State<'_, DbPool>) -> Result<Vec<TrainingTrackView>, String> {
-    let pool = &db.0;
-    let signals = load_training_signals(pool).await?;
-    let rows = build_training_status_rows(&signals);
-
-    let mut by_track: HashMap<String, (f64, u32, u32)> = HashMap::new();
-    for row in &rows {
-        let entry = by_track.entry(row.track.clone()).or_insert((0.0, 0, 0));
-        entry.0 += row.progress;
-        entry.1 += 1;
-        if row.status.eq_ignore_ascii_case("overdue") {
-            entry.2 += 1;
-        }
-    }
-
-    let mut tracks: Vec<TrainingTrackView> = training_track_catalog()
-        .iter()
-        .map(|track| {
-            let (sum_progress, count, overdue) =
-                by_track.get(track.name).copied().unwrap_or((0.0, 0, 0));
-            let completion_rate = if count > 0 {
-                (sum_progress / count as f64).clamp(0.0, 100.0)
-            } else {
-                0.0
-            };
-
-            TrainingTrackView {
-                id: track.id.to_string(),
-                name: track.name.to_string(),
-                total_modules: track.total_modules,
-                completion_rate,
-                overdue_count: overdue,
-            }
-        })
-        .collect();
-
-    tracks.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(tracks)
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TrainingStatusRow {
-    pub employee_name: String,
-    pub track: String,
-    pub progress: f64,
-    pub modules_done: u32,
-    pub total_modules: u32,
-    pub next_module: Option<String>,
-    pub deadline: Option<String>,
-    pub status: String,
-}
-
-#[tauri::command]
-pub async fn get_training_status(db: State<'_, DbPool>) -> Result<Vec<TrainingStatusRow>, String> {
-    let pool = &db.0;
-    let signals = load_training_signals(pool).await?;
-    Ok(build_training_status_rows(&signals))
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SkillsMatrixCell {
     pub employee_name: String,
     pub skill: String,
@@ -8675,486 +8436,27 @@ fn build_imported_onboarding_view(flow: TeamforgeOnboardingFlowDetail) -> Onboar
     }
 }
 
-async fn build_client_onboarding_fallbacks(
-    pool: &sqlx::SqlitePool,
-    imported_client_keys: &HashSet<String>,
-) -> Result<Vec<OnboardingFlowView>, String> {
-    let projects = queries::get_projects(pool)
-        .await
-        .map_err(|e| format!("load projects for onboarding: {e}"))?;
-
-    let client = get_huly_client(pool).await.ok();
-    let (huly_docs, huly_issues, huly_cards) = if let Some(client) = client.as_ref() {
-        let (docs, issues, cards) = tokio::join!(
-            client.get_documents(),
-            client.get_issues(None),
-            client.get_board_cards(),
-        );
-        (
-            docs.unwrap_or_default(),
-            issues.unwrap_or_default(),
-            cards.unwrap_or_default(),
-        )
-    } else {
-        (vec![], vec![], vec![])
-    };
-
-    let mut projects_by_client: HashMap<String, Vec<Project>> = HashMap::new();
-    for project in projects {
-        let Some(client_name) = project
-            .client_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| value.to_string())
-        else {
-            continue;
-        };
-        if imported_client_keys.contains(&normalize_teamforge_match_key(&client_name)) {
-            continue;
-        }
-        projects_by_client
-            .entry(client_name)
-            .or_default()
-            .push(project);
-    }
-
-    let mut flows = Vec::new();
-    for (client_name, client_projects) in projects_by_client {
-        let client_key = client_name.to_lowercase();
-        let huly_project_ids: HashSet<String> = client_projects
-            .iter()
-            .filter_map(|project| {
-                project
-                    .huly_project_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(|value| value.to_string())
-            })
-            .collect();
-
-        let primary_project = client_projects
-            .iter()
-            .map(|project| project.name.trim())
-            .find(|name| !name.is_empty())
-            .map(|name| name.to_string());
-        let first_project_created = client_projects
-            .iter()
-            .filter_map(|project| {
-                if project.created_at.trim().is_empty() {
-                    None
-                } else {
-                    Some(project.created_at.clone())
-                }
-            })
-            .min();
-
-        let client_stats: (Option<String>, Option<String>, f64) = sqlx::query_as(
-            "SELECT
-                MIN(te.start_time) AS first_entry,
-                MAX(te.start_time) AS latest_entry,
-                COALESCE(SUM(COALESCE(te.duration_seconds, 0)) / 3600.0, 0) AS total_hours
-             FROM time_entries te
-             JOIN projects p ON p.id = te.project_id
-             WHERE p.client_name IS NOT NULL
-               AND LOWER(TRIM(p.client_name)) = LOWER(TRIM(?1))",
-        )
-        .bind(&client_name)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| format!("query onboarding stats for {client_name}: {e}"))?;
-
-        let (first_time_entry, _latest_time_entry, logged_hours) = client_stats;
-
-        let matching_docs: Vec<&HulyDocument> = huly_docs
-            .iter()
-            .filter(|doc| {
-                doc.space
-                    .as_deref()
-                    .map(|space| huly_project_ids.contains(space))
-                    .unwrap_or(false)
-                    || doc
-                        .title
-                        .as_deref()
-                        .map(|title| title.to_lowercase().contains(&client_key))
-                        .unwrap_or(false)
-                    || doc
-                        .content
-                        .as_deref()
-                        .map(|content| content.to_lowercase().contains(&client_key))
-                        .unwrap_or(false)
-            })
-            .collect();
-
-        let matching_issues = huly_issues
-            .iter()
-            .filter(|issue| {
-                issue
-                    .space
-                    .as_deref()
-                    .map(|space| huly_project_ids.contains(space))
-                    .unwrap_or(false)
-                    || issue
-                        .title
-                        .as_deref()
-                        .map(|title| title.to_lowercase().contains(&client_key))
-                        .unwrap_or(false)
-            })
-            .count() as u32;
-
-        let matching_cards = huly_cards
-            .iter()
-            .filter(|card| {
-                card.space
-                    .as_deref()
-                    .map(|space| huly_project_ids.contains(space))
-                    .unwrap_or(false)
-                    || card
-                        .title
-                        .as_deref()
-                        .map(|title| title.to_lowercase().contains(&client_key))
-                        .unwrap_or(false)
-            })
-            .count() as u32;
-
-        let mut tasks = Vec::new();
-
-        let workspace_ready = !client_projects.is_empty();
-        tasks.push(OnboardingTaskView {
-            id: format!("{}-workspace", slugify_client_name(&client_name)),
-            sort_order: 0,
-            title: "Workspace mapped in Clockify".to_string(),
-            completed: workspace_ready,
-            completed_at: first_project_created.clone(),
-            resource_created: primary_project.clone(),
-            notes: Some("Heuristic fallback from project + time-entry telemetry.".to_string()),
-        });
-
-        let primary_project_created = primary_project.is_some();
-        tasks.push(OnboardingTaskView {
-            id: format!("{}-project", slugify_client_name(&client_name)),
-            sort_order: 1,
-            title: "Primary project created".to_string(),
-            completed: primary_project_created,
-            completed_at: first_project_created.clone(),
-            resource_created: primary_project.clone(),
-            notes: Some("Heuristic fallback from project registry.".to_string()),
-        });
-
-        let kickoff_logged = logged_hours > 0.0;
-        tasks.push(OnboardingTaskView {
-            id: format!("{}-kickoff", slugify_client_name(&client_name)),
-            sort_order: 2,
-            title: "Kickoff execution logged".to_string(),
-            completed: kickoff_logged,
-            completed_at: first_time_entry.clone(),
-            resource_created: if kickoff_logged {
-                Some(format!("{logged_hours:.1}h logged"))
-            } else {
-                None
-            },
-            notes: Some("Heuristic fallback from Clockify time entries.".to_string()),
-        });
-
-        let docs_ready = !matching_docs.is_empty();
-        let first_doc_date = matching_docs
-            .iter()
-            .filter_map(|doc| doc.modified_on)
-            .min()
-            .and_then(ms_to_datetime_string);
-        tasks.push(OnboardingTaskView {
-            id: format!("{}-docs", slugify_client_name(&client_name)),
-            sort_order: 3,
-            title: "Knowledge docs linked".to_string(),
-            completed: docs_ready,
-            completed_at: first_doc_date,
-            resource_created: if docs_ready {
-                Some(format!("{} docs", matching_docs.len()))
-            } else {
-                None
-            },
-            notes: Some("Heuristic fallback from Huly documents.".to_string()),
-        });
-
-        let delivery_active = matching_issues + matching_cards > 0;
-        tasks.push(OnboardingTaskView {
-            id: format!("{}-delivery", slugify_client_name(&client_name)),
-            sort_order: 4,
-            title: "Delivery board activity detected".to_string(),
-            completed: delivery_active,
-            completed_at: None,
-            resource_created: if delivery_active {
-                Some(format!("{} signals", matching_issues + matching_cards))
-            } else {
-                None
-            },
-            notes: Some("Heuristic fallback from Huly issues and board cards.".to_string()),
-        });
-
-        let total_tasks = tasks.len() as u32;
-        let completed_tasks = tasks.iter().filter(|task| task.completed).count() as u32;
-        let progress_percent = if total_tasks > 0 {
-            (completed_tasks as f64 / total_tasks as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        let start_date = first_time_entry
-            .clone()
-            .or(first_project_created.clone())
-            .unwrap_or_else(|| Utc::now().format("%Y-%m-%dT00:00:00").to_string());
-        let days_elapsed = parse_datetime_flexible(&start_date)
-            .map(|start| Utc::now().signed_duration_since(start).num_days().max(0) as u32)
-            .unwrap_or(0);
-
-        let status = if completed_tasks == total_tasks && total_tasks > 0 {
-            "completed"
-        } else if days_elapsed >= 14 && progress_percent < 60.0 {
-            "stalled"
-        } else {
-            "in_progress"
-        }
-        .to_string();
-
-        flows.push(OnboardingFlowView {
-            id: format!("fallback-{}", slugify_client_name(&client_name)),
-            audience: "client".to_string(),
-            source: "heuristic".to_string(),
-            owner: None,
-            workspace_id: None,
-            subject_id: slugify_client_name(&client_name),
-            subject_name: client_name,
-            primary_contact: None,
-            manager: None,
-            department: None,
-            joined_on: None,
-            start_date,
-            completed_tasks,
-            total_tasks,
-            progress_percent,
-            status,
-            tasks,
-            days_elapsed,
-        });
-    }
-
-    Ok(flows)
-}
-
 #[tauri::command]
 pub async fn get_onboarding_flows(
     db: State<'_, DbPool>,
 ) -> Result<Vec<OnboardingFlowView>, String> {
     let pool = &db.0;
-    let imported_flows = load_teamforge_onboarding_flows(pool, None)
+    let mut flows = load_teamforge_onboarding_flows(pool, None)
         .await
-        .unwrap_or_default();
-    let imported_client_keys: HashSet<String> = imported_flows
-        .iter()
-        .filter(|flow| flow.audience == "client")
-        .flat_map(|flow| {
-            [
-                normalize_teamforge_match_key(&flow.subject_id),
-                normalize_teamforge_match_key(&flow.subject_name),
-            ]
-        })
-        .collect();
-
-    let mut flows = imported_flows
+        .unwrap_or_default()
         .into_iter()
         .map(build_imported_onboarding_view)
         .collect::<Vec<_>>();
-    flows.extend(build_client_onboarding_fallbacks(pool, &imported_client_keys).await?);
 
     flows.sort_by(|left, right| {
         left.audience
             .cmp(&right.audience)
-            .then(left.source.cmp(&right.source))
             .then(left.status.cmp(&right.status))
             .then(right.days_elapsed.cmp(&left.days_elapsed))
             .then(left.subject_name.cmp(&right.subject_name))
     });
     Ok(flows)
 }
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlannerSlotView {
-    pub employee_name: String,
-    pub scheduled_hours: f64,
-    pub actual_hours: f64,
-    pub focus_blocks: u32,
-    pub meeting_blocks: u32,
-    pub capacity_utilization: f64,
-}
-
-#[tauri::command]
-pub async fn get_planner_capacity(db: State<'_, DbPool>) -> Result<Vec<PlannerSlotView>, String> {
-    let pool = &db.0;
-    let employees = queries::get_employees(pool)
-        .await
-        .map_err(|e| format!("load employees for planner: {e}"))?;
-
-    let now = Local::now();
-    let today = now.date_naive();
-    let day_start = today
-        .and_hms_opt(0, 0, 0)
-        .unwrap()
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
-    let next_day = (today + chrono::Duration::days(1))
-        .and_hms_opt(0, 0, 0)
-        .unwrap()
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
-    let day_start_ms = today
-        .and_hms_opt(0, 0, 0)
-        .unwrap()
-        .and_utc()
-        .timestamp_millis();
-    let day_end_ms = (today + chrono::Duration::days(1))
-        .and_hms_opt(0, 0, 0)
-        .unwrap()
-        .and_utc()
-        .timestamp_millis();
-
-    let mut meetings_by_person: HashMap<String, u32> = HashMap::new();
-    let mut open_issue_load_by_person: HashMap<String, f64> = HashMap::new();
-
-    if let Ok(client) = get_huly_client(pool).await {
-        let (events, issues) = tokio::join!(client.get_calendar_events(), client.get_issues(None));
-        let events = events.unwrap_or_default();
-        let issues = issues.unwrap_or_default();
-
-        for event in events {
-            let Some(start_ms) = event.date else {
-                continue;
-            };
-            if start_ms < day_start_ms || start_ms >= day_end_ms {
-                continue;
-            }
-
-            if let Some(creator) = event.created_by.as_deref() {
-                *meetings_by_person.entry(creator.to_string()).or_default() += 1;
-            }
-            if let Some(participants) = event.participants {
-                for participant in participants {
-                    *meetings_by_person.entry(participant).or_default() += 1;
-                }
-            }
-        }
-
-        for issue in issues {
-            if issue_is_completed(&issue) {
-                continue;
-            }
-            let Some(assignee) = issue.assignee.as_deref() else {
-                continue;
-            };
-            *open_issue_load_by_person
-                .entry(assignee.to_string())
-                .or_default() += 0.5;
-        }
-    }
-
-    let mut rows = Vec::new();
-    for employee in employees.into_iter().filter(|employee| employee.is_active) {
-        let actual_hours = query_hours_for_range(pool, &employee.id, &day_start, &next_day).await?;
-        let meeting_blocks = employee
-            .huly_person_id
-            .as_deref()
-            .and_then(|person_id| meetings_by_person.get(person_id))
-            .copied()
-            .unwrap_or(0);
-        let issue_load = employee
-            .huly_person_id
-            .as_deref()
-            .and_then(|person_id| open_issue_load_by_person.get(person_id))
-            .copied()
-            .unwrap_or(0.0);
-
-        let scheduled_hours = (actual_hours + meeting_blocks as f64 + issue_load).clamp(0.0, 12.0);
-        let focus_blocks = (scheduled_hours - meeting_blocks as f64).max(0.0).round() as u32;
-        let capacity_utilization = (scheduled_hours / 8.0) * 100.0;
-
-        rows.push(PlannerSlotView {
-            employee_name: employee.name,
-            scheduled_hours,
-            actual_hours,
-            focus_blocks,
-            meeting_blocks,
-            capacity_utilization,
-        });
-    }
-
-    rows.sort_by(|left, right| left.employee_name.cmp(&right.employee_name));
-    Ok(rows)
-}
-
-struct TrainingTrackBlueprint {
-    id: &'static str,
-    name: &'static str,
-    total_modules: u32,
-    modules: &'static [&'static str],
-}
-
-const TRAINING_TRACK_BLUEPRINTS: &[TrainingTrackBlueprint] = &[
-    TrainingTrackBlueprint {
-        id: "onboarding",
-        name: "Onboarding Track",
-        total_modules: 6,
-        modules: &[
-            "Repo Orientation",
-            "Sync Pipeline Basics",
-            "Operational Playbooks",
-            "Alerting & Escalation",
-            "Client Delivery QA",
-            "Release Readiness",
-        ],
-    },
-    TrainingTrackBlueprint {
-        id: "smart-home",
-        name: "Smart Home Integration Track",
-        total_modules: 8,
-        modules: &[
-            "Device Protocol Basics",
-            "Gateway Integrations",
-            "Firmware Lifecycle",
-            "IoT Reliability Patterns",
-            "Field Diagnostics",
-            "Telemetry Validation",
-            "Integration Regression",
-            "Production Hardening",
-        ],
-    },
-    TrainingTrackBlueprint {
-        id: "pm-dev",
-        name: "PM-Developer Track",
-        total_modules: 7,
-        modules: &[
-            "Scope Breakdown",
-            "Sprint Definition",
-            "Dependency Mapping",
-            "Execution Coordination",
-            "Risk Management",
-            "Retro Synthesis",
-            "Outcome Reporting",
-        ],
-    },
-    TrainingTrackBlueprint {
-        id: "rd",
-        name: "R&D Contributor Track",
-        total_modules: 5,
-        modules: &[
-            "Research Intake",
-            "Spike Design",
-            "Prototype Validation",
-            "Evidence Capture",
-            "Knowledge Transfer",
-        ],
-    },
-];
 
 #[derive(Debug, Clone)]
 struct EmployeeTrainingSignal {
@@ -9165,10 +8467,6 @@ struct EmployeeTrainingSignal {
     documentation_hours: f64,
     coordination_hours: f64,
     experimentation_hours: f64,
-}
-
-fn training_track_catalog() -> &'static [TrainingTrackBlueprint] {
-    TRAINING_TRACK_BLUEPRINTS
 }
 
 fn issue_status_text(issue: &HulyIssue) -> String {
@@ -9221,90 +8519,6 @@ fn score_to_skill_level(score: f64) -> u32 {
     } else {
         0
     }
-}
-
-fn compute_training_progress(track_id: &str, signal: &EmployeeTrainingSignal) -> f64 {
-    let hours_ratio = (signal.hours_month / 160.0).clamp(0.0, 1.0);
-    let project_ratio = (signal.distinct_projects as f64 / 4.0).clamp(0.0, 1.0);
-    let total_hours = signal.hours_month.max(1.0);
-    let device_ratio = (signal.device_hours / total_hours).clamp(0.0, 1.0);
-    let docs_ratio = (signal.documentation_hours / total_hours).clamp(0.0, 1.0);
-    let coordination_ratio = (signal.coordination_hours / total_hours).clamp(0.0, 1.0);
-    let experimentation_ratio = (signal.experimentation_hours / total_hours).clamp(0.0, 1.0);
-
-    let weighted = match track_id {
-        "onboarding" => 0.35 * hours_ratio + 0.35 * project_ratio + 0.30 * docs_ratio,
-        "smart-home" => 0.25 * hours_ratio + 0.55 * device_ratio + 0.20 * project_ratio,
-        "pm-dev" => 0.40 * hours_ratio + 0.30 * coordination_ratio + 0.30 * project_ratio,
-        "rd" => 0.25 * hours_ratio + 0.45 * experimentation_ratio + 0.30 * docs_ratio,
-        _ => 0.0,
-    };
-    (weighted * 100.0).clamp(0.0, 100.0)
-}
-
-fn build_training_status_rows(signals: &[EmployeeTrainingSignal]) -> Vec<TrainingStatusRow> {
-    let now = Local::now();
-    let deadline = if now.month() == 12 {
-        NaiveDate::from_ymd_opt(now.year() + 1, 1, 1)
-            .unwrap()
-            .pred_opt()
-            .unwrap()
-    } else {
-        NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1)
-            .unwrap()
-            .pred_opt()
-            .unwrap()
-    }
-    .format("%Y-%m-%d")
-    .to_string();
-
-    let mut rows = Vec::new();
-    for signal in signals {
-        for track in training_track_catalog() {
-            let progress = compute_training_progress(track.id, signal);
-            let mut modules_done = ((progress / 100.0) * track.total_modules as f64).floor() as u32;
-            if progress >= 99.5 {
-                modules_done = track.total_modules;
-            }
-            modules_done = modules_done.min(track.total_modules);
-
-            let next_module = if modules_done < track.total_modules {
-                track
-                    .modules
-                    .get(modules_done as usize)
-                    .map(|module| module.to_string())
-            } else {
-                None
-            };
-
-            let status = if modules_done >= track.total_modules {
-                "completed"
-            } else if now.day() >= 25 && progress < 60.0 {
-                "overdue"
-            } else {
-                "in progress"
-            }
-            .to_string();
-
-            rows.push(TrainingStatusRow {
-                employee_name: signal.employee_name.clone(),
-                track: track.name.to_string(),
-                progress,
-                modules_done,
-                total_modules: track.total_modules,
-                next_module,
-                deadline: Some(deadline.clone()),
-                status,
-            });
-        }
-    }
-
-    rows.sort_by(|left, right| {
-        left.employee_name
-            .cmp(&right.employee_name)
-            .then(left.track.cmp(&right.track))
-    });
-    rows
 }
 
 async fn load_training_signals(
@@ -9453,10 +8667,7 @@ struct CloudClockifyIntegration {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-struct CloudHulyIntegration {
-    mirror_mode: Option<String>,
-    mirror_enabled: Option<bool>,
-}
+struct CloudHulyIntegration {}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -9467,21 +8678,7 @@ struct CloudSlackIntegration {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-struct CloudGithubIntegration {
-    repos: Option<Vec<CloudGithubRepoConfig>>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct CloudGithubRepoConfig {
-    repo: String,
-    display_name: Option<String>,
-    client_name: Option<String>,
-    default_milestone_number: Option<i64>,
-    huly_project_id: Option<String>,
-    clockify_project_id: Option<String>,
-    enabled: Option<bool>,
-}
+struct CloudGithubIntegration {}
 
 #[derive(Debug, Clone, Deserialize)]
 struct CloudCredentialResponse {
@@ -9755,34 +8952,11 @@ async fn apply_cloud_integration_config(
         skipped.push("integration_config.clockify".to_string());
     }
 
-    if let Some(huly) = integrations.huly {
-        set_cloud_setting_if_present(
-            pool,
-            "huly_mirror_mode",
-            huly.mirror_mode,
-            synced,
-            skipped,
-            errors,
-        )
-        .await;
-        if let Some(enabled) = huly.mirror_enabled {
-            if let Err(error) = queries::set_setting(
-                pool,
-                "huly_mirror_enabled",
-                if enabled { "true" } else { "false" },
-            )
-            .await
-            {
-                errors.push(format!("huly_mirror_enabled: {error}"));
-            } else {
-                synced.push("huly_mirror_enabled".to_string());
-            }
-        } else {
-            skipped.push("huly_mirror_enabled".to_string());
-        }
-    } else {
-        skipped.push("integration_config.huly".to_string());
-    }
+    // Legacy Huly mirror keys are no longer used anywhere in the desktop app.
+    // Keep cloud sync from re-seeding stale settings until a supported Huly
+    // control surface replaces them.
+    let _ = integrations.huly;
+    skipped.push("integration_config.huly".to_string());
 
     if let Some(slack) = integrations.slack {
         set_cloud_setting_if_present(
@@ -9810,60 +8984,12 @@ async fn apply_cloud_integration_config(
         skipped.push("integration_config.slack".to_string());
     }
 
-    if let Some(github) = integrations.github {
-        let repos = github.repos.unwrap_or_default();
-        if repos.is_empty() {
-            skipped.push("github_repo_configs".to_string());
-        } else {
-            if let Err(error) = sqlx::query(
-                "UPDATE github_repo_configs SET enabled = 0, updated_at = datetime('now')",
-            )
-            .execute(pool)
-            .await
-            {
-                errors.push(format!("github_repo_configs.disable_old: {error}"));
-            }
-
-            let now = Utc::now().to_rfc3339();
-            let mut configured_repos = Vec::new();
-            for cloud_repo in repos {
-                let Some(repo) = normalize_github_repo_input(&cloud_repo.repo) else {
-                    errors.push(format!(
-                        "github_repo_configs: invalid repo '{}'",
-                        cloud_repo.repo
-                    ));
-                    continue;
-                };
-                configured_repos.push(repo.clone());
-                let config = GithubRepoConfig {
-                    display_name: clean_optional_string(cloud_repo.display_name)
-                        .unwrap_or_else(|| repo.clone()),
-                    client_name: clean_optional_string(cloud_repo.client_name),
-                    repo,
-                    default_milestone_number: cloud_repo.default_milestone_number,
-                    huly_project_id: clean_optional_string(cloud_repo.huly_project_id),
-                    clockify_project_id: clean_optional_string(cloud_repo.clockify_project_id),
-                    enabled: cloud_repo.enabled.unwrap_or(true),
-                    created_at: now.clone(),
-                    updated_at: now.clone(),
-                };
-
-                if let Err(error) = queries::upsert_github_repo_config(pool, &config).await {
-                    errors.push(format!("github_repo_configs.{}: {error}", config.repo));
-                }
-            }
-
-            if configured_repos.is_empty() {
-                skipped.push("github_repos".to_string());
-            } else if let Err(error) =
-                queries::set_setting(pool, "github_repos", &configured_repos.join(", ")).await
-            {
-                errors.push(format!("github_repos: {error}"));
-            } else {
-                synced.push("github_repo_configs".to_string());
-                synced.push("github_repos".to_string());
-            }
+    if integrations.github.is_some() {
+        if let Err(error) = clear_deprecated_github_repo_setting(pool).await {
+            errors.push(format!("github_repos.cleanup: {error}"));
         }
+        skipped.push("integration_config.github".to_string());
+        skipped.push("github_repo_configs".to_string());
     } else {
         skipped.push("integration_config.github".to_string());
     }
@@ -9940,7 +9066,17 @@ async fn run_slack_delta_sync_from_settings(
 async fn run_github_sync_from_settings(
     pool: &sqlx::SqlitePool,
 ) -> Result<Vec<GithubSyncReport>, String> {
-    seed_configured_github_repos(pool).await?;
+    clear_deprecated_github_repo_setting(pool).await?;
+
+    let repo_configs = queries::get_enabled_github_repo_configs(pool)
+        .await
+        .map_err(|e| format!("read github repo configs: {e}"))?;
+    if repo_configs.is_empty() {
+        return Err(
+            "No TeamForge GitHub repos are configured. Add repo links on TeamForge projects first."
+                .to_string(),
+        );
+    }
 
     let Some(token) = queries::get_setting(pool, "github_token")
         .await
@@ -9949,7 +9085,7 @@ async fn run_github_sync_from_settings(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
     else {
-        return Ok(Vec::new());
+        return Err("GitHub token is not configured.".to_string());
     };
 
     let engine = GithubSyncEngine::new(GithubClient::new(token), pool.clone());

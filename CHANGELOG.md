@@ -2,6 +2,53 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.23 - 2026-04-28
+
+This release removes stale heuristic-first product surfaces, promotes the new
+TeamForge icon system into the shipped Tauri bundle, and makes the repo-owned
+Tauri skill workflow and CI release path explicit.
+
+### Changed
+
+- Removed stale Settings authorities and legacy product surfaces:
+  - GitHub repo scope now resolves from the TeamForge project graph instead of
+    the old `github_repos` setting
+  - live employee quota editing moved out of Settings into Team capacity
+  - Planner was removed from the primary shell and legacy `/planner` now
+    redirects to Team capacity
+  - Knowledge was removed from primary navigation and reduced to a canonical
+    placeholder until a real source contract exists
+- Reworked Onboarding and Clients toward canonical TeamForge identity:
+  - onboarding now shows canonical flows only instead of mixing fallback
+    synthesized records into the default view
+  - client surfaces now distinguish canonical TeamForge profiles from
+    operational-only signal records
+- Added repo-owned Tauri skill workflow scaffolding:
+  - pinned the installed Tauri skill manifest in `config/tauri-skill-suite.txt`
+  - added `pnpm skills:tauri:list` and `pnpm skills:tauri:refresh`
+  - documented the reusable prompt scaffold and skill-routing guidance
+- Added the TeamForge visual asset workflow and shipped the approved app icon:
+  - promoted the approved TeamForge icon assets into
+    `design-assets/teamforge/icons/approved/`
+  - regenerated `src-tauri/icons/*` from the approved master
+  - fixed the export pipeline so Tauri bundle PNGs are normalized to RGBA
+    before packaging
+- Clarified release ownership:
+  - local `cargo tauri build --bundles app` remains the icon/bundle validation
+    path
+  - GitHub Actions release CI remains the canonical OTA signing and publication
+    path
+- Bumped release metadata to `0.1.23` across the frontend package, Tauri config,
+  and Rust crate.
+
+### Verification
+
+- `pnpm build`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+- `cargo tauri build --bundles app` produced the macOS `.app` and updater
+  archive before the expected local signing-env failure
+- `git diff --check`
+
 ## v0.1.22 - 2026-04-23
 
 This release cleans up the TeamForge founder console UI so the app reads as a

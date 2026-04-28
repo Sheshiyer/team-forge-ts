@@ -19,7 +19,6 @@ import Clients from "./pages/Clients";
 import Issues from "./pages/Issues";
 import Knowledge from "./pages/Knowledge";
 import Onboarding from "./pages/Onboarding";
-import Planner from "./pages/Planner";
 import Avatar from "./components/ui/Avatar";
 import DateRangePicker from "./components/ui/DateRangePicker";
 import { useViewportWidth } from "./hooks/useViewportWidth";
@@ -54,9 +53,7 @@ const navSections = [
     items: [
       { path: "/clients", label: "Clients" },
       { path: "/issues", label: "Issues" },
-      { path: "/knowledge", label: "Knowledge" },
       { path: "/onboarding", label: "Onboarding" },
-      { path: "/planner", label: "Planner" },
     ],
   },
   {
@@ -458,7 +455,7 @@ function App() {
             <Route path="/devices" element={<Navigate to="/issues" replace />} />
             <Route path="/knowledge" element={<Knowledge />} />
             <Route path="/onboarding" element={<Onboarding />} />
-            <Route path="/planner" element={<Planner />} />
+            <Route path="/planner" element={<Navigate to="/team/capacity" replace />} />
             <Route path="/activity" element={<Activity />} />
             <Route path="/live" element={<Live />} />
             <Route path="/settings" element={<Settings />} />

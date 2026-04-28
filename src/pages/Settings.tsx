@@ -26,7 +26,7 @@ const DEFAULT_IGNORED_EMAILS = "thoughtseedlabs@gmail.com";
 const DEFAULT_HULY_ISSUES_INTERVAL_SECONDS = "600";
 const DEFAULT_HULY_PRESENCE_INTERVAL_SECONDS = "120";
 const DEFAULT_HULY_TEAM_CACHE_INTERVAL_SECONDS = "3600";
-const DEFAULT_IDENTITY_OPERATOR = "TeamForge operator";
+const DEFAULT_IDENTITY_OPERATOR = "TeamForge";
 const SLACK_REQUIRED_SCOPES = [
   "channels:read",
   "channels:history",
@@ -57,37 +57,6 @@ function normalizeIgnoredEmployeeIds(ids: string[]): string {
 
 function normalizeSlackChannelFilters(value: string): string {
   return parseMultiValueSetting(value).join(", ");
-}
-
-function normalizeGithubRepoInput(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const afterHost = trimmed.includes("github.com/")
-    ? trimmed.slice(trimmed.indexOf("github.com/") + "github.com/".length)
-    : trimmed.startsWith("git@github.com:")
-      ? trimmed.slice("git@github.com:".length)
-      : trimmed;
-  const parts = afterHost
-    .replace(/\.git$/, "")
-    .split("/")
-    .filter(Boolean);
-  if (parts.length < 2) return null;
-  const [owner, repo] = parts;
-  const valid = /^[A-Za-z0-9_.-]+$/.test(owner) && /^[A-Za-z0-9_.-]+$/.test(repo);
-  return valid ? `${owner}/${repo}` : null;
-}
-
-function normalizeGithubRepos(value: string): string {
-  const seen = new Set<string>();
-  return parseMultiValueSetting(value)
-    .map(normalizeGithubRepoInput)
-    .filter((repo): repo is string => Boolean(repo))
-    .filter((repo) => {
-      if (seen.has(repo)) return false;
-      seen.add(repo);
-      return true;
-    })
-    .join(", ");
 }
 
 function normalizePositiveInteger(value: string, fallback: string): string {
@@ -140,7 +109,6 @@ function Settings() {
 
   const [githubToken, setGithubToken] = useState("");
   const [showGithubToken, setShowGithubToken] = useState(false);
-  const [githubRepos, setGithubRepos] = useState("");
   const [githubSyncing, setGithubSyncing] = useState(false);
   const [githubMessage, setGithubMessage] = useState<string | null>(null);
 
@@ -183,13 +151,9 @@ function Settings() {
   const [syncStates, setSyncStates] = useState<SyncState[]>([]);
 
   const [employees, setEmployees] = useState<Employee[]>([]);
-  const [editingQuotas, setEditingQuotas] = useState<Record<string, string>>({});
   const [identityReviewQueue, setIdentityReviewQueue] = useState<IdentityMapEntry[]>([]);
   const [identityReviewLoading, setIdentityReviewLoading] = useState(false);
   const [identityReviewMessage, setIdentityReviewMessage] = useState<string | null>(null);
-  const [identityOverrideOperator, setIdentityOverrideOperator] = useState(
-    DEFAULT_IDENTITY_OPERATOR
-  );
   const [identityOverrideSelections, setIdentityOverrideSelections] = useState<
     Record<string, string>
   >({});
@@ -240,6 +204,14 @@ function Settings() {
   const activeEmployees = [...employees]
     .filter((employee) => employee.isActive)
     .sort((left, right) => left.name.localeCompare(right.name));
+  const slackIdentityReviewQueue = identityReviewQueue.filter((entry) => {
+    if (entry.source.toLowerCase() !== "slack") return false;
+    return !entry.employeeId || entry.resolutionStatus !== "linked" || entry.confidence < 0.85;
+  });
+  const showSlackIdentityRepair =
+    identityReviewLoading ||
+    slackIdentityReviewQueue.length > 0 ||
+    Boolean(identityReviewMessage);
 
   const getIdentityQueueKey = (entry: IdentityMapEntry) =>
     `${entry.source}:${entry.externalId}`;
@@ -269,7 +241,6 @@ function Settings() {
       if (settings.slack_bot_token) setSlackBotToken(settings.slack_bot_token);
       setSlackChannelFilters(settings.slack_channel_filters || "");
       if (settings.github_token) setGithubToken(settings.github_token);
-      setGithubRepos(settings.github_repos || "");
       setCloudCredentialSyncEnabled(
         settings.cloud_credential_sync_enabled !== "false"
       );
@@ -292,7 +263,7 @@ function Settings() {
       setIdentityOverrideSelections((current) => {
         const next = { ...current };
         for (const entry of reviewQueue) {
-          const key = `${entry.source}:${entry.externalId}`;
+          const key = getIdentityQueueKey(entry);
           if (!next[key] && entry.employeeId) {
             next[key] = entry.employeeId;
           }
@@ -487,35 +458,17 @@ function Settings() {
     finally { setHulySyncing(false); }
   };
 
-  const handleQuotaSave = async (employeeId: string) => {
-    const val = editingQuotas[employeeId];
-    if (val === undefined) return;
-    const quota = parseFloat(val);
-    if (isNaN(quota) || quota < 0) return;
-    try {
-      await api.updateEmployeeQuota(employeeId, quota);
-      await loadEmployees();
-      setEditingQuotas((prev) => { const next = { ...prev }; delete next[employeeId]; return next; });
-    } catch { /* ignore */ }
-  };
-
   const handleIdentityOverride = async (entry: IdentityMapEntry) => {
     const queueKey = getIdentityQueueKey(entry);
     const employeeId =
       identityOverrideSelections[queueKey] || entry.employeeId || "";
-    const operator = identityOverrideOperator.trim() || DEFAULT_IDENTITY_OPERATOR;
-    const reason = (identityOverrideReasons[queueKey] || "").trim();
+    const reason =
+      (identityOverrideReasons[queueKey] || "").trim() ||
+      `Slack identity repair for ${entry.externalId}`;
 
     if (!employeeId) {
       setIdentityReviewMessage(
-        `Error: select an employee before overriding ${entry.source}:${entry.externalId}`
-      );
-      return;
-    }
-
-    if (!reason) {
-      setIdentityReviewMessage(
-        `Error: add an override reason for ${entry.source}:${entry.externalId}`
+        `Error: select an employee before mapping ${entry.externalId}`
       );
       return;
     }
@@ -527,7 +480,7 @@ function Settings() {
         source: entry.source,
         externalId: entry.externalId,
         employeeId,
-        operator,
+        operator: DEFAULT_IDENTITY_OPERATOR,
         reason,
       });
       setIdentityReviewMessage(result);
@@ -603,12 +556,9 @@ function Settings() {
   const handleSaveGithub = async () => {
     setGithubMessage(null);
     try {
-      const normalizedRepos = normalizeGithubRepos(githubRepos);
       await api.saveSetting("github_token", githubToken.trim());
-      await api.saveSetting("github_repos", normalizedRepos);
       setGithubToken(githubToken.trim());
-      setGithubRepos(normalizedRepos);
-      setGithubMessage("GitHub settings saved");
+      setGithubMessage("GitHub token saved");
       setTimeout(() => setGithubMessage(null), 3000);
     } catch (err) {
       setGithubMessage(`Error: ${String(err)}`);
@@ -1125,222 +1075,6 @@ function Settings() {
         </div>
       </div>
 
-      {/* Identity Review */}
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-peach)" }}>
-        <h2 style={styles.sectionTitle}>IDENTITY REVIEW</h2>
-        <div style={styles.sectionDivider} />
-
-        <div style={styles.summaryGrid}>
-          <div style={styles.summaryItem}>
-            <span style={styles.summaryLabel}>QUEUE SIZE</span>
-            <span style={styles.summaryValue}>{identityReviewQueue.length}</span>
-          </div>
-          <div style={styles.summaryItem}>
-            <span style={styles.summaryLabel}>LOW CONFIDENCE</span>
-            <span style={styles.summaryValue}>
-              {
-                identityReviewQueue.filter(
-                  (entry) => entry.employeeId && entry.confidence < 1
-                ).length
-              }
-            </span>
-          </div>
-          <div style={styles.summaryItem}>
-            <span style={styles.summaryLabel}>UNLINKED</span>
-            <span style={styles.summaryValue}>
-              {
-                identityReviewQueue.filter((entry) => !entry.employeeId).length
-              }
-            </span>
-          </div>
-        </div>
-
-        <div style={styles.field}>
-          <label style={styles.label}>OVERRIDE OPERATOR</label>
-          <input
-            value={identityOverrideOperator}
-            onChange={(event) => setIdentityOverrideOperator(event.target.value)}
-            placeholder={DEFAULT_IDENTITY_OPERATOR}
-            style={styles.input}
-          />
-          <div style={styles.helperText}>
-            MANUAL OVERRIDES RECORD THE OPERATOR, REASON, AND OVERRIDE TIMESTAMP
-            INTO THE CANONICAL `identity_map` ROW.
-          </div>
-        </div>
-
-        <div style={styles.buttonRow}>
-          <button
-            onClick={loadIdentityReviewQueue}
-            disabled={identityReviewLoading}
-            style={{
-              ...styles.ghostButton,
-              opacity: identityReviewLoading ? 0.5 : 1,
-            }}
-          >
-            {identityReviewLoading ? "REFRESHING..." : "REFRESH REVIEW QUEUE"}
-          </button>
-          {identityReviewMessage && (
-            <span
-              style={{
-                ...styles.label,
-                color: identityReviewMessage.startsWith("Error")
-                  ? "var(--lcars-red)"
-                  : "var(--lcars-green)",
-              }}
-            >
-              {identityReviewMessage.toUpperCase()}
-            </span>
-          )}
-        </div>
-
-        {identityReviewLoading ? (
-          <div style={styles.helperText}>LOADING IDENTITY REVIEW QUEUE...</div>
-        ) : identityReviewQueue.length === 0 ? (
-          <p style={styles.emptyText}>
-            NO UNRESOLVED OR LOW-CONFIDENCE IDENTITY LINKS NEED REVIEW.
-          </p>
-        ) : (
-          <div style={styles.identityQueue}>
-            {identityReviewQueue.map((entry) => {
-              const queueKey = getIdentityQueueKey(entry);
-              const selectedEmployeeId =
-                identityOverrideSelections[queueKey] || entry.employeeId || "";
-              const selectedEmployeeName = selectedEmployeeId
-                ? employeeNameById.get(selectedEmployeeId) || selectedEmployeeId
-                : "UNLINKED";
-              const overrideReason = identityOverrideReasons[queueKey] || "";
-              const overrideBusy = identityOverrideBusyKey === queueKey;
-
-              return (
-                <div key={queueKey} style={styles.identityCard}>
-                  <div style={styles.identityCardHeader}>
-                    <div>
-                      <div style={styles.identityTitle}>
-                        {entry.source.toUpperCase()} • {entry.externalId}
-                      </div>
-                      <div style={styles.identitySubtitle}>
-                        {entry.matchMethod || "UNCLASSIFIED MATCH METHOD"}
-                      </div>
-                    </div>
-                    <div
-                      style={{
-                        ...styles.identityBadge,
-                        color:
-                          entry.confidence >= 0.95
-                            ? "var(--lcars-green)"
-                            : entry.confidence >= 0.75
-                              ? "var(--lcars-orange)"
-                              : "var(--lcars-red)",
-                      }}
-                    >
-                      {Math.round(entry.confidence * 100)}%
-                    </div>
-                  </div>
-
-                  <div style={styles.identityMetaGrid}>
-                    <div style={styles.identityMetaItem}>
-                      <span style={styles.identityMetaLabel}>STATUS</span>
-                      <span style={styles.identityMetaValue}>
-                        {entry.resolutionStatus.toUpperCase()}
-                      </span>
-                    </div>
-                    <div style={styles.identityMetaItem}>
-                      <span style={styles.identityMetaLabel}>CURRENT LINK</span>
-                      <span style={styles.identityMetaValue}>
-                        {entry.employeeId
-                          ? employeeNameById.get(entry.employeeId) || entry.employeeId
-                          : "UNLINKED"}
-                      </span>
-                    </div>
-                    <div style={styles.identityMetaItem}>
-                      <span style={styles.identityMetaLabel}>OVERRIDE BY</span>
-                      <span style={styles.identityMetaValue}>
-                        {entry.overrideBy || "—"}
-                      </span>
-                    </div>
-                    <div style={styles.identityMetaItem}>
-                      <span style={styles.identityMetaLabel}>OVERRIDE REASON</span>
-                      <span style={styles.identityMetaValue}>
-                        {entry.overrideReason || "—"}
-                      </span>
-                    </div>
-                    <div style={styles.identityMetaItem}>
-                      <span style={styles.identityMetaLabel}>OVERRIDE AT</span>
-                      <span style={styles.identityMetaValue}>
-                        {entry.overrideAt ? timeAgo(entry.overrideAt) : "—"}
-                      </span>
-                    </div>
-                    <div style={styles.identityMetaItem}>
-                      <span style={styles.identityMetaLabel}>UPDATED</span>
-                      <span style={styles.identityMetaValue}>
-                        {timeAgo(entry.updatedAt)}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div style={styles.inlineFieldGrid}>
-                    <div>
-                      <label style={styles.miniLabel}>TARGET EMPLOYEE</label>
-                      <select
-                        value={selectedEmployeeId}
-                        onChange={(event) =>
-                          setIdentityOverrideSelections((current) => ({
-                            ...current,
-                            [queueKey]: event.target.value,
-                          }))
-                        }
-                        style={styles.input}
-                      >
-                        <option value="">SELECT CREW MEMBER</option>
-                        {activeEmployees.map((employee) => (
-                          <option key={employee.id} value={employee.id}>
-                            {employee.name}
-                          </option>
-                        ))}
-                      </select>
-                      <div style={styles.helperText}>
-                        TARGETING {selectedEmployeeName.toUpperCase()}
-                      </div>
-                    </div>
-                    <div>
-                      <label style={styles.miniLabel}>OVERRIDE REASON</label>
-                      <textarea
-                        value={overrideReason}
-                        onChange={(event) =>
-                          setIdentityOverrideReasons((current) => ({
-                            ...current,
-                            [queueKey]: event.target.value,
-                          }))
-                        }
-                        placeholder="WHY THIS LINK IS AUTHORITATIVE"
-                        style={{ ...styles.input, minHeight: 84, resize: "vertical" }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={styles.buttonRow}>
-                    <button
-                      onClick={() => handleIdentityOverride(entry)}
-                      disabled={overrideBusy || !selectedEmployeeId || !overrideReason.trim()}
-                      style={{
-                        ...styles.primaryButton,
-                        opacity:
-                          overrideBusy || !selectedEmployeeId || !overrideReason.trim()
-                            ? 0.5
-                            : 1,
-                      }}
-                    >
-                      {overrideBusy ? "APPLYING..." : "APPLY MANUAL OVERRIDE"}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
       {/* Slack Connection */}
       <div style={{ ...styles.card, borderLeftColor: "var(--lcars-lavender)" }}>
         <h2 style={styles.sectionTitle}>SLACK CONNECTION</h2>
@@ -1436,6 +1170,160 @@ function Settings() {
         </div>
       </div>
 
+      {showSlackIdentityRepair && (
+        <div style={{ ...styles.card, borderLeftColor: "var(--lcars-lavender)" }}>
+          <h2 style={styles.sectionTitle}>SLACK IDENTITY REPAIR</h2>
+          <div style={styles.sectionDivider} />
+
+          <div style={styles.summaryGrid}>
+            <div style={styles.summaryItem}>
+              <span style={styles.summaryLabel}>REVIEW QUEUE</span>
+              <span style={styles.summaryValue}>{slackIdentityReviewQueue.length}</span>
+            </div>
+            <div style={styles.summaryItem}>
+              <span style={styles.summaryLabel}>UNMATCHED</span>
+              <span style={styles.summaryValue}>
+                {
+                  slackIdentityReviewQueue.filter(
+                    (entry) => !entry.employeeId || entry.resolutionStatus !== "linked"
+                  ).length
+                }
+              </span>
+            </div>
+            <div style={styles.summaryItem}>
+              <span style={styles.summaryLabel}>LOW CONFIDENCE</span>
+              <span style={styles.summaryValue}>
+                {
+                  slackIdentityReviewQueue.filter(
+                    (entry) => entry.employeeId && entry.confidence < 0.85
+                  ).length
+                }
+              </span>
+            </div>
+          </div>
+
+          <div style={styles.helperText}>
+            ONLY TRUE SLACK EXCEPTIONS STAY HERE NOW: UNMATCHED ACCOUNTS OR LOW-CONFIDENCE LINKS
+            BELOW 85%. HULY REVIEW CARDS AND RAW MATCH ENGINE DETAILS ARE NO LONGER MIXED INTO
+            SETTINGS.
+          </div>
+
+          <div style={styles.buttonRow}>
+            <button
+              onClick={loadIdentityReviewQueue}
+              disabled={identityReviewLoading}
+              style={{
+                ...styles.ghostButton,
+                opacity: identityReviewLoading ? 0.5 : 1,
+              }}
+            >
+              {identityReviewLoading ? "REFRESHING..." : "REFRESH SLACK REPAIR QUEUE"}
+            </button>
+            {identityReviewMessage && (
+              <span
+                style={{
+                  ...styles.label,
+                  color: identityReviewMessage.startsWith("Error")
+                    ? "var(--lcars-red)"
+                    : "var(--lcars-green)",
+                }}
+              >
+                {identityReviewMessage.toUpperCase()}
+              </span>
+            )}
+          </div>
+
+          {identityReviewLoading ? (
+            <div style={styles.helperText}>LOADING SLACK IDENTITY EXCEPTIONS...</div>
+          ) : slackIdentityReviewQueue.length === 0 ? (
+            <p style={styles.emptyText}>NO SLACK IDENTITY EXCEPTIONS NEED REPAIR.</p>
+          ) : (
+            <div style={{ marginTop: 16 }}>
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>SLACK ACCOUNT</th>
+                    <th style={styles.th}>STATUS</th>
+                    <th style={styles.th}>CURRENT LINK</th>
+                    <th style={styles.th}>MAP TO</th>
+                    <th style={styles.th}>NOTE</th>
+                    <th style={styles.th}>ACTION</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {slackIdentityReviewQueue.map((entry) => {
+                    const queueKey = getIdentityQueueKey(entry);
+                    const selectedEmployeeId =
+                      identityOverrideSelections[queueKey] || entry.employeeId || "";
+                    const overrideBusy = identityOverrideBusyKey === queueKey;
+
+                    return (
+                      <tr key={queueKey}>
+                        <td style={styles.tdMono}>{entry.externalId}</td>
+                        <td style={styles.td}>
+                          {entry.employeeId && entry.confidence < 0.85
+                            ? `${Math.round(entry.confidence * 100)}% MATCH`
+                            : "UNMATCHED"}
+                        </td>
+                        <td style={styles.td}>
+                          {entry.employeeId
+                            ? employeeNameById.get(entry.employeeId) || entry.employeeId
+                            : "UNLINKED"}
+                        </td>
+                        <td style={styles.td}>
+                          <select
+                            value={selectedEmployeeId}
+                            onChange={(event) =>
+                              setIdentityOverrideSelections((current) => ({
+                                ...current,
+                                [queueKey]: event.target.value,
+                              }))
+                            }
+                            style={{ ...styles.input, minWidth: 180 }}
+                          >
+                            <option value="">SELECT CREW MEMBER</option>
+                            {activeEmployees.map((employee) => (
+                              <option key={employee.id} value={employee.id}>
+                                {employee.name}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td style={styles.td}>
+                          <input
+                            value={identityOverrideReasons[queueKey] || ""}
+                            onChange={(event) =>
+                              setIdentityOverrideReasons((current) => ({
+                                ...current,
+                                [queueKey]: event.target.value,
+                              }))
+                            }
+                            placeholder="OPTIONAL NOTE"
+                            style={{ ...styles.input, minWidth: 180 }}
+                          />
+                        </td>
+                        <td style={styles.td}>
+                          <button
+                            onClick={() => handleIdentityOverride(entry)}
+                            disabled={overrideBusy || !selectedEmployeeId}
+                            style={{
+                              ...styles.primaryButton,
+                              opacity: overrideBusy || !selectedEmployeeId ? 0.5 : 1,
+                            }}
+                          >
+                            {overrideBusy ? "MAPPING..." : "MAP ACCOUNT"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* GitHub Plans */}
       <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
         <h2 style={styles.sectionTitle}>GITHUB PLANS</h2>
@@ -1463,18 +1351,16 @@ function Settings() {
           </div>
         </div>
 
-        <div style={styles.field}>
-          <label style={styles.label}>REPOSITORIES</label>
-          <textarea
-            value={githubRepos}
-            onChange={(event) => setGithubRepos(event.target.value)}
-            placeholder="SYNCED FROM CLOUDFLARE OR ENTER owner/repo, https://github.com/owner/repo, PR, OR ISSUE URL"
-            style={{ ...styles.input, minHeight: 72, resize: "vertical" }}
-          />
+        <div style={styles.statusBox}>
+          <div style={styles.statusTitle}>PROJECT GRAPH AUTHORITY</div>
+          <div style={styles.statusBody}>
+            TEAMFORGE PROJECTS NOW OWN GITHUB REPO SCOPE. THIS PAGE ONLY STORES THE
+            TOKEN USED FOR DESKTOP GITHUB SYNC.
+          </div>
           <div style={styles.helperText}>
-            ONE REPO OR GITHUB URL PER LINE OR COMMA. TEAMFORGE NORMALIZES URLS TO
-            owner/repo AND SYNCS ISSUES, PRS, BRANCHES, AND CHECK RUNS. CLOUD CONFIG
-            CAN ALSO PROVIDE DISPLAY NAME, CLIENT, MILESTONE, HULY, AND CLOCKIFY ALIASES.
+            TO ADD OR REMOVE REPOS, UPDATE THE GITHUB LINKS ON THE PROJECTS PAGE.
+            IF NO TEAMFORGE PROJECT REPOS EXIST, GITHUB SYNC WILL STOP WITH AN
+            EXPLICIT EMPTY-STATE ERROR.
           </div>
         </div>
 
@@ -1912,8 +1798,13 @@ function Settings() {
 
       {/* Sync Controls */}
       <div style={{ ...styles.card, borderLeftColor: "var(--lcars-green)" }}>
-        <h2 style={styles.sectionTitle}>SYNC CONTROLS</h2>
+        <h2 style={styles.sectionTitle}>CLOCKIFY SYNC STATE</h2>
         <div style={styles.sectionDivider} />
+
+        <div style={styles.helperText}>
+          THIS MANUAL ACTION RUNS THE FULL CLOCKIFY REFRESH. THE TABLE BELOW SHOWS THE LAST
+          RECORDED SYNC TIMES ACROSS SOURCES.
+        </div>
 
         <div style={styles.buttonRow}>
           <button
@@ -1921,7 +1812,7 @@ function Settings() {
             disabled={syncing}
             style={{ ...styles.primaryButton, opacity: syncing ? 0.5 : 1 }}
           >
-            {syncing ? "SYNCING..." : "SYNC NOW"}
+            {syncing ? "SYNCING..." : "SYNC CLOCKIFY"}
           </button>
           {syncResult && (
             <span style={{ ...styles.label, color: syncResult.startsWith("Error") ? "var(--lcars-red)" : "var(--lcars-green)" }}>
@@ -1955,60 +1846,6 @@ function Settings() {
         )}
       </div>
 
-      {/* Employee Management */}
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-peach)" }}>
-        <h2 style={styles.sectionTitle}>CREW MANAGEMENT</h2>
-        <div style={styles.sectionDivider} />
-
-        {employees.length === 0 ? (
-          <p style={styles.emptyText}>NO CREW SYNCED YET.</p>
-        ) : (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>NAME</th>
-                <th style={styles.th}>EMAIL</th>
-                <th style={styles.th}>MONTHLY QUOTA (HRS)</th>
-                <th style={styles.th}>ACTIVE</th>
-              </tr>
-            </thead>
-            <tbody>
-              {employees.map((emp) => (
-                <tr key={emp.id}>
-                  <td style={{ ...styles.td, color: "var(--lcars-orange)" }}>{emp.name}</td>
-                  <td style={styles.td}>{emp.email}</td>
-                  <td style={styles.td}>
-                    <div style={styles.inputRow}>
-                      <input
-                        type="number"
-                        min={0}
-                        step={1}
-                        value={editingQuotas[emp.id] !== undefined ? editingQuotas[emp.id] : emp.monthlyQuotaHours}
-                        onChange={(e) => setEditingQuotas((prev) => ({ ...prev, [emp.id]: e.target.value }))}
-                        onBlur={() => handleQuotaSave(emp.id)}
-                        onKeyDown={(e) => { if (e.key === "Enter") handleQuotaSave(emp.id); }}
-                        style={{ ...styles.input, width: 80, padding: "6px 10px" }}
-                      />
-                    </div>
-                  </td>
-                  <td style={styles.td}>
-                    <span
-                      style={{
-                        display: "inline-block",
-                        width: 8,
-                        height: 8,
-                        borderRadius: "50%",
-                        backgroundColor: emp.isActive ? "var(--lcars-green)" : "var(--text-quaternary)",
-                        boxShadow: emp.isActive ? "0 0 6px rgba(51, 204, 102, 0.4)" : "none",
-                      }}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
     </div>
   );
 }
@@ -2162,71 +1999,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11,
     color: "inherit",
     opacity: 0.88,
-    wordBreak: "break-word" as const,
-  },
-  identityQueue: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 14,
-    marginTop: 14,
-  },
-  identityCard: {
-    ...lcarsPageStyles.subtleCard,
-    borderLeftColor: "var(--lcars-peach)",
-    padding: "14px 16px",
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 12,
-  },
-  identityCardHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 12,
-    alignItems: "flex-start",
-    flexWrap: "wrap" as const,
-  },
-  identityTitle: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 11,
-    color: "var(--lcars-orange)",
-    letterSpacing: "1.2px",
-    textTransform: "uppercase" as const,
-  },
-  identitySubtitle: {
-    fontFamily: "'JetBrains Mono', monospace",
-    fontSize: 11,
-    color: "var(--lcars-tan)",
-    marginTop: 4,
-    wordBreak: "break-word" as const,
-  },
-  identityBadge: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 11,
-    letterSpacing: "1.4px",
-    textTransform: "uppercase" as const,
-    whiteSpace: "nowrap" as const,
-  },
-  identityMetaGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-    gap: 10,
-  },
-  identityMetaItem: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 4,
-  },
-  identityMetaLabel: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 9,
-    color: "var(--text-quaternary)",
-    letterSpacing: "1.3px",
-    textTransform: "uppercase" as const,
-  },
-  identityMetaValue: {
-    fontFamily: "'JetBrains Mono', monospace",
-    fontSize: 11,
-    color: "var(--lcars-tan)",
     wordBreak: "break-word" as const,
   },
   summaryGrid: {

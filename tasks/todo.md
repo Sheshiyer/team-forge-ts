@@ -2,6 +2,392 @@
 
 ## Goal
 
+Cut the next TeamForge release through the existing CI/CD path by turning the
+current worktree into a coherent `v0.1.23` release snapshot.
+
+## Plan
+
+- [x] Clean generated junk from the worktree and update release metadata to
+      `0.1.23`.
+- [x] Verify the release snapshot locally with the standard frontend/Rust
+      checks plus the known bundle/signing boundary.
+- [ ] Commit the release snapshot, create tag `v0.1.23`, and push the commit
+      and tag to trigger `.github/workflows/release.yml`.
+- [ ] Record the release result in `tasks/todo.md`.
+
+## Goal
+
+Align TeamForge's icon and release verification docs with the existing GitHub
+Actions OTA pipeline so local bundle checks and CI/CD release publication are
+clearly separated.
+
+## Plan
+
+- [x] Review the existing release workflow and OTA contract against the
+      `building-tauri-with-github-actions` skill.
+- [x] Update the TeamForge icon/release runbooks so local bundle validation and
+      CI/CD updater signing each have an explicit role.
+- [x] Record the correction and verification result in `tasks/todo.md`.
+
+## Review
+
+- Skill used:
+  - `building-tauri-with-github-actions`
+    - used to validate that TeamForge's updater signing and published OTA
+      artifacts are already owned by GitHub Actions, not by an ad hoc local
+      release path
+- Existing canonical release path confirmed:
+  - `.github/workflows/release.yml` already injects:
+    - `TAURI_SIGNING_PRIVATE_KEY`
+    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+  - the workflow builds both `aarch64-apple-darwin` and
+    `x86_64-apple-darwin`
+  - the workflow locates `TeamForge.app.tar.gz` plus `.sig` files and publishes
+    OTA metadata through `pnpm release:ota:publish`
+- Repo improvements:
+  - updated `docs/runbooks/teamforge-icon-workflow.md` so local icon validation
+    and CI/CD release publication are explicitly separated
+  - updated `docs/runbooks/tauri-agent-skills.md` so future Tauri work treats
+    `.github/workflows/release.yml` as the TeamForge release source of truth
+  - updated `README.md` release notes to point at the canonical release
+    workflow
+- Verification:
+  - reviewed `.github/workflows/release.yml`
+  - reviewed `docs/architecture/contracts/ota-updater-contract.md`
+  - confirmed the local icon pass already produced:
+    - `src-tauri/target/release/bundle/macos/TeamForge.app`
+    - `src-tauri/target/release/bundle/macos/TeamForge.app.tar.gz`
+  - confirmed the local post-bundle failure was only missing
+    `TAURI_SIGNING_PRIVATE_KEY`, which the GitHub Actions release workflow
+    already provides from secrets
+
+## Goal
+
+Use the Tauri skill workflow specifically for TeamForge's app icon integration,
+promote the user-supplied approved icon assets into the repo's canonical asset
+area, and wire the live Tauri bundle icons from that approved source.
+
+## Plan
+
+- [x] Review the relevant Tauri app/distribution skills against TeamForge's
+      current icon bundle contract.
+- [x] Promote the user-supplied `option1` icon assets into the repo's approved
+      TeamForge asset source area with preserved provenance.
+- [x] Update the live `src-tauri/icons` bundle from the approved master and
+      verify the resulting Tauri icon files are no longer placeholders.
+- [x] Record the app-specific Tauri-skill improvements and verification result
+      in `tasks/todo.md`.
+
+## Review
+
+- Skills used for the app-specific work:
+  - `configuring-tauri-apps`
+    - used to validate that TeamForge should keep the bundle icon contract
+      rooted in `src-tauri/tauri.conf.json` and `src-tauri/icons/*`
+  - `distributing-tauri-for-macos`
+    - used to validate that a real macOS `icon.icns` belongs in the bundle and
+      that the app/distribution path should preserve the proper iconset lineage
+- Approved source promotion:
+  - promoted the user-supplied assets into the repo at:
+    - `design-assets/teamforge/icons/approved/teamforge-dock-icon-option1-1024.png`
+    - `design-assets/teamforge/icons/approved/teamforge-dock-icon-option1.icns`
+    - `design-assets/teamforge/icons/approved/teamforge-dock-icon-option1.iconset/`
+  - added provenance notes in:
+    - `design-assets/teamforge/icons/approved/teamforge-dock-icon-option1.md`
+- Live app improvements:
+  - replaced the placeholder Tauri bundle icon files with the approved TeamForge
+    icon family in `src-tauri/icons/`
+  - the macOS `icon.icns` is now a full app icon resource instead of a tiny
+    placeholder stub
+  - the Windows `icon.ico` is now regenerated from the approved 1024 master and
+    contains multiple icon sizes
+  - the repo now has a real separation between:
+    - approved design source assets
+    - shipped Tauri bundle outputs
+  - fixed the live export path so `scripts/export-teamforge-tauri-icons.sh`
+    normalizes generated bundle PNGs and temporary iconset PNGs to RGBA before
+    packaging
+  - documented that TeamForge should never ship Tauri PNGs from raw iconset
+    copies or direct `sips` outputs without RGBA normalization
+- Readability verification:
+  - generated a single-candidate review board at:
+    - `~/Downloads/teamforge-option1-review/teamforge-dock-icon-review-board.png`
+  - result:
+    - the outer LCARS ring silhouette stays recognizable at 16px
+    - the central star/pyramid detail compresses at 16px but still reads as a
+      structured core rather than dissolving into noise
+- File verification:
+  - `file src-tauri/icons/*` now reports:
+    - real 32x32, 128x128, and 256px PNGs
+    - a 1.1 MB macOS `icon.icns`
+    - a multi-size Windows `icon.ico`
+  - `python3` + Pillow confirms the shipped bundle PNGs now open as `RGBA`
+  - `git diff --check` passed
+  - `pnpm build` passed
+  - `cargo tauri build --bundles app` successfully produced:
+    - `src-tauri/target/release/bundle/macos/TeamForge.app`
+    - `src-tauri/target/release/bundle/macos/TeamForge.app.tar.gz`
+  - the remaining `cargo tauri build` failure is post-bundle updater signing
+    only:
+    - `TAURI_SIGNING_PRIVATE_KEY` is not set
+
+## Goal
+
+Do a final pass on TeamForge's visual-asset system and identify the concrete
+gaps that prevent the app, the Art skill, the design resource library, and the
+icon pipeline from operating as one coherent system, with a specific emphasis
+on FAL.ai + Nano Banana 2 for icon and app asset generation.
+
+## Plan
+
+- [x] Audit the current TeamForge visual system, icon assets, and app shell so
+      the findings stay tied to the real product surface instead of abstract
+      design advice.
+- [x] Audit the Art skill, the generation CLI, and the design resource library
+      for model/provider mismatches, missing workflow guidance, and prompt
+      sourcing gaps.
+- [x] Write a repo-tracked audit/runbook with 20-25 concrete issues, gaps, and
+      improvements, plus the recommended FAL.ai Nano Banana 2 asset workflow
+      for TeamForge.
+- [x] Verify the new documentation for internal consistency and record the
+      review result.
+
+## Goal
+
+Run a real TeamForge dock-icon batch with FAL.ai Nano Banana 2, review the
+variants at shipping sizes, and fix the highest-leverage repo/workflow gaps
+from the visual asset audit.
+
+## Plan
+
+- [x] Add the repo-side TeamForge asset structure: canonical visual brief,
+      prompt files, and scripts for batch generation, readability review, and
+      Tauri bundle export.
+- [x] Update the repo workflow docs and package scripts so FAL.ai
+      `fal-nano-banana-2` is the explicit TeamForge icon path.
+- [ ] Generate a 4-variant dock-icon batch to `~/Downloads`, create a 16/32/64
+      review board, and pick the strongest candidate.
+- [ ] Promote the selected winner into the new TeamForge asset source area and
+      export the Tauri bundle icons if the result clears review.
+- [x] Re-run verification, record the outcome in `tasks/todo.md`, and note any
+      remaining design decisions that still need human taste review.
+
+## Review
+
+- Repo-side fixes landed:
+  - added `design-assets/teamforge/README.md`
+  - added `design-assets/teamforge/visual-brief.md`
+  - added pinned dock-icon prompt variants under
+    `design-assets/teamforge/icons/prompts/`
+  - added:
+    - `scripts/generate-teamforge-dock-icon-batch.sh`
+    - `scripts/review-teamforge-dock-icons.py`
+    - `scripts/export-teamforge-tauri-icons.sh`
+  - added `docs/runbooks/teamforge-icon-workflow.md`
+  - added package scripts for batch, review, and export
+- Underlying skill alignment:
+  - updated `~/.claude/skills/Art/Workflows/CreatePAIPackIcon.md` so the icon
+    workflow now matches the Downloads-first rule and prefers
+    `fal-nano-banana-2`, with `nano-banana-pro` documented as fallback
+- FAL batch blocker:
+  - the real `pnpm design:teamforge:icon-batch` run failed at the first FAL.ai
+    request with:
+    - `401 - {"detail": "No user found for Key ID and Secret"}`
+  - current environment state:
+    - `FAL_KEY` is present
+    - `FAL_API_KEY` is unset
+    - the configured `FAL_KEY` in `~/.claude/.env` is therefore the blocking
+      credential
+- Tooling verification that still succeeded:
+  - `python3 -m py_compile scripts/review-teamforge-dock-icons.py` passed
+  - `git diff --check` passed
+  - the review-board script successfully rendered a tooling test board from a
+    temporary placeholder-icon batch in:
+    - `~/Downloads/teamforge-dock-icon-batch-tooling-test/teamforge-dock-icon-review-board.png`
+  - the export script successfully regenerated bundle assets from a placeholder
+    source during testing, then those four binary icon files were restored to
+    their pre-test content so the repo does not carry meaningless placeholder
+    churn
+- Remaining next step:
+  - refresh `FAL_KEY` with a valid credential, then rerun
+    `pnpm design:teamforge:icon-batch`
+  - once the real batch exists, pick the winner from the 16px/32px/64px board,
+    promote it into `design-assets/teamforge/icons/approved/`, and run the
+    export script against that approved master
+
+## Review
+
+- Scope:
+  - reviewed the live LCARS shell, Tauri bundle icon state, Art skill
+    defaults/workflows, FAL Nano Banana 2 support in the generation CLI, and
+    the external design prompt library
+  - no repo-local `.context/*` or GSD-specific artifacts were present in this
+    checkout, so the pass used the repo docs plus the external Design library
+- Main artifact:
+  - added `docs/runbooks/teamforge-visual-asset-audit.md`
+  - the runbook captures 25 concrete gaps and improvements, then defines the
+    canonical TeamForge prompt sources and the recommended FAL.ai +
+    `fal-nano-banana-2` command flow for dock icons, tray glyphs, and campaign
+    boards
+- Highest-signal findings:
+  - the current bundled app icon is effectively a placeholder solid square
+  - the repo has no source master, export path, or approval flow for visual
+    assets
+  - the Art skill's default palette/workflow conflicts with TeamForge's LCARS
+    language and still points icon work at `nano-banana-pro`
+  - FAL Nano Banana 2 already exists in the CLI, but it is not the documented
+    default for icon workflows
+- Verification:
+  - re-read `docs/runbooks/teamforge-visual-asset-audit.md`
+  - `git diff --check` passed
+
+## Goal
+
+Review the Tauri prompt scaffold with the `autoresearch` keep-or-discard loop,
+then refine the scaffold only where it materially improves real TeamForge
+execution.
+
+## Plan
+
+- [x] Audit the current scaffold against repo workflow rules, the pinned Tauri
+      skill runbook, and the `autoresearch` skill expectations.
+- [x] Test a small set of prompt refinements one variable at a time and keep
+      only the changes that improve execution fidelity.
+- [x] Update the scaffold doc with the kept refinements and record the review
+      result.
+
+## Review
+
+- Experiment goal:
+  - make the Tauri prompt scaffold more faithful to the real TeamForge
+    execution environment without bloating it into a generic process wall
+- Baseline:
+  - the scaffold already covered lessons, task planning, repo docs, skill
+    naming, and verification
+  - it did not yet force opening the selected skills' `SKILL.md` files
+  - it did not mention the current-session skill availability trap after fresh
+    installs
+  - it did not explicitly mirror the repo rule to stop and re-plan when the
+    task shape changes or blockers appear
+- Experiment log:
+  - kept: require opening the selected Tauri skills' `SKILL.md` files
+    - reason: this matches the actual skill system contract instead of relying
+      only on the local runbook summary
+  - kept: add fallback language for skills not visible in the current session
+    - reason: this machine can have installed skills that require a Codex
+      restart before the session can actually use them
+  - kept: add explicit re-plan language for blockers or scope shifts
+    - reason: this aligns the scaffold with the repo's AGENTS workflow instead
+      of assuming the initial plan remains valid
+  - kept: allow an explicit "no implementation-specific Tauri skill applies"
+    outcome for meta tasks
+    - reason: this prevents the scaffold from encouraging fake skill selection
+      on workflow or documentation tasks like this one
+  - discarded: add broader generic safety reminders such as extra git hygiene
+    bullets
+    - reason: they add prompt weight without improving the Tauri-specific
+      workflow enough to justify the noise
+- Winning changes:
+  - updated `docs/runbooks/tauri-prompt-scaffold.md` so both the full and short
+    prompts now require opening selected `SKILL.md` files
+  - added explicit session-availability fallback and restart guidance
+  - added explicit `tasks/todo.md` re-plan guidance
+  - added an explicit escape hatch for meta tasks where no real
+    implementation-specific Tauri skill is the right fit
+- Recommended next batch:
+  - use the scaffold on one real Tauri IPC or sidecar task and see whether the
+    first progress update naturally cites the selected skills and repo docs
+  - only add more wording if that real-task pass shows a concrete failure mode
+
+## Goal
+
+Install the `dchuk/claude-code-tauri-skills` suite and make the Tauri skill
+references reproducible from this repo instead of leaving them as hidden local
+agent state.
+
+## Plan
+
+- [x] Add repo-visible commands for refreshing and listing the installed Tauri
+      skill suite.
+- [x] Document the installed skill source, local install paths, and the key
+      skill names this repo should reference in Tauri workflows.
+- [x] Link the skill workflow guidance from the main README.
+- [x] Verify the new repo commands against the installed skill suite and record
+      the result.
+
+## Review
+
+- Install and repo wiring:
+  - ran `npx skills add dchuk/claude-code-tauri-skills -y -g`
+  - added repo-local wrappers:
+    - `pnpm skills:tauri:refresh`
+    - `pnpm skills:tauri:list`
+  - added the pinned suite manifest at `config/tauri-skill-suite.txt`
+- Workflow documentation:
+  - added `docs/runbooks/tauri-agent-skills.md` with the source package,
+    install path notes, canonical skill names, and usage guidance
+  - linked the Tauri skill workflow from `README.md`
+- Verification:
+  - `pnpm skills:tauri:list` passed and verified all 39 manifest skills from
+    `~/.agents/skills`
+  - `pnpm skills:tauri:refresh` reran the install flow against
+    `dchuk/claude-code-tauri-skills`
+  - `git diff --check` passed
+- Notes:
+  - the broader machine also has an unrelated `tauri-v2` skill in the global
+    store, so the repo list command now checks only the pinned 39-skill manifest
+    instead of every directory matching `*tauri*`
+  - Codex must be restarted to pick up newly installed skills in a fresh
+    session
+
+## Goal
+
+Implement the canonical surface cleanup so TeamForge stops presenting stale
+settings and heuristic-first modules as primary product surfaces.
+
+## Plan
+
+- [x] Make TeamForge project graph the only authority for GitHub repo scope and
+      reduce Settings to token + sync only.
+- [x] Remove quota editing from Settings and move it into Team capacity.
+- [x] Hide Planner and Knowledge from the main shell, preserving safe route
+      behavior for legacy deep links.
+- [x] Make Onboarding canonical-only and remove fallback/heuristic framing.
+- [x] Reorganize Clients around canonical TeamForge profiles while keeping
+      derived operational signals secondary.
+- [x] Re-run frontend and Rust verification and record the cleanup review.
+
+## Review
+
+- Settings / authority cleanup:
+  - removed the GitHub repo editor from `Settings` and changed the copy so
+    TeamForge projects are the only repo authority
+  - stopped the backend from reading, writing, or cloud-syncing the deprecated
+    `github_repos` setting and added one-time local cleanup on settings/sync
+    paths
+  - changed GitHub sync to fail explicitly when no TeamForge project repos or
+    no GitHub token exist instead of silently doing nothing
+- Team / route cleanup:
+  - removed quota editing from `Settings` and added inline monthly quota editing
+    to Team `capacity`
+  - removed Planner from the shell and redirected `/planner` to `/team/capacity`
+  - hid Knowledge from nav and replaced the old heuristic page with a canonical
+    placeholder route
+- Canonical-first product cleanup:
+  - removed synthesized onboarding fallbacks from the backend and updated the
+    UI to show canonical flows only
+  - rebuilt Clients around canonical registry vs operational-only signal groups
+    and split operational signals into their own nested client view model
+- Verification:
+  - `pnpm build` passed
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml` passed
+  - `cargo check --manifest-path src-tauri/Cargo.toml` passed
+  - `cargo test --manifest-path src-tauri/Cargo.toml cached_teamforge_graphs_bridge_into_github_repo_configs -- --nocapture` passed
+  - `git diff --check` passed
+  - Rust still has 9 pre-existing dead-code warnings outside this cleanup slice
+
+## Goal
+
 Remove the Node 20 GitHub Actions deprecation warning from the TeamForge
 release workflow by moving the warned JavaScript actions onto current Node 24
 capable versions, then push the workflow fix.
@@ -258,41 +644,66 @@ but also for:
 - [x] Separate shared Cloudflare state from per-machine local Tauri settings so
       founder-specific vault paths and launcher paths do not leak into the
       global source of truth.
-- [x] Define the Tauri settings and commands needed for:
-      - choosing a vault directory
-      - validating the vault root
-      - launching the Paperclip instance script
-      - opening the Paperclip UI
-      - starting a vault-to-TeamForge sync pass
-- [x] Define the Settings/launcher UX so these controls live in the existing
-      native shell instead of an external setup workflow.
-- [x] Write the concrete implementation plan to `docs/plans/` before touching
-      production code.
+
+## Goal
+
+Audit the Settings page and the surrounding app for stale settings, orphaned
+admin workflows, and older feature surfaces that no longer fit the current
+TeamForge product direction, then remove or simplify the pieces that no longer
+make sense.
+
+## Plan
+
+- [x] Map every current settings section, stored setting, and linked backend
+      capability so the audit is based on real code paths rather than UI
+      impressions.
+- [x] Trace the identity/orphaned-link override workflow and other older admin
+      surfaces across the app to separate still-useful controls from stale
+      baggage.
+- [x] Implement the cleanup pass with minimal-impact changes that remove,
+      hide, or simplify obsolete settings/features while preserving current
+      product-critical integrations.
+- [x] Verify the resulting app build and record the audit findings and any
+      intentional deferrals in this file.
 
 ## Review
 
-- Architecture decision:
-  - Cloudflare Worker + D1 remains the shared TeamForge control plane for
-    canonical project, issue, and normalized vault-derived state
-  - local Tauri settings own only per-machine values such as vault paths,
-    Paperclip launcher paths, and local UI URLs
-  - embedded SQLite remains cache/offline projection, not the shared source of
-    truth
-- Native product shape:
-  - `Settings` becomes the first-sync founder console for:
-    - choosing and validating the vault directory
-    - launching the Paperclip instance script
-    - opening the Paperclip UI
-    - triggering the vault-to-TeamForge sync pass
-- Concrete plan captured:
-  - `docs/plans/2026-04-22-teamforge-founder-console.md`
-  - includes:
-    - settings key model
-    - Tauri command surface
-    - Settings UX
-    - Paperclip guardrails
-    - Cloudflare sync boundary
-    - phased implementation order
+- Settings cleanup:
+  - replaced the old generic `IDENTITY REVIEW` workbench with a narrower
+    `SLACK IDENTITY REPAIR` queue that only shows true Slack exceptions
+    (unmatched or sub-85% matches)
+  - removed the global operator field, hid raw backend match metadata, and
+    simplified repair actions to a compact account-mapping table
+  - relabeled `SYNC CONTROLS` to `CLOCKIFY SYNC STATE` because the manual
+    action only runs the Clockify full sync path
+- Stale frontend surfaces removed:
+  - deleted orphaned `src/pages/Training.tsx`
+  - deleted superseded `src/pages/Devices.tsx`
+  - deleted unused pre-vault Team org-mapping components:
+    - `DepartmentCard`
+    - `DirectoryPanel`
+    - `RolePicker`
+    - `ValidationBar`
+    - `src/components/team/types.ts`
+  - removed the dead invoke/type wiring that only served those legacy
+    front-end surfaces
+- Settings/storage cleanup:
+  - stopped cloud integration sync from re-seeding unused `huly_mirror_*`
+    settings keys
+  - removed dead Tauri command registrations for the deleted Devices/Training
+    pages
+- Audit findings kept in mind for follow-up:
+  - `GITHUB PLANS` still has multiple authorities (`github_repos`, cloud sync,
+    TeamForge project graph) and should likely collapse to the TeamForge
+    control plane later
+  - `CREW MANAGEMENT` still lives inside Settings even though it edits live
+    employee quota data rather than app settings
+- Verification:
+  - `pnpm build` passed
+  - `cargo check --manifest-path src-tauri/Cargo.toml` passed
+  - `cargo test --manifest-path src-tauri/Cargo.toml identity -- --nocapture`
+    passed
+  - `git diff --check` passed
 
 ## Goal
 

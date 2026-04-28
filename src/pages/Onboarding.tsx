@@ -209,10 +209,8 @@ function OnboardingCard({ flow }: { flow: OnboardingFlowView }) {
     flow.audience === "client"
       ? flow.primaryContact
         ? `PRIMARY CONTACT · ${flow.primaryContact}`
-        : flow.source === "heuristic"
-          ? "HEURISTIC FALLBACK"
-          : "NO PRIMARY CONTACT"
-      : [flow.department, flow.manager].filter(Boolean).join(" · ") || "EMPLOYEE FLOW";
+        : "CLIENT FLOW"
+      : [flow.department, flow.manager].filter(Boolean).join(" · ") || "TEAMFORGE FLOW";
 
   return (
     <div
@@ -259,7 +257,6 @@ function OnboardingCard({ flow }: { flow: OnboardingFlowView }) {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={styles.sourcePill}>{flow.source.toUpperCase()}</span>
           <div
             style={{
               fontFamily: "'JetBrains Mono', monospace",
@@ -390,8 +387,9 @@ function Onboarding() {
   const completedTasks = visibleFlows.reduce((sum, f) => sum + f.completedTasks, 0);
   const templateCompliance =
     totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
-  const vaultFlows = visibleFlows.filter((flow) => flow.source !== "heuristic").length;
-  const fallbackFlows = visibleFlows.filter((flow) => flow.source === "heuristic").length;
+  const stalledFlows = visibleFlows.filter(
+    (flow) => flow.status.toLowerCase() === "stalled"
+  ).length;
   const heading = tab === "client" ? "CLIENT ONBOARDING" : "EMPLOYEE ONBOARDING";
 
   return (
@@ -402,9 +400,8 @@ function Onboarding() {
       <div style={styles.infoBanner}>
         <div style={styles.infoBannerIcon}>◈</div>
         <div style={styles.infoBannerText}>
-          {tab === "client"
-            ? "VAULT FLOWS FIRST. FALLBACK FLOWS STAY CLEARLY LABELED."
-            : "VAULT FLOWS ONLY. THIS VIEW STAYS EMPTY UNTIL AN EMPLOYEE FLOW NOTE IS READY."}
+          TEAMFORGE ONBOARDING FLOWS ONLY. IF NO CANONICAL FLOW EXISTS YET, THIS
+          VIEW STAYS EMPTY INSTEAD OF SYNTHESIZING A FALLBACK RECORD.
         </div>
       </div>
 
@@ -447,8 +444,8 @@ function Onboarding() {
             barColor="var(--lcars-green)"
           />
           <MetricCard
-            label="VAULT / FALLBACK"
-            value={`${vaultFlows}/${fallbackFlows}`}
+            label="STALLED FLOWS"
+            value={String(stalledFlows)}
             barColor="var(--lcars-lavender)"
           />
         </div>
@@ -463,8 +460,8 @@ function Onboarding() {
         ) : visibleFlows.length === 0 ? (
           <p style={styles.emptyText}>
             {tab === "client"
-              ? "NO CLIENT ONBOARDING FLOWS."
-              : "NO EMPLOYEE ONBOARDING FLOWS."}
+              ? "NO CANONICAL CLIENT ONBOARDING FLOWS YET."
+              : "NO CANONICAL EMPLOYEE ONBOARDING FLOWS YET."}
           </p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -556,16 +553,6 @@ const styles: Record<string, React.CSSProperties> = {
   sectionTitle: lcarsPageStyles.sectionTitle,
   sectionDivider: lcarsPageStyles.sectionDivider,
   emptyText: lcarsPageStyles.emptyText,
-  sourcePill: {
-    display: "inline-block",
-    padding: "2px 8px",
-    border: "1px solid rgba(153, 153, 204, 0.3)",
-    color: "var(--lcars-lavender)",
-    fontSize: 9,
-    fontFamily: "'Orbitron', sans-serif",
-    letterSpacing: "1px",
-    borderRadius: 2,
-  },
 };
 
 export default Onboarding;

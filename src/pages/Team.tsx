@@ -126,6 +126,9 @@ function Team() {
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [monthlyHours, setMonthlyHours] = useState<MonthlyHoursView[]>([]);
   const [rosterSearch, setRosterSearch] = useState("");
+  const [editingQuotas, setEditingQuotas] = useState<Record<string, string>>({});
+  const [quotaSavingId, setQuotaSavingId] = useState<string | null>(null);
+  const [quotaMessage, setQuotaMessage] = useState<string | null>(null);
   const isNarrowLayout = viewportWidth < 940;
   const isMobileLayout = viewportWidth < 760;
 
@@ -259,6 +262,51 @@ function Team() {
       cancelled = true;
     };
   }, [api, selectedEmployeeId]);
+
+  const handleQuotaSave = useCallback(
+    async (employeeId: string) => {
+      const draft = editingQuotas[employeeId];
+      if (draft === undefined) return;
+
+      const quota = Number.parseFloat(draft);
+      if (!Number.isFinite(quota) || quota < 0) {
+        setQuotaMessage("Quota must be a non-negative number.");
+        return;
+      }
+
+      setQuotaSavingId(employeeId);
+      setQuotaMessage(null);
+      try {
+        await api.updateEmployeeQuota(employeeId, quota);
+        setEmployees((current) =>
+          current.map((employee) =>
+            employee.id === employeeId
+              ? { ...employee, monthlyQuotaHours: quota }
+              : employee
+          )
+        );
+        setEmployeeSummary((current) =>
+          current && current.employee.id === employeeId
+            ? {
+                ...current,
+                employee: { ...current.employee, monthlyQuotaHours: quota },
+              }
+            : current
+        );
+        setEditingQuotas((current) => {
+          const next = { ...current };
+          delete next[employeeId];
+          return next;
+        });
+        setQuotaMessage("Monthly quota updated.");
+      } catch (error) {
+        setQuotaMessage(`Quota update failed: ${String(error)}`);
+      } finally {
+        setQuotaSavingId(null);
+      }
+    },
+    [api, editingQuotas]
+  );
 
   if (loading) {
     return (
@@ -656,10 +704,28 @@ function Team() {
                 <div style={styles.sectionHeader}>
                   <div>
                     <h2 style={styles.sectionTitle}>CAPACITY</h2>
-                    <div style={styles.sectionCaption}>DEPARTMENT LOAD / MONTHLY HOURS</div>
+                    <div style={styles.sectionCaption}>
+                      DEPARTMENT LOAD / MONTHLY QUOTA AUTHORITY
+                    </div>
                   </div>
                 </div>
                 <div style={styles.sectionDivider} />
+                <div style={styles.helperText}>
+                  MONTHLY QUOTA EDITS LIVE HERE SO THE SAME SURFACE OWNS BOTH
+                  CAPACITY READOUTS AND THE QUOTA INPUT THEY DEPEND ON.
+                </div>
+                {quotaMessage ? (
+                  <div
+                    style={{
+                      ...styles.inlineStatus,
+                      color: quotaMessage.startsWith("Quota update failed")
+                        ? "var(--lcars-red)"
+                        : "var(--lcars-green)",
+                    }}
+                  >
+                    {quotaMessage.toUpperCase()}
+                  </div>
+                ) : null}
                 {departmentCapacity.length === 0 ? (
                   <p style={styles.emptyText}>
                     NO LINKED CREW AVAILABLE
@@ -713,6 +779,7 @@ function Team() {
                           <th style={styles.th}>DEPARTMENT</th>
                           <th style={styles.th}>ROLE</th>
                           <th style={styles.th}>ACTUAL HOURS</th>
+                          <th style={styles.th}>MONTHLY QUOTA</th>
                           <th style={styles.th}>EXPECTED HOURS</th>
                           <th style={styles.th}>STATUS</th>
                           <th style={styles.th}>REMOTE</th>
@@ -753,6 +820,36 @@ function Team() {
                               </td>
                               <td style={styles.tdMono}>
                                 {(monthlyRow?.actualHours ?? 0).toFixed(1)}h
+                              </td>
+                              <td style={styles.td}>
+                                <div style={styles.quotaInputWrap}>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    step={1}
+                                    value={
+                                      editingQuotas[employee.id] !== undefined
+                                        ? editingQuotas[employee.id]
+                                        : employee.monthlyQuotaHours
+                                    }
+                                    onChange={(event) =>
+                                      setEditingQuotas((current) => ({
+                                        ...current,
+                                        [employee.id]: event.target.value,
+                                      }))
+                                    }
+                                    onBlur={() => void handleQuotaSave(employee.id)}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter") {
+                                        void handleQuotaSave(employee.id);
+                                      }
+                                    }}
+                                    style={styles.tableNumberInput}
+                                  />
+                                  {quotaSavingId === employee.id ? (
+                                    <span style={styles.tableMuted}>SAVING</span>
+                                  ) : null}
+                                </div>
                               </td>
                               <td style={styles.tdMono}>
                                 {(monthlyRow?.expectedHours ?? employee.monthlyQuotaHours).toFixed(1)}
@@ -832,6 +929,14 @@ const styles: Record<string, CSSProperties> = {
     ...lcarsPageStyles.helperText,
     maxWidth: 680,
     marginBottom: 0,
+  },
+  inlineStatus: {
+    marginTop: 10,
+    marginBottom: 12,
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    letterSpacing: "0.12em",
+    textTransform: "uppercase",
   },
   sectionDivider: lcarsPageStyles.sectionDivider,
   input: lcarsPageStyles.input,
@@ -1171,6 +1276,16 @@ const styles: Record<string, CSSProperties> = {
     display: "flex",
     alignItems: "center",
     gap: 8,
+  },
+  quotaInputWrap: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  },
+  tableNumberInput: {
+    ...lcarsPageStyles.input,
+    width: 88,
+    padding: "6px 10px",
   },
   remotePill: {
     fontFamily: "'Orbitron', sans-serif",

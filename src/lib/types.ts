@@ -703,26 +703,31 @@ export interface IssueWithNaming {
 
 // ── Client management (#5) ───────────────────────────────────────
 
-export interface ClientView {
-  id: string;
-  name: string;
-  tier: string;
-  industry: string | null;
+export interface ClientOperationalSignals {
+  sources: string[];
   monthBillableHours: number;
   activeProjects: number;
-  planningSource: string;
   githubProjects: number;
   githubOpenIssues: number;
   githubTotalIssues: number;
-  primaryContact: string | null;
-  contractStatus: string;
+  latestActivityAt: string | null;
+  inferredTier: string | null;
+  inferredIndustry: string | null;
+  inferredPrimaryContact: string | null;
+  inferredContractStatus: string | null;
   contractEndDate: string | null;
   daysRemaining: number | null;
-  latestActivityAt: string | null;
-  techStack: string[];
+  inferredTechStack: string[];
+}
+
+export interface ClientView {
+  id: string;
+  name: string;
+  registryStatus: "canonical" | "operational";
   driveLink: string | null;
   chromeProfile: string | null;
   profile: TeamforgeClientProfile | null;
+  operationalSignals: ClientOperationalSignals;
 }
 
 export interface ClientDetailView {
@@ -763,35 +768,6 @@ export interface ActiveProjectIssueView {
   createdAt: string | null;
   updatedAt: string | null;
   closedAt: string | null;
-}
-
-// ── Device registry (#6b) ────────────────────────────────────────
-
-export interface DeviceView {
-  id: string;
-  name: string;
-  model: string | null;
-  platform: string;
-  clientName: string | null;
-  status: string;
-  responsibleDev: string | null;
-  issueCount: number;
-  technicalNotes: string | null;
-  apiDocsLink: string | null;
-  firmwareVersion: string | null;
-}
-
-// ── Knowledge base (#7) ──────────────────────────────────────────
-
-export interface KnowledgeArticleView {
-  id: string;
-  title: string;
-  category: string;
-  author: string | null;
-  updatedAt: string;
-  tags: string[];
-  contentPreview: string;
-  content: string | null;
 }
 
 // ── Sprint ceremonies (#8) ───────────────────────────────────────
@@ -836,27 +812,6 @@ export interface MonthlyHoursView {
   isRemote: boolean;
   timezone: string | null;
   onLeave: boolean;
-}
-
-// ── Training compliance (#11) ────────────────────────────────────
-
-export interface TrainingTrackView {
-  id: string;
-  name: string;
-  totalModules: number;
-  completionRate: number;
-  overdueCount: number;
-}
-
-export interface TrainingStatusRow {
-  employeeName: string;
-  track: string;
-  progress: number;
-  modulesDone: number;
-  totalModules: number;
-  nextModule: string | null;
-  deadline: string | null;
-  status: string;
 }
 
 export interface SkillsMatrixCell {
@@ -931,17 +886,6 @@ export interface OnboardingTaskView {
   completedAt: string | null;
   resourceCreated: string | null;
   notes: string | null;
-}
-
-// ── Planner integration (#15) ────────────────────────────────────
-
-export interface PlannerSlotView {
-  employeeName: string;
-  scheduledHours: number;
-  actualHours: number;
-  focusBlocks: number;
-  meetingBlocks: number;
-  capacityUtilization: number;
 }
 
 // ── Cloud credential sync ────────────────────────────────────────

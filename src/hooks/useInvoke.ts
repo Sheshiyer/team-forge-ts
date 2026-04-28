@@ -21,9 +21,7 @@ import type {
   PresenceStatus,
   Employee,
   SyncState,
-  OrgChartView,
   TeamSnapshotView,
-  OrgDepartmentUpdateInput,
   MilestoneView,
   TimeDiscrepancy,
   EstimationAccuracy,
@@ -43,16 +41,11 @@ import type {
   StandupReport,
   ClientView,
   ClientDetailView,
-  DeviceView,
-  KnowledgeArticleView,
   SprintDetailView,
   MonthlyHoursView,
-  TrainingTrackView,
-  TrainingStatusRow,
   SkillsMatrixCell,
   OnboardingAudience,
   OnboardingFlowView,
-  PlannerSlotView,
   CredentialSyncResult,
   CloudIntegrationSyncResult,
   GitHubSyncReport,
@@ -134,9 +127,6 @@ const invokeApi = {
   triggerHulySync: () => invoke<string>("trigger_huly_sync"),
   getTeamSnapshot: () => invoke<TeamSnapshotView>("get_team_snapshot"),
   refreshTeamSnapshot: () => invoke<TeamSnapshotView>("refresh_team_snapshot"),
-  getOrgChart: () => invoke<OrgChartView>("get_org_chart"),
-  applyOrgChartMapping: (mappings: OrgDepartmentUpdateInput[]) =>
-    invoke<string>("apply_org_chart_mapping", { mappings }),
   getMilestones: () => invoke<MilestoneView[]>("get_milestones"),
   getTimeDiscrepancies: () =>
     invoke<TimeDiscrepancy[]>("get_time_discrepancies"),
@@ -171,22 +161,13 @@ const invokeApi = {
     invoke<ClientDetailView>("get_client_detail", { clientId }),
   getActiveProjectIssues: () =>
     invoke<ActiveProjectIssueView[]>("get_active_project_issues"),
-  getDevices: () => invoke<DeviceView[]>("get_devices"),
-  getKnowledgeArticles: () =>
-    invoke<KnowledgeArticleView[]>("get_knowledge_articles"),
   getSprintDetail: (sprintId: string) =>
     invoke<SprintDetailView>("get_sprint_detail", { sprintId }),
   getMonthlyHours: () => invoke<MonthlyHoursView[]>("get_monthly_hours"),
-  getTrainingTracks: () =>
-    invoke<TrainingTrackView[]>("get_training_tracks"),
-  getTrainingStatus: () =>
-    invoke<TrainingStatusRow[]>("get_training_status"),
   getSkillsMatrix: () =>
     invoke<SkillsMatrixCell[]>("get_skills_matrix"),
   getOnboardingFlows: () =>
     invoke<OnboardingFlowView[]>("get_onboarding_flows"),
-  getPlannerCapacity: () =>
-    invoke<PlannerSlotView[]>("get_planner_capacity"),
   syncCloudCredentials: () =>
     invoke<CredentialSyncResult>("sync_cloud_credentials"),
   syncCloudIntegrations: () =>

@@ -130,11 +130,27 @@ On first launch:
 6. Hit **Sync Now** — data populates across all views
 7. Open **Projects** for execution summaries or the TeamForge control plane, **Team** for org mapping and employee summaries, then **Calendar** for leave and holiday operations
 
+## Tauri Agent Skills
+
+This repo carries a reproducible wrapper around the installed Tauri skill suite
+from `dchuk/claude-code-tauri-skills`.
+
+```bash
+pnpm skills:tauri:list
+pnpm skills:tauri:refresh
+```
+
+Workflow guidance and the canonical skill names to reference live in
+[docs/runbooks/tauri-agent-skills.md](docs/runbooks/tauri-agent-skills.md).
+The repo-pinned 39-skill manifest lives at
+[`config/tauri-skill-suite.txt`](config/tauri-skill-suite.txt).
+
 ## Releases
 
-- **Current app version in repo:** `0.1.21`
-- **Latest published tag:** `v0.1.18`
+- **Current app version in repo:** `0.1.23`
+- **Latest published tag:** `v0.1.23`
 - **Release trigger:** pushing a tag that matches `v*`
+- **Canonical OTA signing/publish path:** [`.github/workflows/release.yml`](.github/workflows/release.yml)
 - **Artifacts:** macOS `.app` and `.dmg` bundles built by GitHub Actions for Apple Silicon and Intel targets
 - **Download page:** [GitHub Releases](https://github.com/Sheshiyer/team-forge-ts/releases)
 

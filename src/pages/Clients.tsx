@@ -1,119 +1,65 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { SkeletonCard, SkeletonTable } from "../components/ui/Skeleton";
 import { useInvoke } from "../hooks/useInvoke";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
-import { SkeletonCard, SkeletonTable } from "../components/ui/Skeleton";
-import Avatar from "../components/ui/Avatar";
-import type { ClientView, ClientDetailView, ActivityItem } from "../lib/types";
-
-// ── Tier colors ───────────────────────────────────────────────
-
-function tierColor(tier: string): string {
-  switch (tier.toLowerCase()) {
-    case "tier 1":
-      return "var(--lcars-orange)";
-    case "tier 2":
-      return "var(--lcars-cyan)";
-    case "tier 3":
-      return "var(--lcars-lavender)";
-    case "tier 4":
-      return "var(--lcars-tan)";
-    case "r&d":
-      return "var(--lcars-peach)";
-    default:
-      return "var(--lcars-lavender)";
-  }
-}
-
-// ── MetricCard ────────────────────────────────────────────────
-
-const METRIC_COLORS = [
-  "var(--lcars-orange)",
-  "var(--lcars-cyan)",
-  "var(--lcars-green)",
-  "var(--lcars-red)",
-];
+import type { ActivityItem, ClientDetailView, ClientView } from "../lib/types";
 
 function formatHours(hours: number): string {
   return `${hours.toFixed(1)}H`;
 }
 
+function formatDateTime(value: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function clientAccent(client: ClientView): string {
+  if (
+    client.operationalSignals.daysRemaining !== null &&
+    client.operationalSignals.daysRemaining < 30
+  ) {
+    return "var(--lcars-red)";
+  }
+  return client.registryStatus === "canonical"
+    ? "var(--lcars-cyan)"
+    : "var(--lcars-orange)";
+}
+
 function MetricCard({
   label,
   value,
-  colorIndex = 0,
+  color,
 }: {
   label: string;
   value: string;
-  colorIndex?: number;
+  color: string;
 }) {
-  const barColor = METRIC_COLORS[colorIndex % METRIC_COLORS.length];
   return (
-    <div style={styles.metricCard}>
-      <div style={{ ...styles.metricCardBar, backgroundColor: barColor }} />
+    <div style={{ ...styles.metricCard, borderLeftColor: color }}>
+      <div style={{ ...styles.metricBar, backgroundColor: color }} />
       <div style={styles.metricLabel}>{label}</div>
       <div style={styles.metricValue}>{value}</div>
     </div>
   );
 }
 
-// ── TierBadge ─────────────────────────────────────────────────
-
-function TierBadge({ tier }: { tier: string }) {
-  const color = tierColor(tier);
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "2px 10px",
-        borderRadius: 2,
-        backgroundColor: "transparent",
-        border: `1px solid ${color}`,
-        color,
-        fontSize: 10,
-        fontWeight: 600,
-        fontFamily: "'Orbitron', sans-serif",
-        lineHeight: "18px",
-        letterSpacing: "1px",
-        textTransform: "uppercase" as const,
-      }}
-    >
-      {tier.toUpperCase()}
-    </span>
-  );
-}
-
-// ── ContractBadge ─────────────────────────────────────────────
-
-function ContractBadge({
-  status,
-  daysRemaining,
-}: {
-  status: string;
-  daysRemaining: number | null;
-}) {
-  const isUrgent = daysRemaining !== null && daysRemaining < 30;
-  const color = isUrgent ? "var(--lcars-red)" : "var(--lcars-green)";
+function RegistryPill({ status }: { status: ClientView["registryStatus"] }) {
+  const color =
+    status === "canonical" ? "var(--lcars-cyan)" : "var(--lcars-orange)";
   const label =
-    isUrgent && daysRemaining !== null
-      ? `${daysRemaining}D LEFT`
-      : status.toUpperCase();
-
+    status === "canonical" ? "CANONICAL PROFILE" : "OPERATIONAL ONLY";
   return (
     <span
       style={{
-        display: "inline-block",
-        padding: "2px 10px",
-        borderRadius: 2,
-        backgroundColor: "transparent",
-        border: `1px solid ${color}`,
+        ...styles.pill,
+        borderColor: color,
         color,
-        fontSize: 10,
-        fontWeight: 600,
-        fontFamily: "'Orbitron', sans-serif",
-        lineHeight: "18px",
-        letterSpacing: "1px",
-        textTransform: "uppercase" as const,
-        boxShadow: isUrgent ? `0 0 8px ${color}33` : "none",
       }}
     >
       {label}
@@ -121,50 +67,44 @@ function ContractBadge({
   );
 }
 
-// ── TechTag ───────────────────────────────────────────────────
-
-function TechTag({ label }: { label: string }) {
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "1px 8px",
-        borderRadius: 2,
-        border: "1px solid rgba(153, 153, 204, 0.22)",
-        color: "var(--lcars-lavender)",
-        fontSize: 9,
-        fontFamily: "'JetBrains Mono', monospace",
-        letterSpacing: "0.5px",
-        background: "rgba(153, 153, 204, 0.06)",
-      }}
-    >
-      {label.toUpperCase()}
-    </span>
-  );
-}
-
 function SourcePill({ source }: { source: string }) {
-  const hasGithub = source.toLowerCase().includes("github");
-  const color = hasGithub ? "var(--lcars-cyan)" : "var(--lcars-orange)";
+  return (
+    <span style={styles.sourcePill}>{source.toUpperCase()}</span>
+  );
+}
+
+function ContractBadge({
+  status,
+  daysRemaining,
+}: {
+  status: string | null;
+  daysRemaining: number | null;
+}) {
+  if (!status && daysRemaining === null) return null;
+
+  const urgent = daysRemaining !== null && daysRemaining < 30;
+  const color = urgent ? "var(--lcars-red)" : "var(--lcars-green)";
+  const label =
+    urgent && daysRemaining !== null
+      ? `${daysRemaining}D LEFT`
+      : (status ?? "UNKNOWN").toUpperCase();
+
   return (
     <span
       style={{
-        display: "inline-block",
-        padding: "2px 8px",
-        borderRadius: 2,
-        border: `1px solid ${color}`,
+        ...styles.pill,
+        borderColor: color,
         color,
-        fontSize: 9,
-        fontFamily: "'Orbitron', sans-serif",
-        letterSpacing: "1px",
       }}
     >
-      {source.toUpperCase()}
+      {label}
     </span>
   );
 }
 
-// ── ClientCard ────────────────────────────────────────────────
+function SignalTag({ label }: { label: string }) {
+  return <span style={styles.signalTag}>{label.toUpperCase()}</span>;
+}
 
 function ClientCard({
   client,
@@ -173,119 +113,117 @@ function ClientCard({
   client: ClientView;
   onSelect: (id: string) => void;
 }) {
-  const accent = tierColor(client.tier);
   const profile = client.profile;
+  const signals = client.operationalSignals;
+  const canonical = client.registryStatus === "canonical";
+  const accent = clientAccent(client);
+  const subtitle = canonical
+    ? profile?.industry ?? profile?.engagementModel ?? "TEAMFORGE PROFILE"
+    : signals.inferredIndustry ?? "UNMAPPED OPERATIONAL SIGNAL";
+  const contact = canonical
+    ? profile?.primaryContact
+    : signals.inferredPrimaryContact;
   const fitPreview = profile?.strategicFit.slice(0, 2) ?? [];
 
   return (
-    <div
+    <button
+      type="button"
       onClick={() => onSelect(client.id)}
       style={{
         ...styles.clientCard,
         borderLeftColor: accent,
-        cursor: "pointer",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          marginBottom: 10,
-        }}
-      >
+      <div style={styles.clientHeader}>
         <div>
           <div style={styles.clientName}>{client.name.toUpperCase()}</div>
-          {client.industry && (
-            <div style={styles.clientIndustry}>{client.industry.toUpperCase()}</div>
-          )}
+          <div style={styles.clientSubtitle}>{subtitle.toUpperCase()}</div>
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <SourcePill source={client.planningSource} />
-          <TierBadge tier={client.tier} />
-        </div>
+        <RegistryPill status={client.registryStatus} />
       </div>
 
-      <div style={styles.clientMetricsRow}>
-        <div>
-          <div style={styles.clientMetricLabel}>BILLABLE HOURS (MONTH)</div>
-          <div style={styles.clientMetricValue}>{formatHours(client.monthBillableHours)}</div>
-        </div>
-        <div>
-          <div style={styles.clientMetricLabel}>ACTIVE PROJECTS</div>
-          <div style={styles.clientMetricValue}>{client.activeProjects}</div>
-        </div>
-        <div>
-          <div style={styles.clientMetricLabel}>GITHUB OPEN</div>
-          <div style={styles.clientMetricValue}>{client.githubOpenIssues}</div>
-        </div>
-      </div>
-
-      <div style={{ marginBottom: 10 }}>
-        {client.primaryContact && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-            <Avatar name={client.primaryContact} size={20} />
-            <span style={{ color: "var(--lcars-tan)", fontSize: 12 }}>
-              {client.primaryContact}
-            </span>
-          </div>
-        )}
-        {profile ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const }}>
-              <span style={styles.profileMetaPill}>
-                {(profile.engagementModel ?? "UNSPECIFIED").toUpperCase()}
-              </span>
-              <span style={styles.profileCompletenessText}>
-                PROFILE {profile.profileCompleteness.toFixed(0)}%
-              </span>
-            </div>
-            {fitPreview.length > 0 && (
-              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" as const }}>
-                {fitPreview.map((item) => (
-                  <span key={item} style={styles.fitTag}>
-                    {item.toUpperCase()}
-                  </span>
-                ))}
-              </div>
-            )}
-            {profile.stakeholders.length > 0 && (
-              <div style={styles.profileSubtext}>
-                STAKEHOLDERS: {profile.stakeholders.slice(0, 3).join(", ")}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div style={styles.profileMissingText}>NO VAULT CLIENT PROFILE YET</div>
-        )}
-      </div>
-
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 8,
-        }}
-      >
-        <ContractBadge
-          status={client.contractStatus}
-          daysRemaining={client.daysRemaining}
-        />
-      </div>
-
-      {client.techStack.length > 0 && (
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" as const }}>
-          {client.techStack.map((tech) => (
-            <TechTag key={tech} label={tech} />
+      {signals.sources.length > 0 ? (
+        <div style={styles.pillRow}>
+          {signals.sources.map((source) => (
+            <SourcePill key={source} source={source} />
           ))}
         </div>
+      ) : null}
+
+      <div style={styles.metricStrip}>
+        <div>
+          <div style={styles.stripLabel}>BILLABLE HOURS</div>
+          <div style={styles.stripValue}>
+            {formatHours(signals.monthBillableHours)}
+          </div>
+        </div>
+        <div>
+          <div style={styles.stripLabel}>ACTIVE PROJECTS</div>
+          <div style={styles.stripValue}>{signals.activeProjects}</div>
+        </div>
+        <div>
+          <div style={styles.stripLabel}>GITHUB OPEN</div>
+          <div style={styles.stripValue}>{signals.githubOpenIssues}</div>
+        </div>
+      </div>
+
+      {canonical ? (
+        <div style={styles.cardSection}>
+          <div style={styles.cardMetaLine}>
+            <span style={styles.metaPill}>
+              {(profile?.engagementModel ?? "UNSPECIFIED").toUpperCase()}
+            </span>
+            <span style={styles.metaText}>
+              PROFILE {profile?.profileCompleteness.toFixed(0) ?? "0"}%
+            </span>
+          </div>
+          {contact ? (
+            <div style={styles.cardSubtext}>PRIMARY CONTACT: {contact}</div>
+          ) : null}
+          {profile?.stakeholders.length ? (
+            <div style={styles.cardSubtext}>
+              STAKEHOLDERS: {profile.stakeholders.slice(0, 3).join(", ")}
+            </div>
+          ) : null}
+          {fitPreview.length > 0 ? (
+            <div style={styles.tagRow}>
+              {fitPreview.map((item) => (
+                <SignalTag key={item} label={item} />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div style={styles.cardSection}>
+          <div style={styles.cardSubtext}>
+            NEEDS A TEAMFORGE CLIENT PROFILE BEFORE IT JOINS THE CANONICAL
+            REGISTRY.
+          </div>
+          {contact ? (
+            <div style={styles.cardSubtext}>CONTACT SIGNAL: {contact}</div>
+          ) : null}
+          {signals.inferredTier ? (
+            <div style={styles.cardSubtext}>TIER SIGNAL: {signals.inferredTier}</div>
+          ) : null}
+        </div>
       )}
-    </div>
+
+      <div style={styles.cardFooter}>
+        <ContractBadge
+          status={signals.inferredContractStatus}
+          daysRemaining={signals.daysRemaining}
+        />
+        {signals.inferredTechStack.length > 0 ? (
+          <div style={styles.tagRow}>
+            {signals.inferredTechStack.slice(0, 3).map((tech) => (
+              <SignalTag key={tech} label={tech} />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </button>
   );
 }
-
-// ── Detail Panel ──────────────────────────────────────────────
 
 function DetailPanel({
   detail,
@@ -295,21 +233,31 @@ function DetailPanel({
   onClose: () => void;
 }) {
   const client = detail.client;
-  const accent = tierColor(client.tier);
   const profile = client.profile;
+  const signals = client.operationalSignals;
+  const accent = clientAccent(client);
+  const hasOperationalSignals =
+    signals.sources.length > 0 ||
+    signals.monthBillableHours > 0 ||
+    signals.activeProjects > 0 ||
+    signals.githubTotalIssues > 0 ||
+    Boolean(signals.latestActivityAt) ||
+    Boolean(signals.inferredIndustry) ||
+    Boolean(signals.inferredPrimaryContact) ||
+    Boolean(signals.inferredContractStatus) ||
+    signals.inferredTechStack.length > 0;
 
   return (
     <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.detailPanel} onClick={(e) => e.stopPropagation()}>
+      <div style={{ ...styles.detailPanel, borderLeftColor: accent }} onClick={(event) => event.stopPropagation()}>
         <div style={styles.detailHeader}>
           <div>
             <div style={styles.detailTitle}>{client.name.toUpperCase()}</div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
-              <TierBadge tier={client.tier} />
-              <SourcePill source={client.planningSource} />
-              {client.industry && (
-                <span style={styles.clientIndustry}>{client.industry.toUpperCase()}</span>
-              )}
+            <div style={styles.headerPills}>
+              <RegistryPill status={client.registryStatus} />
+              {signals.sources.map((source) => (
+                <SourcePill key={source} source={source} />
+              ))}
             </div>
           </div>
           <button onClick={onClose} style={styles.closeButton}>
@@ -320,10 +268,11 @@ function DetailPanel({
         <div style={styles.detailDivider} />
 
         <div style={styles.detailSection}>
-          <div style={styles.detailSectionTitle}>VAULT PROFILE</div>
+          <div style={styles.detailSectionTitle}>TEAMFORGE PROFILE</div>
           {!profile ? (
             <div style={styles.emptyText}>
-              NO VAULT CLIENT PROFILE YET. ADD A `client-profile.md` NOTE TO THE THOUGHTSEED VAULT TO POPULATE THIS SECTION.
+              NO TEAMFORGE CLIENT PROFILE YET. THIS RECORD IS STILL OPERATIONAL-ONLY
+              UNTIL A CANONICAL PROFILE EXISTS.
             </div>
           ) : (
             <>
@@ -343,13 +292,17 @@ function DetailPanel({
                 <div>
                   <div style={styles.detailLabel}>ONBOARDED</div>
                   <div style={styles.detailValueMono}>
-                    {profile.onboarded ? new Date(profile.onboarded).toLocaleDateString() : "—"}
+                    {profile.onboarded
+                      ? new Date(profile.onboarded).toLocaleDateString()
+                      : "—"}
                   </div>
                 </div>
                 <div>
                   <div style={styles.detailLabel}>PROJECT IDS</div>
-                  <div style={{ color: "var(--lcars-tan)", fontSize: 13 }}>
-                    {profile.projectIds.length > 0 ? profile.projectIds.join(", ") : "—"}
+                  <div style={styles.detailText}>
+                    {profile.projectIds.length > 0
+                      ? profile.projectIds.join(", ")
+                      : "—"}
                   </div>
                 </div>
               </div>
@@ -427,74 +380,82 @@ function DetailPanel({
 
         <div style={styles.detailDivider} />
 
-        {/* Client info */}
         <div style={styles.detailSection}>
-          <div style={styles.detailSectionTitle}>CLIENT INFO</div>
-          <div style={styles.detailGrid}>
-            <div>
-              <div style={styles.detailLabel}>BILLABLE HOURS (MONTH)</div>
-              <div style={styles.detailValueMono}>{formatHours(client.monthBillableHours)}</div>
-            </div>
-            <div>
-              <div style={styles.detailLabel}>ACTIVE PROJECTS</div>
-              <div style={styles.detailValueMono}>{client.activeProjects}</div>
-            </div>
-            <div>
-              <div style={styles.detailLabel}>GITHUB ISSUES</div>
-              <div style={styles.detailValueMono}>
-                {client.githubOpenIssues}/{client.githubTotalIssues} OPEN
+          <div style={styles.detailSectionTitle}>OPERATIONAL SIGNALS</div>
+          {!hasOperationalSignals ? (
+            <div style={styles.emptyText}>NO SECONDARY SIGNALS CACHED.</div>
+          ) : (
+            <>
+              <div style={styles.detailGrid}>
+                <div>
+                  <div style={styles.detailLabel}>BILLABLE HOURS</div>
+                  <div style={styles.detailValueMono}>
+                    {formatHours(signals.monthBillableHours)}
+                  </div>
+                </div>
+                <div>
+                  <div style={styles.detailLabel}>ACTIVE PROJECTS</div>
+                  <div style={styles.detailValueMono}>{signals.activeProjects}</div>
+                </div>
+                <div>
+                  <div style={styles.detailLabel}>GITHUB ISSUES</div>
+                  <div style={styles.detailValueMono}>
+                    {signals.githubOpenIssues}/{signals.githubTotalIssues} OPEN
+                  </div>
+                </div>
+                <div>
+                  <div style={styles.detailLabel}>LATEST SIGNAL</div>
+                  <div style={styles.detailValueMono}>
+                    {formatDateTime(signals.latestActivityAt)}
+                  </div>
+                </div>
+                <div>
+                  <div style={styles.detailLabel}>CONTACT SIGNAL</div>
+                  <div style={styles.detailText}>
+                    {signals.inferredPrimaryContact ?? "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={styles.detailLabel}>CONTRACT SIGNAL</div>
+                  <div style={styles.detailText}>
+                    {signals.inferredContractStatus ? (
+                      <ContractBadge
+                        status={signals.inferredContractStatus}
+                        daysRemaining={signals.daysRemaining}
+                      />
+                    ) : (
+                      "—"
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <div style={styles.detailLabel}>INDUSTRY SIGNAL</div>
+                  <div style={styles.detailText}>
+                    {signals.inferredIndustry ?? "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={styles.detailLabel}>TIER SIGNAL</div>
+                  <div style={styles.detailText}>{signals.inferredTier ?? "—"}</div>
+                </div>
               </div>
-            </div>
-            <div>
-              <div style={styles.detailLabel}>PRIMARY CONTACT</div>
-              <div style={{ color: "var(--lcars-tan)", fontSize: 13 }}>
-                {client.primaryContact ?? "—"}
-              </div>
-            </div>
-            <div>
-              <div style={styles.detailLabel}>CONTRACT</div>
-              <ContractBadge
-                status={client.contractStatus}
-                daysRemaining={client.daysRemaining}
-              />
-            </div>
-          </div>
 
-          {client.techStack.length > 0 && (
-            <div style={{ marginTop: 12 }}>
-              <div style={styles.detailLabel}>TECH STACK</div>
-              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" as const, marginTop: 4 }}>
-                {client.techStack.map((tech) => (
-                  <TechTag key={tech} label={tech} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {(client.driveLink || client.chromeProfile) && (
-            <div style={{ display: "flex", gap: 16, marginTop: 12 }}>
-              {client.driveLink && (
-                <a
-                  href={client.driveLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={styles.detailLink}
-                >
-                  DRIVE FOLDER ↗
-                </a>
-              )}
-              {client.chromeProfile && (
-                <span style={{ color: "var(--lcars-lavender)", fontSize: 11 }}>
-                  CHROME: {client.chromeProfile}
-                </span>
-              )}
-            </div>
+              {signals.inferredTechStack.length > 0 ? (
+                <div style={{ marginTop: 14 }}>
+                  <div style={styles.detailLabel}>TECH STACK SIGNALS</div>
+                  <div style={styles.tagRow}>
+                    {signals.inferredTechStack.map((tech) => (
+                      <SignalTag key={tech} label={tech} />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </>
           )}
         </div>
 
         <div style={styles.detailDivider} />
 
-        {/* Linked Projects */}
         <div style={styles.detailSection}>
           <div style={styles.detailSectionTitle}>
             LINKED PROJECTS ({detail.linkedProjects.length})
@@ -502,50 +463,37 @@ function DetailPanel({
           {detail.linkedProjects.length === 0 ? (
             <div style={styles.emptyText}>NO LINKED PROJECTS</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column" as const, gap: 6 }}>
-              {detail.linkedProjects.map((p) => (
+            <div style={styles.listColumn}>
+              {detail.linkedProjects.map((project) => (
                 <div
-                  key={p.id}
+                  key={project.id}
                   style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "6px 10px",
-                    background: "rgba(153, 153, 204, 0.04)",
-                    borderLeft: `3px solid ${accent}`,
+                    ...styles.listItem,
+                    borderLeftColor: accent,
                   }}
                 >
                   <div>
-                    {p.sourceUrl ? (
+                    {project.sourceUrl ? (
                       <a
-                        href={p.sourceUrl}
+                        href={project.sourceUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         style={{ ...styles.detailLink, color: "var(--lcars-tan)" }}
                       >
-                        {p.name}
+                        {project.name}
                       </a>
                     ) : (
-                      <span style={{ color: "var(--lcars-tan)", fontSize: 12 }}>
-                        {p.name}
-                      </span>
+                      <span style={styles.detailText}>{project.name}</span>
                     )}
-                    <div style={styles.projectMeta}>
-                      {p.source.toUpperCase()}
-                      {p.repo ? ` · ${p.repo}` : ""}
-                      {p.totalIssues > 0 ? ` · ${p.openIssues}/${p.totalIssues} OPEN` : ""}
+                    <div style={styles.listItemMeta}>
+                      {project.source.toUpperCase()}
+                      {project.repo ? ` · ${project.repo}` : ""}
+                      {project.totalIssues > 0
+                        ? ` · ${project.openIssues}/${project.totalIssues} OPEN`
+                        : ""}
                     </div>
                   </div>
-                  <span
-                    style={{
-                      color: "var(--lcars-lavender)",
-                      fontSize: 10,
-                      fontFamily: "'Orbitron', sans-serif",
-                      letterSpacing: "1px",
-                    }}
-                  >
-                    {p.status.toUpperCase()}
-                  </span>
+                  <span style={styles.listItemPill}>{project.status.toUpperCase()}</span>
                 </div>
               ))}
             </div>
@@ -554,53 +502,6 @@ function DetailPanel({
 
         <div style={styles.detailDivider} />
 
-        {/* Linked Devices */}
-        <div style={styles.detailSection}>
-          <div style={styles.detailSectionTitle}>
-            LINKED DEVICES ({detail.linkedDevices.length})
-          </div>
-          {detail.linkedDevicesUnavailable ? (
-            <div style={styles.emptyText}>
-              LINKED DEVICE DATA IS CURRENTLY UNAVAILABLE. HULY DEVICE SIGNALS COULD NOT BE LOADED.
-            </div>
-          ) : detail.linkedDevices.length === 0 ? (
-            <div style={styles.emptyText}>NO LINKED DEVICES</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column" as const, gap: 6 }}>
-              {detail.linkedDevices.map((d) => (
-                <div
-                  key={d.id}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "6px 10px",
-                    background: "rgba(153, 153, 204, 0.04)",
-                    borderLeft: "3px solid var(--lcars-cyan)",
-                  }}
-                >
-                  <span style={{ color: "var(--lcars-tan)", fontSize: 12 }}>
-                    {d.name}
-                  </span>
-                  <span
-                    style={{
-                      color: "var(--lcars-lavender)",
-                      fontSize: 10,
-                      fontFamily: "'Orbitron', sans-serif",
-                      letterSpacing: "1px",
-                    }}
-                  >
-                    {d.platform.toUpperCase()}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div style={styles.detailDivider} />
-
-        {/* Resources */}
         <div style={styles.detailSection}>
           <div style={styles.detailSectionTitle}>
             RESOURCES ({detail.resources.length})
@@ -608,43 +509,28 @@ function DetailPanel({
           {detail.resources.length === 0 ? (
             <div style={styles.emptyText}>NO RESOURCES</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column" as const, gap: 6 }}>
-              {detail.resources.map((r, i) => (
+            <div style={styles.listColumn}>
+              {detail.resources.map((resource, index) => (
                 <div
-                  key={`${r.name}-${i}`}
+                  key={`${resource.name}-${index}`}
                   style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "6px 10px",
-                    background: "rgba(153, 153, 204, 0.04)",
-                    borderLeft: "3px solid var(--lcars-peach)",
+                    ...styles.listItem,
+                    borderLeftColor: "var(--lcars-peach)",
                   }}
                 >
-                  <span style={{ color: "var(--lcars-tan)", fontSize: 12 }}>
-                    {r.name}
-                  </span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span
-                      style={{
-                        color: "var(--lcars-lavender)",
-                        fontSize: 10,
-                        fontFamily: "'Orbitron', sans-serif",
-                        letterSpacing: "1px",
-                      }}
-                    >
-                      {r.type.toUpperCase()}
-                    </span>
-                    {r.url && (
+                  <span style={styles.detailText}>{resource.name}</span>
+                  <div style={styles.resourceMeta}>
+                    <span style={styles.listItemPill}>{resource.type.toUpperCase()}</span>
+                    {resource.url ? (
                       <a
-                        href={r.url}
+                        href={resource.url}
                         target="_blank"
                         rel="noopener noreferrer"
                         style={styles.detailLink}
                       >
                         ↗
                       </a>
-                    )}
+                    ) : null}
                   </div>
                 </div>
               ))}
@@ -654,7 +540,6 @@ function DetailPanel({
 
         <div style={styles.detailDivider} />
 
-        {/* Recent Activity */}
         <div style={styles.detailSection}>
           <div style={styles.detailSectionTitle}>
             RECENT ACTIVITY ({detail.recentActivity.length})
@@ -662,42 +547,26 @@ function DetailPanel({
           {detail.recentActivity.length === 0 ? (
             <div style={styles.emptyText}>NO RECENT ACTIVITY</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column" as const, gap: 6 }}>
-              {detail.recentActivity.map((a: ActivityItem, i: number) => (
+            <div style={styles.listColumn}>
+              {detail.recentActivity.map((activity: ActivityItem, index: number) => (
                 <div
-                  key={`activity-${i}`}
+                  key={`activity-${index}`}
                   style={{
-                    padding: "6px 10px",
-                    background: "rgba(153, 153, 204, 0.04)",
-                    borderLeft: "3px solid var(--lcars-orange)",
+                    ...styles.listItem,
+                    borderLeftColor: "var(--lcars-orange)",
                   }}
                 >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      marginBottom: 2,
-                    }}
-                  >
-                    <span style={{ color: "var(--lcars-tan)", fontSize: 12 }}>
-                      {a.employeeName} — {a.action}
-                    </span>
-                    <span
-                      style={{
-                        color: "var(--text-quaternary)",
-                        fontSize: 10,
-                        fontFamily: "'JetBrains Mono', monospace",
-                      }}
-                    >
-                      {new Date(a.occurredAt).toLocaleDateString()}
-                    </span>
-                  </div>
-                  {a.detail && (
-                    <div style={{ color: "var(--lcars-lavender)", fontSize: 11 }}>
-                      {a.detail}
+                  <div>
+                    <div style={styles.detailText}>
+                      {activity.employeeName} — {activity.action}
                     </div>
-                  )}
+                    {activity.detail ? (
+                      <div style={styles.listItemMeta}>{activity.detail}</div>
+                    ) : null}
+                  </div>
+                  <span style={styles.listItemMeta}>
+                    {formatDateTime(activity.occurredAt)}
+                  </span>
                 </div>
               ))}
             </div>
@@ -707,8 +576,6 @@ function DetailPanel({
     </div>
   );
 }
-
-// ── Clients Page ──────────────────────────────────────────────
 
 function Clients() {
   const api = useInvoke();
@@ -726,13 +593,11 @@ function Clients() {
       setClients(data);
       setLoadError(null);
     } catch {
-      setLoadError(
-        "CLIENT DATA UNAVAILABLE.",
-      );
+      setLoadError("CLIENT DATA UNAVAILABLE.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => {
     load();
@@ -748,14 +613,12 @@ function Clients() {
         const data = await api.getClientDetail(clientId);
         setDetail(data);
       } catch {
-        setDetailError(
-          "CLIENT DETAIL UNAVAILABLE.",
-        );
+        setDetailError("CLIENT DETAIL UNAVAILABLE.");
       } finally {
         setDetailLoading(false);
       }
     },
-    [api],
+    [api]
   );
 
   const handleCloseDetail = useCallback(() => {
@@ -763,22 +626,20 @@ function Clients() {
     setDetail(null);
   }, []);
 
-  // ── Computed metrics ──────────────────────────────────────
-
-  const activeClients = clients.filter(
-    (c) => c.contractStatus.toLowerCase() !== "expired",
+  const canonicalClients = clients.filter(
+    (client) => client.registryStatus === "canonical"
+  );
+  const operationalOnlyClients = clients.filter(
+    (client) => client.registryStatus === "operational"
   );
   const monthBillableHours = clients.reduce(
-    (sum, c) => sum + c.monthBillableHours,
-    0,
+    (sum, client) => sum + client.operationalSignals.monthBillableHours,
+    0
   );
-  const projectsInFlight = clients.reduce(
-    (sum, c) => sum + c.activeProjects,
-    0,
+  const openGithubIssues = clients.reduce(
+    (sum, client) => sum + client.operationalSignals.githubOpenIssues,
+    0
   );
-  const atRiskCount = clients.filter(
-    (c) => c.daysRemaining !== null && c.daysRemaining < 30,
-  ).length;
 
   if (loading) {
     return (
@@ -803,44 +664,39 @@ function Clients() {
       <h1 style={styles.pageTitle}>CLIENTS</h1>
       <div style={styles.pageTitleBar} />
 
-      {/* Metric Cards Row */}
       <div style={styles.metricsRow}>
         <MetricCard
-          label="ACTIVE CLIENTS"
-          value={String(activeClients.length)}
-          colorIndex={0}
+          label="CANONICAL CLIENTS"
+          value={String(canonicalClients.length)}
+          color="var(--lcars-cyan)"
         />
         <MetricCard
-          label="BILLABLE HOURS (MONTH)"
+          label="NEEDS MAPPING"
+          value={String(operationalOnlyClients.length)}
+          color="var(--lcars-orange)"
+        />
+        <MetricCard
+          label="BILLABLE HOURS"
           value={formatHours(monthBillableHours)}
-          colorIndex={1}
+          color="var(--lcars-green)"
         />
         <MetricCard
-          label="PROJECTS IN FLIGHT"
-          value={String(projectsInFlight)}
-          colorIndex={2}
-        />
-        <MetricCard
-          label="CLIENTS AT RISK"
-          value={String(atRiskCount)}
-          colorIndex={3}
+          label="GITHUB OPEN"
+          value={String(openGithubIssues)}
+          color="var(--lcars-lavender)"
         />
       </div>
 
-      {/* Client Cards Grid */}
       <div style={styles.card}>
-        <h2 style={{ ...styles.sectionTitle, marginBottom: 0 }}>CLIENT DIRECTORY</h2>
-        <div style={{ ...styles.sectionDivider, marginTop: 8 }} />
-
+        <h2 style={styles.sectionTitle}>CANONICAL CLIENT REGISTRY</h2>
+        <div style={styles.sectionDivider} />
         {loadError ? (
           <p style={styles.emptyText}>{loadError}</p>
-        ) : clients.length === 0 ? (
-          <p style={styles.emptyText}>
-            NO CLIENTS FOUND.
-          </p>
+        ) : canonicalClients.length === 0 ? (
+          <p style={styles.emptyText}>NO TEAMFORGE CLIENT PROFILES YET.</p>
         ) : (
           <div style={styles.clientGrid}>
-            {clients.map((client) => (
+            {canonicalClients.map((client) => (
               <ClientCard
                 key={client.id}
                 client={client}
@@ -851,55 +707,68 @@ function Clients() {
         )}
       </div>
 
-      {/* Detail Slide-in Panel */}
-      {selectedClientId && (
-        <>
-          {detailLoading ? (
-            <div style={styles.overlay} onClick={handleCloseDetail}>
-              <div
-                style={styles.detailPanel}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div style={styles.detailHeader}>
-                  <div style={styles.detailTitle}>LOADING...</div>
-                  <button onClick={handleCloseDetail} style={styles.closeButton}>
-                    ×
-                  </button>
-                </div>
-                <div style={{ padding: 24 }}>
-                  <SkeletonTable rows={8} cols={2} />
-                </div>
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-orange)" }}>
+        <h2 style={styles.sectionTitle}>OPERATIONAL-ONLY SIGNALS</h2>
+        <div style={styles.sectionDivider} />
+        <div style={styles.helperText}>
+          THESE RECORDS STILL NEED A TEAMFORGE CLIENT PROFILE BEFORE THEY SHOULD
+          READ AS CANONICAL APP ENTITIES.
+        </div>
+        {loadError ? (
+          <p style={styles.emptyText}>{loadError}</p>
+        ) : operationalOnlyClients.length === 0 ? (
+          <p style={styles.emptyText}>NO UNMAPPED CLIENT SIGNALS.</p>
+        ) : (
+          <div style={styles.clientGrid}>
+            {operationalOnlyClients.map((client) => (
+              <ClientCard
+                key={client.id}
+                client={client}
+                onSelect={handleSelectClient}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {selectedClientId ? (
+        detailLoading ? (
+          <div style={styles.overlay} onClick={handleCloseDetail}>
+            <div style={styles.detailPanel} onClick={(event) => event.stopPropagation()}>
+              <div style={styles.detailHeader}>
+                <div style={styles.detailTitle}>LOADING...</div>
+                <button onClick={handleCloseDetail} style={styles.closeButton}>
+                  ×
+                </button>
+              </div>
+              <div style={{ padding: 24 }}>
+                <SkeletonTable rows={8} cols={2} />
               </div>
             </div>
-          ) : detail ? (
-            <DetailPanel detail={detail} onClose={handleCloseDetail} />
-          ) : (
-            <div style={styles.overlay} onClick={handleCloseDetail}>
-              <div
-                style={styles.detailPanel}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div style={styles.detailHeader}>
-                  <div style={styles.detailTitle}>ERROR</div>
-                  <button onClick={handleCloseDetail} style={styles.closeButton}>
-                    ×
-                  </button>
-                </div>
-                <div style={{ padding: 24 }}>
-                  <p style={styles.emptyText}>
-                    {detailError ?? "CLIENT DETAIL UNAVAILABLE."}
-                  </p>
-                </div>
+          </div>
+        ) : detail ? (
+          <DetailPanel detail={detail} onClose={handleCloseDetail} />
+        ) : (
+          <div style={styles.overlay} onClick={handleCloseDetail}>
+            <div style={styles.detailPanel} onClick={(event) => event.stopPropagation()}>
+              <div style={styles.detailHeader}>
+                <div style={styles.detailTitle}>ERROR</div>
+                <button onClick={handleCloseDetail} style={styles.closeButton}>
+                  ×
+                </button>
+              </div>
+              <div style={{ padding: 24 }}>
+                <p style={styles.emptyText}>
+                  {detailError ?? "CLIENT DETAIL UNAVAILABLE."}
+                </p>
               </div>
             </div>
-          )}
-        </>
-      )}
+          </div>
+        )
+      ) : null}
     </div>
   );
 }
-
-// ── Styles ────────────────────────────────────────────────────
 
 const styles: Record<string, React.CSSProperties> = {
   pageTitle: lcarsPageStyles.pageTitle,
@@ -911,133 +780,170 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 20,
   },
   metricCard: {
-    background: "var(--bg-console-soft)",
-    border: "1px solid rgba(153, 153, 204, 0.16)",
-    borderLeft: "8px solid var(--lcars-orange)",
-    borderRadius: "0 22px 0 0",
-    padding: 24,
+    ...lcarsPageStyles.subtleCard,
+    minHeight: 100,
+    padding: 20,
     position: "relative" as const,
-    boxShadow:
-      "inset 0 1px 0 rgba(255,255,255,0.03), 0 18px 30px rgba(0, 0, 0, 0.2)",
   },
-  metricCardBar: {
+  metricBar: {
     position: "absolute" as const,
     top: 0,
-    left: -8,
+    left: 0,
     right: 0,
-    height: 5,
+    height: 4,
   },
   metricLabel: lcarsPageStyles.metricLabel,
   metricValue: lcarsPageStyles.metricValue,
   card: {
     ...lcarsPageStyles.card,
-    borderLeftColor: "var(--lcars-orange)",
+    borderLeftColor: "var(--lcars-cyan)",
   },
   sectionTitle: lcarsPageStyles.sectionTitle,
   sectionDivider: lcarsPageStyles.sectionDivider,
   emptyText: lcarsPageStyles.emptyText,
+  helperText: lcarsPageStyles.helperText,
   clientGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
     gap: 16,
   },
   clientCard: {
-    background: "var(--bg-console-soft)",
-    border: "1px solid rgba(153, 153, 204, 0.14)",
-    borderLeft: "6px solid var(--lcars-orange)",
-    borderRadius: "0 18px 18px 0",
-    padding: 16,
-    boxShadow:
-      "inset 0 1px 0 rgba(255,255,255,0.03), 0 12px 24px rgba(0, 0, 0, 0.18)",
-    transition: "border-color 0.2s ease, box-shadow 0.2s ease",
+    ...lcarsPageStyles.subtleCard,
+    width: "100%",
+    textAlign: "left" as const,
+    borderLeftColor: "var(--lcars-orange)",
+    cursor: "pointer",
+    background: "rgba(8, 12, 26, 0.92)",
+  },
+  clientHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+    marginBottom: 10,
   },
   clientName: {
     fontFamily: "'Orbitron', sans-serif",
     fontSize: 13,
     fontWeight: 700,
     color: "var(--lcars-orange)",
-    letterSpacing: "1.5px",
+    letterSpacing: "0.12em",
   },
-  clientIndustry: {
-    fontFamily: "'Orbitron', sans-serif",
+  clientSubtitle: {
+    marginTop: 4,
     fontSize: 10,
     color: "var(--lcars-lavender)",
-    letterSpacing: "1px",
-    marginTop: 2,
+    letterSpacing: "0.08em",
   },
-  clientMetricsRow: {
+  pill: {
+    display: "inline-block",
+    padding: "2px 10px",
+    borderRadius: 2,
+    border: "1px solid",
+    fontSize: 9,
+    fontFamily: "'Orbitron', sans-serif",
+    letterSpacing: "0.12em",
+    whiteSpace: "nowrap" as const,
+  },
+  sourcePill: {
+    display: "inline-block",
+    padding: "2px 8px",
+    borderRadius: 2,
+    border: "1px solid rgba(153, 153, 204, 0.26)",
+    color: "var(--lcars-lavender)",
+    fontSize: 9,
+    fontFamily: "'Orbitron', sans-serif",
+    letterSpacing: "0.12em",
+  },
+  pillRow: {
+    display: "flex",
+    gap: 6,
+    flexWrap: "wrap" as const,
+    marginBottom: 10,
+  },
+  metricStrip: {
     display: "grid",
     gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
     gap: 12,
-    marginBottom: 10,
+    marginBottom: 12,
   },
-  clientMetricLabel: {
+  stripLabel: {
     fontFamily: "'Orbitron', sans-serif",
     fontSize: 9,
     color: "var(--lcars-lavender)",
-    letterSpacing: "1px",
-    marginBottom: 2,
-    textTransform: "uppercase" as const,
+    letterSpacing: "0.08em",
+    marginBottom: 3,
   },
-  clientMetricValue: {
+  stripValue: {
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: 16,
     fontWeight: 600,
-    color: "var(--lcars-orange)",
-    letterSpacing: "-0.3px",
+    color: "var(--lcars-tan)",
   },
-  profileMetaPill: {
+  cardSection: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 6,
+  },
+  cardMetaLine: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap" as const,
+  },
+  metaPill: {
     display: "inline-block",
     padding: "2px 8px",
-    border: "1px solid rgba(102, 204, 255, 0.35)",
+    border: "1px solid rgba(0, 204, 255, 0.3)",
     color: "var(--lcars-cyan)",
     fontSize: 9,
     fontFamily: "'Orbitron', sans-serif",
-    letterSpacing: "1px",
-    borderRadius: 2,
+    letterSpacing: "0.1em",
   },
-  profileCompletenessText: {
-    color: "var(--lcars-lavender)",
-    fontSize: 10,
+  metaText: {
     fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: "var(--lcars-lavender)",
   },
-  fitTag: {
+  cardSubtext: {
+    color: "var(--text-secondary)",
+    fontSize: 11,
+    lineHeight: 1.6,
+  },
+  tagRow: {
+    display: "flex",
+    gap: 6,
+    flexWrap: "wrap" as const,
+  },
+  signalTag: {
     display: "inline-block",
-    padding: "1px 8px",
-    borderRadius: 2,
-    border: "1px solid rgba(255, 204, 102, 0.3)",
+    padding: "2px 8px",
+    borderRadius: 999,
+    border: "1px solid rgba(255, 204, 102, 0.26)",
     color: "var(--lcars-peach)",
     fontSize: 9,
     fontFamily: "'Orbitron', sans-serif",
-    letterSpacing: "0.8px",
+    letterSpacing: "0.08em",
+    background: "rgba(255, 204, 102, 0.08)",
   },
-  profileSubtext: {
-    color: "var(--text-quaternary)",
-    fontSize: 10,
-    fontFamily: "'JetBrains Mono', monospace",
-    lineHeight: 1.5,
+  cardFooter: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+    flexWrap: "wrap" as const,
+    marginTop: 12,
   },
-  profileMissingText: {
-    color: "var(--text-quaternary)",
-    fontSize: 10,
-    fontFamily: "'Orbitron', sans-serif",
-    letterSpacing: "1px",
-  },
-
-  // ── Detail panel ──────────────────────────────────────────
   overlay: {
     position: "fixed" as const,
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    inset: 0,
     background: "rgba(0, 0, 0, 0.65)",
     zIndex: 1000,
     display: "flex",
     justifyContent: "flex-end",
   },
   detailPanel: {
-    width: "min(480px, 90vw)",
+    width: "min(520px, 92vw)",
     height: "100vh",
     background: "var(--bg-console)",
     borderLeft: "4px solid var(--lcars-orange)",
@@ -1048,6 +954,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "flex-start",
+    gap: 16,
     padding: "20px 20px 12px 20px",
   },
   detailTitle: {
@@ -1055,7 +962,13 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 16,
     fontWeight: 700,
     color: "var(--lcars-orange)",
-    letterSpacing: "2px",
+    letterSpacing: "0.14em",
+  },
+  headerPills: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap" as const,
+    marginTop: 8,
   },
   closeButton: {
     background: "transparent",
@@ -1082,20 +995,20 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11,
     fontWeight: 600,
     color: "var(--lcars-orange)",
-    letterSpacing: "1.5px",
+    letterSpacing: "0.12em",
     marginBottom: 10,
     textTransform: "uppercase" as const,
   },
   detailGrid: {
     display: "grid",
-    gridTemplateColumns: "1fr 1fr",
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
     gap: 12,
   },
   detailLabel: {
     fontFamily: "'Orbitron', sans-serif",
     fontSize: 9,
     color: "var(--lcars-lavender)",
-    letterSpacing: "1px",
+    letterSpacing: "0.1em",
     marginBottom: 4,
     textTransform: "uppercase" as const,
   },
@@ -1103,18 +1016,23 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: 14,
     fontWeight: 600,
-    color: "var(--lcars-orange)",
+    color: "var(--lcars-tan)",
+  },
+  detailText: {
+    color: "var(--lcars-tan)",
+    fontSize: 12,
+    lineHeight: 1.6,
   },
   detailLink: {
     color: "var(--lcars-cyan)",
     fontSize: 11,
     fontFamily: "'Orbitron', sans-serif",
-    letterSpacing: "1px",
+    letterSpacing: "0.08em",
     textDecoration: "none",
   },
   profileColumns: {
     display: "grid",
-    gridTemplateColumns: "1fr 1fr",
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
     gap: 16,
     marginTop: 14,
   },
@@ -1132,12 +1050,38 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     lineHeight: 1.5,
   },
-  projectMeta: {
+  listColumn: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 6,
+  },
+  listItem: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    padding: "8px 10px",
+    background: "rgba(153, 153, 204, 0.04)",
+    borderLeft: "3px solid var(--lcars-orange)",
+  },
+  listItemMeta: {
     marginTop: 3,
     color: "var(--text-quaternary)",
-    fontSize: 9,
+    fontSize: 10,
     fontFamily: "'JetBrains Mono', monospace",
-    letterSpacing: "0.3px",
+    lineHeight: 1.5,
+  },
+  listItemPill: {
+    color: "var(--lcars-lavender)",
+    fontSize: 10,
+    fontFamily: "'Orbitron', sans-serif",
+    letterSpacing: "0.08em",
+    whiteSpace: "nowrap" as const,
+  },
+  resourceMeta: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
   },
 };
 
