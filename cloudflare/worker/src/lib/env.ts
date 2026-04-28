@@ -47,6 +47,7 @@ export interface Env {
   TF_INTEGRATION_CONFIG_JSON?: string;
   TF_CREDENTIAL_ENVELOPE_KEY?: string;
   TF_WEBHOOK_HMAC_SECRET?: string;
+  TF_RELEASE_PUBLISH_TOKEN?: string;
   TEAMFORGE_DB?: D1DatabaseLike;
   TEAMFORGE_ARTIFACTS?: R2BucketLike;
   SYNC_QUEUE?: QueueLike<SyncJobMessage>;

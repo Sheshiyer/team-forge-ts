@@ -87,3 +87,6 @@ icon regression.
 TeamForge's OTA signing and published release artifacts are owned by the GitHub
 Actions release workflow. That workflow injects the Tauri signing secrets,
 builds both macOS targets, and publishes the updater artifacts and signatures.
+The OTA publish callback in that workflow must authenticate with the dedicated
+`TF_RELEASE_PUBLISH_TOKEN` secret instead of the generic webhook callback
+secret.

@@ -74,6 +74,14 @@ This document freezes the public and internal HTTP contract for the TeamForge Wo
 | `POST` | `/internal/reconcile/projects` | reconciliation job entrypoint |
 | `POST` | `/internal/releases/publish` | release publication callback |
 
+### Internal Auth Rules
+
+- `POST /internal/releases/publish` must require
+  `Authorization: Bearer <TF_RELEASE_PUBLISH_TOKEN>`.
+- The remaining `/internal/*` callback routes must require
+  `Authorization: Bearer <TF_WEBHOOK_HMAC_SECRET>`.
+- OTA release publication must not reuse the generic webhook/callback secret.
+
 ## Async Rules
 
 ### Enqueue routes

@@ -4,7 +4,8 @@ import { jsonError, jsonOk } from "../lib/response";
 
 // ---------- GET /v1/agent-feed/export ----------
 // Returns a compact operational digest for the Paperclip agent plane.
-// Auth: bearer token == TF_WEBHOOK_HMAC_SECRET (same as /internal/*).
+// Auth: bearer token == TF_WEBHOOK_HMAC_SECRET (same as the non-release
+// internal callback surfaces).
 
 export async function handleAgentFeedExport(env: Env): Promise<Response> {
   if (!env.TEAMFORGE_DB) {

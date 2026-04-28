@@ -2,6 +2,79 @@
 
 ## Goal
 
+Provision the new `TF_RELEASE_PUBLISH_TOKEN` in both Cloudflare and GitHub,
+then rerun the failed `v0.1.23` release workflow to verify OTA publication can
+use the dedicated release token end to end.
+
+## Plan
+
+- [ ] Generate a fresh release publish token and store it in Cloudflare Worker
+      secrets.
+- [ ] Store the same token in GitHub Actions secrets for this repo.
+- [ ] Rerun the failed `v0.1.23` release workflow and verify whether OTA
+      publication advances past the previous auth failure.
+- [ ] Record the provisioning and rerun result in `tasks/todo.md`.
+
+## Goal
+
+Harden TeamForge OTA publication so the release publish callback uses a
+dedicated `TF_RELEASE_PUBLISH_TOKEN` instead of reusing
+`TF_WEBHOOK_HMAC_SECRET`.
+
+## Plan
+
+- [x] Split Worker internal-route auth so `/internal/releases/publish` uses a
+      dedicated release token while existing sync/webhook callbacks keep the
+      shared webhook secret.
+- [x] Update the OTA publish script and GitHub Actions release workflow to
+      require `TF_RELEASE_PUBLISH_TOKEN` for CI release publication.
+- [x] Update the secrets/contracts/runbooks so the new release-token ownership
+      is explicit and the old shared-secret assumption is removed.
+- [x] Verify the code paths locally and record the rollout follow-up in
+      `tasks/todo.md`.
+
+## Review
+
+- Skill used:
+  - `building-tauri-with-github-actions`
+    - used to keep the change anchored to the real TeamForge release workflow
+      and its CI/CD secret contract
+- Code changes:
+  - `cloudflare/worker/src/index.ts` now routes `/internal/releases/publish`
+    through `TF_RELEASE_PUBLISH_TOKEN` while the other `/internal/*` callback
+    routes still use `TF_WEBHOOK_HMAC_SECRET`
+  - `cloudflare/worker/src/lib/env.ts` now declares
+    `TF_RELEASE_PUBLISH_TOKEN`
+  - `scripts/publish-ota-release.mjs` now accepts only `--auth-token` or
+    `TF_RELEASE_PUBLISH_TOKEN` for the publish callback, and no longer falls
+    back to `TF_WEBHOOK_HMAC_SECRET`
+  - `.github/workflows/release.yml` now injects and validates
+    `TF_RELEASE_PUBLISH_TOKEN` instead of the webhook secret
+- Contract/runbook updates:
+  - updated `docs/architecture/contracts/worker-route-contract.md`
+  - updated `docs/architecture/contracts/secrets-auth-contract.md`
+  - updated `docs/architecture/contracts/ota-updater-contract.md`
+  - updated `docs/architecture/cloudflare-backend-ota-design.md`
+  - updated `docs/runbooks/teamforge-icon-workflow.md`
+- Verification:
+  - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit` passed
+  - `TF_RELEASE_PUBLISH_TOKEN=test-token node scripts/publish-ota-release.mjs --dry-run ...`
+    passed and showed the OTA publish payload without reading
+    `TF_WEBHOOK_HMAC_SECRET`
+  - `git diff --check` passed
+- Operational follow-up before the next release rerun:
+  - `TF_RELEASE_PUBLISH_TOKEN` was provisioned in Cloudflare Worker secrets
+  - the same token was provisioned in GitHub Actions secrets
+  - the Worker was deployed after the auth split
+  - a direct `POST /internal/releases/publish` call with the new bearer token
+    now returns `400 missing_fields` instead of `403 invalid_authorization`,
+    which proves the dedicated token is accepted by the live route
+  - the old `v0.1.23` tag workflow still carries the pre-hardening release
+    script and workflow config, so the next real validation step is to ship
+    this hardening on `main` and cut the next release tag
+
+## Goal
+
 Cut the next TeamForge release through the existing CI/CD path by turning the
 current worktree into a coherent `v0.1.23` release snapshot.
 
@@ -11,9 +84,30 @@ current worktree into a coherent `v0.1.23` release snapshot.
       `0.1.23`.
 - [x] Verify the release snapshot locally with the standard frontend/Rust
       checks plus the known bundle/signing boundary.
-- [ ] Commit the release snapshot, create tag `v0.1.23`, and push the commit
+- [x] Commit the release snapshot, create tag `v0.1.23`, and push the commit
       and tag to trigger `.github/workflows/release.yml`.
-- [ ] Record the release result in `tasks/todo.md`.
+- [x] Record the release result in `tasks/todo.md`.
+
+## Review
+
+- Release snapshot:
+  - committed as `841c41d` with
+    `release(0.1.23): canonical cleanup and icon pipeline`
+  - pushed `main` and tag `v0.1.23` to `origin`
+- Local verification:
+  - `pnpm build` passed
+  - `cargo check --manifest-path src-tauri/Cargo.toml` passed
+  - `cargo tauri build --bundles app` produced the macOS `.app` and updater
+    archive before the expected local signing-env stop
+- First CI release result:
+  - `.github/workflows/release.yml` triggered correctly for `v0.1.23`
+  - the run built the Apple Silicon app and updater bundle, uploaded the
+    artifact, signature, and release notes to R2, then failed in
+    `Publish OTA release (Apple Silicon)` with:
+    - `403 invalid_authorization`
+    - `Invalid bearer token.`
+  - that failure is the reason the follow-up hardening slice now moves OTA
+    publication onto `TF_RELEASE_PUBLISH_TOKEN`
 
 ## Goal
 

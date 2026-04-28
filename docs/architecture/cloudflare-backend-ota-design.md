@@ -143,6 +143,7 @@ Use Secrets Store for the low-cardinality shared secrets:
 - `TF_SLACK_BOT_TOKEN_GLOBAL`
 - `TF_CREDENTIAL_ENVELOPE_KEY`
 - `TF_WEBHOOK_HMAC_SECRET`
+- `TF_RELEASE_PUBLISH_TOKEN`
 
 ### 6.2 Worker-Local Non-Secret Config
 
@@ -483,6 +484,8 @@ Phase 2 preferred:
 - request handlers return job IDs quickly
 - heavy sync output lands in R2 with D1 metadata references
 - normalization apply uses a Durable Object lock per workspace
+- `/internal/releases/publish` uses a dedicated bearer token
+  (`TF_RELEASE_PUBLISH_TOKEN`) instead of the shared webhook callback secret
 
 ## 10. OTA Manifest Flow
 

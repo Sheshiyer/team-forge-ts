@@ -192,11 +192,10 @@ async function main() {
 
   const publishToken = pickString(
     args["auth-token"],
-    process.env.TF_WEBHOOK_HMAC_SECRET,
     process.env.TF_RELEASE_PUBLISH_TOKEN,
   );
   if (!dryRun && !publishToken) {
-    fail("TF_WEBHOOK_HMAC_SECRET or --auth-token is required for the publish callback.");
+    fail("TF_RELEASE_PUBLISH_TOKEN or --auth-token is required for the publish callback.");
   }
 
   const signature = (await readFile(signaturePath, "utf8")).trim();

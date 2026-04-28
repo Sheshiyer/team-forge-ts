@@ -29,6 +29,7 @@ Use Cloudflare secret management for:
 - `TF_SLACK_BOT_TOKEN_GLOBAL`
 - `TF_CREDENTIAL_ENVELOPE_KEY`
 - `TF_WEBHOOK_HMAC_SECRET`
+- `TF_RELEASE_PUBLISH_TOKEN`
 
 ### Worker runtime bindings
 
@@ -49,6 +50,17 @@ These must never move to Worker runtime:
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
 - Apple code signing identity and notarization credentials
 - GitHub release publication tokens when used
+
+### Shared Worker + CI release callback secret
+
+The OTA release publication callback is a special case:
+
+- `TF_RELEASE_PUBLISH_TOKEN` must exist in Worker secret storage so the Worker
+  can validate `/internal/releases/publish`
+- the same token must exist in GitHub Actions secrets so release CI can call
+  that route
+- this token must not be reused for generic webhook, sync, or agent-feed
+  callbacks
 
 ## Credential Modes
 

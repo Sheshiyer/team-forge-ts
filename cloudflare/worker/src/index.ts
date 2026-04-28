@@ -4,6 +4,14 @@ import { jsonError, jsonOk } from "./lib/response";
 import { handleInternalRequest } from "./routes/internal";
 import { handleV1Request } from "./routes/v1";
 
+function getInternalRouteToken(pathname: string, env: Env): string | undefined {
+  if (pathname === "/internal/releases/publish") {
+    return env.TF_RELEASE_PUBLISH_TOKEN;
+  }
+
+  return env.TF_WEBHOOK_HMAC_SECRET;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -31,7 +39,7 @@ export default {
     if (url.pathname.startsWith("/internal/")) {
       const authFailure = requireBearerAuth(
         request,
-        env.TF_WEBHOOK_HMAC_SECRET,
+        getInternalRouteToken(url.pathname, env),
         "internal",
       );
       if (authFailure) return authFailure;

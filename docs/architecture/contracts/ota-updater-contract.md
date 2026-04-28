@@ -40,6 +40,8 @@ Implementation will touch these lock zones:
 - notarize macOS release as needed
 - upload artifacts and `.sig` files to R2
 - publish release metadata to D1 or an equivalent Worker-readable control plane
+- authenticate the publish callback with `TF_RELEASE_PUBLISH_TOKEN`, not the
+  generic webhook callback secret
 
 ## Artifact Contract
 
