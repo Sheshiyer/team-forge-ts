@@ -19,6 +19,114 @@ export interface OverviewData {
   totalCount: number;
 }
 
+export interface FounderSummaryView {
+  teamHoursThisMonth: number;
+  teamQuota: number;
+  utilizationRate: number;
+  activeCount: number;
+  totalCount: number;
+  activeDeliveryStreams: number;
+  canonicalClients: number;
+  operationalOnlyClients: number;
+  atRiskClients: number;
+  onboardingAtRisk: number;
+  unresolvedReviewItems: number;
+  whiteLabelableCount: number;
+  researchNeedsTriage: number;
+}
+
+export interface FounderActiveStreamView {
+  id: string;
+  projectId: string | null;
+  title: string;
+  source: string;
+  status: string;
+  repo: string | null;
+  milestone: string | null;
+  openIssues: number;
+  percentComplete: number;
+  totalHours: number;
+  latestActivity: string | null;
+  attention: string;
+}
+
+export interface FounderPortfolioSummaryView {
+  totalSurfaces: number;
+  productCount: number;
+  clientDeliveryCount: number;
+  activeCount: number;
+  pausedCount: number;
+  completedCount: number;
+  archivedCount: number;
+  otherCount: number;
+  whiteLabelableCount: number;
+}
+
+export interface FounderNeedsReviewItemView {
+  id: string;
+  category: string;
+  title: string;
+  signal: string;
+  detail: string;
+  sourceRelativePath: string | null;
+}
+
+export interface FounderNeedsReviewView {
+  totalItems: number;
+  staleNoteCount: number;
+  orphanedIdentityCount: number;
+  onboardingRiskCount: number;
+  items: FounderNeedsReviewItemView[];
+}
+
+export interface VaultPortfolioSurface {
+  id: string;
+  projectId: string | null;
+  clientId: string | null;
+  title: string;
+  kind: string;
+  status: string;
+  commercialReuse: string | null;
+  clientName: string | null;
+  sourceRelativePath: string;
+}
+
+export interface VaultCaptureRegistryEntry {
+  captured: string | null;
+  source: string;
+  title: string;
+  status: string;
+  triageOwner: string | null;
+  promotionTarget: string | null;
+  rawNote: string | null;
+  destination: string | null;
+}
+
+export interface VaultResearchHubSummary {
+  registryRelativePath: string;
+  inboxRelativePath: string;
+  totalCaptures: number;
+  rawCaptureCount: number;
+  needsTriageCount: number;
+  routedCount: number;
+  promotedCount: number;
+  archivedCount: number;
+  duplicateCount: number;
+  inboxNoteCount: number;
+  liveResearchCount: number;
+  captures: VaultCaptureRegistryEntry[];
+}
+
+export interface FounderCommandCenterView {
+  summary: FounderSummaryView;
+  activeStreams: FounderActiveStreamView[];
+  portfolio: FounderPortfolioSummaryView;
+  whiteLabelable: VaultPortfolioSurface[];
+  needsReview: FounderNeedsReviewView;
+  researchHub: VaultResearchHubSummary;
+  vaultError: string | null;
+}
+
 export interface QuotaRow {
   employeeName: string;
   thisWeekHours: number;
@@ -46,6 +154,7 @@ export interface ProjectCatalogItem {
 
 export interface ExecutionProjectView {
   id: string;
+  teamforgeProjectId: string | null;
   source: string;
   repo: string | null;
   milestone: string | null;
@@ -78,7 +187,9 @@ export interface TeamforgeProject {
   slug: string;
   name: string;
   portfolioName: string | null;
+  clientId: string | null;
   clientName: string | null;
+  clockifyProjectId: string | null;
   projectType: string | null;
   status: string;
   syncMode: string;
@@ -278,6 +389,49 @@ export interface PaperclipUiOpenResult {
   url: string;
 }
 
+export interface LocalWorkspaceStatus {
+  localVaultRoot: string | null;
+  vaultValidation: VaultDirectoryValidation;
+  paperclipScriptPath: string | null;
+  paperclipWorkingDir: string | null;
+  paperclipUiUrl: string | null;
+  teamforgeWorkspaceId: string | null;
+  teamforgeWorkspaceSource: string;
+  teamforgeWorkspaceError: string | null;
+  workerBaseUrl: string;
+  cloudAccessTokenConfigured: boolean;
+  nodeRuntimeVersion: string | null;
+  nodeRuntimeError: string | null;
+  parityScriptPath: string | null;
+  parityScriptSource: string | null;
+  parityScriptError: string | null;
+  founderSyncReady: boolean;
+  founderSyncMessage: string;
+}
+
+export interface LocalVaultSyncReport {
+  vaultRoot: string;
+  workspaceId: string;
+  workerBaseUrl: string;
+  scriptPath: string;
+  scriptSource: string;
+  nodeRuntimeVersion: string;
+  reportPath: string;
+  mode: string;
+  projectBriefsFound: number;
+  projectCreates: number;
+  projectUpdates: number;
+  clientProfilesFound: number;
+  clientProfilesApplied: number;
+  onboardingFlowsFound: number;
+  onboardingFlowsApplied: number;
+  employeeKpiNotesFound: number;
+  employeeKpisApplied: number;
+  warnings: string[];
+  failures: string[];
+  stdoutTail: string;
+}
+
 export interface TeamforgeProjectGithubRepoLinkInput {
   repo: string;
   displayName?: string | null;
@@ -309,7 +463,9 @@ export interface TeamforgeProjectInput {
   slug?: string | null;
   name: string;
   portfolioName?: string | null;
+  clientId?: string | null;
   clientName?: string | null;
+  clockifyProjectId?: string | null;
   projectType?: string | null;
   status?: string | null;
   syncMode?: string | null;
@@ -641,6 +797,16 @@ export interface VaultTeamProfileView {
   sourceLastModifiedAt: string;
 }
 
+export interface EmployeeKpiStatusView {
+  status: "onTrack" | "watch" | "drift" | "missingInputs";
+  label: string;
+  scorePercent: number;
+  summary: string;
+  reasons: string[];
+  founderUpdateRequired: boolean;
+  founderUpdateReasons: string[];
+}
+
 export interface EmployeeSummaryView {
   employee: Employee;
   departmentNames: string[];
@@ -657,6 +823,7 @@ export interface EmployeeSummaryView {
   upcomingLeaves: LeaveView[];
   upcomingEvents: EmployeeScheduleEventView[];
   vaultProfile: VaultTeamProfileView | null;
+  kpiStatus: EmployeeKpiStatusView;
   kpiSnapshot: EmployeeKpiSnapshotView | null;
 }
 
@@ -754,6 +921,7 @@ export interface ActiveProjectIssueView {
   id: string;
   projectId: string | null;
   projectName: string;
+  clientId: string | null;
   clientName: string | null;
   repo: string;
   number: number;

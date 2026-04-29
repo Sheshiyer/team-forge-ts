@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useInvoke } from "../hooks/useInvoke";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 import { SkeletonCard, SkeletonTable } from "../components/ui/Skeleton";
 import type { OnboardingAudience, OnboardingFlowView } from "../lib/types";
+
+type OnboardingAudienceFilter = OnboardingAudience | "all";
 
 function MetricCard({
   label,
@@ -105,6 +108,35 @@ function formatDate(dateStr: string | null): string {
     day: "numeric",
     year: "numeric",
   });
+}
+
+function onboardingFlowNeedsReview(flow: OnboardingFlowView): boolean {
+  if (flow.status.toLowerCase() === "completed") {
+    return false;
+  }
+  if (flow.status.toLowerCase() === "stalled") {
+    return true;
+  }
+
+  return (
+    (flow.daysElapsed >= 14 && flow.progressPercent < 50) ||
+    (flow.daysElapsed >= 30 && flow.progressPercent < 100)
+  );
+}
+
+function matchesStatusFilter(flow: OnboardingFlowView, statusFilter: string | null): boolean {
+  switch (statusFilter) {
+    case "active":
+      return flow.status.toLowerCase() !== "completed";
+    case "stalled":
+      return flow.status.toLowerCase() === "stalled";
+    case "completed":
+      return flow.status.toLowerCase() === "completed";
+    case "at-risk":
+      return onboardingFlowNeedsReview(flow);
+    default:
+      return true;
+  }
 }
 
 function TaskCheckItem({
@@ -334,10 +366,20 @@ function OnboardingCard({ flow }: { flow: OnboardingFlowView }) {
 
 function Onboarding() {
   const api = useInvoke();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [flows, setFlows] = useState<OnboardingFlowView[]>([]);
-  const [tab, setTab] = useState<OnboardingAudience>("client");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  const audienceParam = searchParams.get("audience");
+  const tab: OnboardingAudienceFilter =
+    audienceParam === "employee"
+      ? "employee"
+      : audienceParam === "all"
+        ? "all"
+        : "client";
+  const statusFilter = searchParams.get("status");
+  const flowFilter = searchParams.get("flow")?.trim().toLowerCase() ?? null;
 
   const load = useCallback(async () => {
     try {
@@ -357,6 +399,21 @@ function Onboarding() {
     load();
   }, [load]);
 
+  const updateSearchParam = useCallback(
+    (key: string, value: string | null) => {
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current);
+        if (value && value.trim()) {
+          next.set(key, value);
+        } else {
+          next.delete(key);
+        }
+        return next;
+      });
+    },
+    [setSearchParams],
+  );
+
   if (loading) {
     return (
       <div>
@@ -374,7 +431,12 @@ function Onboarding() {
     );
   }
 
-  const visibleFlows = flows.filter((flow) => flow.audience === tab);
+  const visibleFlows = flows.filter(
+    (flow) =>
+      (tab === "all" || flow.audience === tab) &&
+      matchesStatusFilter(flow, statusFilter) &&
+      (flowFilter === null || flow.id.trim().toLowerCase() === flowFilter),
+  );
   const active = visibleFlows.filter(
     (f) => f.status.toLowerCase() !== "completed"
   );
@@ -390,7 +452,12 @@ function Onboarding() {
   const stalledFlows = visibleFlows.filter(
     (flow) => flow.status.toLowerCase() === "stalled"
   ).length;
-  const heading = tab === "client" ? "CLIENT ONBOARDING" : "EMPLOYEE ONBOARDING";
+  const heading =
+    tab === "client"
+      ? "CLIENT ONBOARDING"
+      : tab === "employee"
+        ? "EMPLOYEE ONBOARDING"
+        : "ONBOARDING FLOWS";
 
   return (
     <div>
@@ -407,7 +474,16 @@ function Onboarding() {
 
       <div style={styles.tabRow}>
         <button
-          onClick={() => setTab("client")}
+          onClick={() => updateSearchParam("audience", "all")}
+          style={{
+            ...styles.tabButton,
+            ...(tab === "all" ? styles.tabButtonActive : null),
+          }}
+        >
+          ALL ONBOARDING
+        </button>
+        <button
+          onClick={() => updateSearchParam("audience", "client")}
           style={{
             ...styles.tabButton,
             ...(tab === "client" ? styles.tabButtonActive : null),
@@ -416,13 +492,66 @@ function Onboarding() {
           CLIENT ONBOARDING
         </button>
         <button
-          onClick={() => setTab("employee")}
+          onClick={() => updateSearchParam("audience", "employee")}
           style={{
             ...styles.tabButton,
             ...(tab === "employee" ? styles.tabButtonActive : null),
           }}
         >
           EMPLOYEE ONBOARDING
+        </button>
+      </div>
+
+      <div style={styles.statusFilterRow}>
+        <button
+          type="button"
+          onClick={() => updateSearchParam("status", null)}
+          style={{
+            ...styles.statusFilterButton,
+            ...(statusFilter === null ? styles.statusFilterButtonActive : null),
+          }}
+        >
+          ALL FLOWS
+        </button>
+        <button
+          type="button"
+          onClick={() => updateSearchParam("status", "active")}
+          style={{
+            ...styles.statusFilterButton,
+            ...(statusFilter === "active" ? styles.statusFilterButtonActive : null),
+          }}
+        >
+          ACTIVE
+        </button>
+        <button
+          type="button"
+          onClick={() => updateSearchParam("status", "at-risk")}
+          style={{
+            ...styles.statusFilterButton,
+            ...(statusFilter === "at-risk" ? styles.statusFilterButtonActive : null),
+          }}
+        >
+          AT RISK
+        </button>
+        <button
+          type="button"
+          onClick={() => updateSearchParam("status", "stalled")}
+          style={{
+            ...styles.statusFilterButton,
+            ...(statusFilter === "stalled" ? styles.statusFilterButtonActive : null),
+          }}
+        >
+          STALLED
+        </button>
+        <button
+          type="button"
+          onClick={() => updateSearchParam("status", "completed")}
+          style={{
+            ...styles.statusFilterButton,
+            ...(statusFilter === "completed" ? styles.statusFilterButtonActive : null),
+          }}
+        >
+          COMPLETED
         </button>
       </div>
 
@@ -461,7 +590,9 @@ function Onboarding() {
           <p style={styles.emptyText}>
             {tab === "client"
               ? "NO CANONICAL CLIENT ONBOARDING FLOWS YET."
-              : "NO CANONICAL EMPLOYEE ONBOARDING FLOWS YET."}
+              : tab === "employee"
+                ? "NO CANONICAL EMPLOYEE ONBOARDING FLOWS YET."
+                : "NO CANONICAL ONBOARDING FLOWS MATCH CURRENT FILTERS."}
           </p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -483,6 +614,12 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 10,
     marginBottom: 16,
   },
+  statusFilterRow: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap" as const,
+    marginBottom: 20,
+  },
   tabButton: {
     background: "rgba(153, 153, 204, 0.08)",
     border: "1px solid rgba(153, 153, 204, 0.22)",
@@ -497,6 +634,19 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: "var(--lcars-orange)",
     color: "var(--lcars-orange)",
     boxShadow: "0 0 10px rgba(255, 153, 0, 0.14)",
+  },
+  statusFilterButton: {
+    ...lcarsPageStyles.ghostButton,
+    padding: "6px 12px",
+    fontSize: 10,
+    color: "var(--lcars-lavender)",
+    border: "1px solid rgba(153, 153, 204, 0.22)",
+  },
+  statusFilterButtonActive: {
+    borderColor: "var(--lcars-cyan)",
+    color: "var(--lcars-cyan)",
+    background: "rgba(0, 204, 255, 0.08)",
+    boxShadow: "0 0 10px rgba(0, 204, 255, 0.14)",
   },
   metricsRow: {
     display: "grid",

@@ -108,6 +108,7 @@ interface ProjectIssueFeedRow {
   workspace_id: string;
   project_id: string;
   project_name: string;
+  client_id: string | null;
   client_name: string | null;
   project_status: string;
   github_repo: string;
@@ -214,6 +215,7 @@ export interface ProjectIssueFeedItem {
   workspaceId: string;
   projectId: string;
   projectName: string;
+  clientId: string | null;
   clientName: string | null;
   projectStatus: string;
   repo: string;
@@ -346,6 +348,7 @@ export async function listProjectIssueFeed(
       m.workspace_id,
       m.project_id,
       p.name AS project_name,
+      p.client_id,
       p.client_name,
       p.status AS project_status,
       m.github_repo,
@@ -1770,6 +1773,7 @@ function mapProjectIssueFeedRow(row: ProjectIssueFeedRow): ProjectIssueFeedItem 
     workspaceId: row.workspace_id,
     projectId: row.project_id,
     projectName: row.project_name,
+    clientId: row.client_id,
     clientName: row.client_name,
     projectStatus: row.project_status,
     repo: row.github_repo,

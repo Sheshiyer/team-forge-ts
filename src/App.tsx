@@ -27,7 +27,7 @@ import type { PresenceStatus } from "./lib/types";
 
 const navSections = [
   {
-    label: "CORE SYSTEMS",
+    label: "COMMAND CENTER",
     color: "var(--lcars-orange)",
     items: [
       { path: "/", label: "Overview" },
@@ -36,7 +36,7 @@ const navSections = [
     ],
   },
   {
-    label: "HULY OPS",
+    label: "EXECUTION",
     color: "var(--lcars-peach)",
     items: [
       { path: "/sprints", label: "Sprints" },
@@ -44,11 +44,10 @@ const navSections = [
       { path: "/team", label: "Team" },
       { path: "/calendar", label: "Calendar" },
       { path: "/comms", label: "Comms" },
-      { path: "/boards", label: "Boards" },
     ],
   },
   {
-    label: "OPS MODULES",
+    label: "REGISTRY",
     color: "var(--lcars-cyan)",
     items: [
       { path: "/clients", label: "Clients" },
@@ -154,7 +153,7 @@ function App() {
       if (e.metaKey || e.ctrlKey) {
         const routes = [
           "/", "/timesheet", "/projects", "/sprints", "/insights",
-          "/team", "/calendar", "/comms", "/boards", "/activity",
+          "/team", "/calendar", "/comms", "/activity", "/live",
         ];
         const num = parseInt(e.key);
         if (num >= 1 && num <= 9) {
@@ -167,7 +166,7 @@ function App() {
         }
         if (e.key === "-") {
           e.preventDefault();
-          navigate("/live");
+          navigate("/clients");
         }
         if (e.key === "=") {
           e.preventDefault();

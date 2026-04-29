@@ -103,7 +103,9 @@ pub struct TeamforgeProject {
     pub slug: String,
     pub name: String,
     pub portfolio_name: Option<String>,
+    pub client_id: Option<String>,
     pub client_name: Option<String>,
+    pub clockify_project_id: Option<String>,
     pub project_type: Option<String>,
     pub status: String,
     pub sync_mode: String,
@@ -269,6 +271,7 @@ pub struct TeamforgeActiveProjectIssueCache {
     pub workspace_id: String,
     pub project_id: Option<String>,
     pub project_name: String,
+    pub client_id: Option<String>,
     pub client_name: Option<String>,
     pub repo: String,
     pub number: i64,
@@ -710,6 +713,7 @@ pub struct TeamforgeProjectControlPlaneView {
 #[serde(rename_all = "camelCase")]
 pub struct ExecutionProjectView {
     pub id: String,
+    pub teamforge_project_id: Option<String>,
     pub source: String,
     pub repo: Option<String>,
     pub milestone: Option<String>,
@@ -1059,6 +1063,18 @@ pub struct VaultTeamProfileView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EmployeeKpiStatusView {
+    pub status: String,
+    pub label: String,
+    pub score_percent: u32,
+    pub summary: String,
+    pub reasons: Vec<String>,
+    pub founder_update_required: bool,
+    pub founder_update_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EmployeeSummaryView {
     pub employee: Employee,
     pub department_names: Vec<String>,
@@ -1075,5 +1091,6 @@ pub struct EmployeeSummaryView {
     pub upcoming_leaves: Vec<LeaveView>,
     pub upcoming_events: Vec<EmployeeScheduleEventView>,
     pub vault_profile: Option<VaultTeamProfileView>,
+    pub kpi_status: EmployeeKpiStatusView,
     pub kpi_snapshot: Option<EmployeeKpiSnapshotView>,
 }

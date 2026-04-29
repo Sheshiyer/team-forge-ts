@@ -18,6 +18,8 @@ import type {
   ClockifyWorkspace,
   Employee,
   IdentityMapEntry,
+  LocalWorkspaceStatus,
+  LocalVaultSyncReport,
   VaultDirectoryValidation,
   SyncState,
 } from "../lib/types";
@@ -125,10 +127,15 @@ function Settings() {
   const [paperclipScriptPath, setPaperclipScriptPath] = useState("");
   const [paperclipWorkingDir, setPaperclipWorkingDir] = useState("");
   const [paperclipUiUrl, setPaperclipUiUrl] = useState("");
+  const [teamforgeWorkspaceId, setTeamforgeWorkspaceId] = useState("");
   const [localWorkspaceMessage, setLocalWorkspaceMessage] = useState<string | null>(null);
+  const [localWorkspaceStatus, setLocalWorkspaceStatus] =
+    useState<LocalWorkspaceStatus | null>(null);
   const [vaultValidation, setVaultValidation] = useState<VaultDirectoryValidation | null>(null);
   const [vaultPicking, setVaultPicking] = useState(false);
   const [vaultValidating, setVaultValidating] = useState(false);
+  const [localVaultSyncing, setLocalVaultSyncing] = useState(false);
+  const [localVaultSyncMessage, setLocalVaultSyncMessage] = useState<string | null>(null);
   const [paperclipLaunching, setPaperclipLaunching] = useState(false);
   const [paperclipLaunchMessage, setPaperclipLaunchMessage] = useState<string | null>(null);
   const [paperclipOpening, setPaperclipOpening] = useState(false);
@@ -175,6 +182,11 @@ function Settings() {
   const vaultConfigured = localVaultRoot.trim().length > 0;
   const paperclipScriptConfigured = paperclipScriptPath.trim().length > 0;
   const paperclipUiConfigured = paperclipUiUrl.trim().length > 0;
+  const workspaceIdConfigured = teamforgeWorkspaceId.trim().length > 0;
+  const founderSyncReady = localWorkspaceStatus?.founderSyncReady ?? false;
+  const founderSyncStatusColor = founderSyncReady
+    ? "var(--lcars-green)"
+    : "var(--lcars-orange)";
   const slackSetupStatus = !trimmedSlackToken
     ? "NOT CONFIGURED"
     : trimmedSlackToken.startsWith("xoxb-")
@@ -247,12 +259,21 @@ function Settings() {
       setCloudCredentialsAccessToken(
         settings.cloud_credentials_access_token || ""
       );
+      setTeamforgeWorkspaceId(settings.teamforge_workspace_id || "");
       setLocalVaultRoot(settings.local_vault_root || "");
       setPaperclipScriptPath(settings.paperclip_script_path || "");
       setPaperclipWorkingDir(settings.paperclip_working_dir || "");
       setPaperclipUiUrl(settings.paperclip_ui_url || "http://127.0.0.1:3100");
     } catch { /* Settings may not exist yet */ }
   }, []);
+
+  const loadLocalWorkspaceStatus = useCallback(async () => {
+    try {
+      setLocalWorkspaceStatus(await api.getLocalWorkspaceStatus());
+    } catch {
+      setLocalWorkspaceStatus(null);
+    }
+  }, [api]);
 
   const loadIdentityReviewQueue = useCallback(async () => {
     setIdentityReviewLoading(true);
@@ -287,10 +308,17 @@ function Settings() {
 
   useEffect(() => {
     loadSettings();
+    loadLocalWorkspaceStatus();
     loadSyncStatus();
     loadEmployees();
     loadIdentityReviewQueue();
-  }, [loadIdentityReviewQueue, loadSettings, loadSyncStatus, loadEmployees]);
+  }, [
+    loadIdentityReviewQueue,
+    loadLocalWorkspaceStatus,
+    loadSettings,
+    loadSyncStatus,
+    loadEmployees,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -636,16 +664,36 @@ function Settings() {
     }
   };
 
-  const handleSaveLocalWorkspace = async () => {
-    setLocalWorkspaceMessage(null);
-    try {
+  const persistLocalWorkspaceSettings = useCallback(
+    async (showSuccessMessage: boolean) => {
+      await api.saveSetting("teamforge_workspace_id", teamforgeWorkspaceId.trim());
       await api.saveSetting("local_vault_root", localVaultRoot.trim());
       await api.saveSetting("paperclip_script_path", paperclipScriptPath.trim());
       await api.saveSetting("paperclip_working_dir", paperclipWorkingDir.trim());
       await api.saveSetting("paperclip_ui_url", paperclipUiUrl.trim());
       await loadSettings();
-      setLocalWorkspaceMessage("Local workspace settings saved");
-      setTimeout(() => setLocalWorkspaceMessage(null), 3000);
+      await loadLocalWorkspaceStatus();
+      if (showSuccessMessage) {
+        setLocalWorkspaceMessage("Local workspace settings saved");
+        setTimeout(() => setLocalWorkspaceMessage(null), 3000);
+      }
+    },
+    [
+      api,
+      loadLocalWorkspaceStatus,
+      loadSettings,
+      localVaultRoot,
+      paperclipScriptPath,
+      paperclipUiUrl,
+      paperclipWorkingDir,
+      teamforgeWorkspaceId,
+    ]
+  );
+
+  const handleSaveLocalWorkspace = async () => {
+    setLocalWorkspaceMessage(null);
+    try {
+      await persistLocalWorkspaceSettings(true);
     } catch (err) {
       setLocalWorkspaceMessage(`Error: ${String(err)}`);
     }
@@ -726,6 +774,32 @@ function Settings() {
       setPaperclipOpenMessage(`Error: ${String(err)}`);
     } finally {
       setPaperclipOpening(false);
+    }
+  };
+
+  const handleSyncLocalVault = async () => {
+    setLocalVaultSyncing(true);
+    setLocalVaultSyncMessage(null);
+    setLocalWorkspaceMessage(null);
+    try {
+      await persistLocalWorkspaceSettings(false);
+      const report: LocalVaultSyncReport = await api.syncLocalVaultToTeamforge();
+      const summary = [
+        `${report.projectCreates + report.projectUpdates} projects`,
+        `${report.clientProfilesApplied} client profiles`,
+        `${report.onboardingFlowsApplied} onboarding flows`,
+        `${report.employeeKpisApplied} KPI updates`,
+      ].join(", ");
+      const warningSuffix =
+        report.warnings.length > 0 ? ` • ${report.warnings.length} warnings` : "";
+      setLocalVaultSyncMessage(`Vault sync completed (${summary}${warningSuffix})`);
+      await loadSyncStatus();
+      await loadIdentityReviewQueue();
+      await loadLocalWorkspaceStatus();
+    } catch (err) {
+      setLocalVaultSyncMessage(`Error: ${String(err)}`);
+    } finally {
+      setLocalVaultSyncing(false);
     }
   };
 
@@ -1523,6 +1597,32 @@ function Settings() {
               {paperclipUiConfigured ? "READY" : "MISSING"}
             </span>
           </div>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>TEAMFORGE WORKSPACE</span>
+            <span
+              style={{
+                ...styles.summaryValue,
+                color: workspaceIdConfigured
+                  ? "var(--lcars-green)"
+                  : "var(--lcars-orange)",
+              }}
+            >
+              {teamforgeWorkspaceId.trim() ||
+                localWorkspaceStatus?.teamforgeWorkspaceId ||
+                "UNSET"}
+            </span>
+          </div>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>FOUNDER SYNC</span>
+            <span
+              style={{
+                ...styles.summaryValue,
+                color: founderSyncStatusColor,
+              }}
+            >
+              {founderSyncReady ? "READY" : "BLOCKED"}
+            </span>
+          </div>
         </div>
 
         <div style={styles.field}>
@@ -1621,6 +1721,29 @@ function Settings() {
           </div>
         </div>
 
+        <div style={styles.field}>
+          <label style={styles.label}>TEAMFORGE WORKSPACE ID</label>
+          <input
+            value={teamforgeWorkspaceId}
+            onChange={(event) => setTeamforgeWorkspaceId(event.target.value)}
+            placeholder="ws_thoughtseed"
+            style={styles.input}
+          />
+          <div style={styles.helperText}>
+            SAVE THE CANONICAL WORKSPACE ID HERE IF THIS MACHINE SHOULD NOT RELY
+            ON INFERENCE FROM THE CURRENT REMOTE PROJECT GRAPH.
+          </div>
+          {localWorkspaceStatus?.teamforgeWorkspaceSource ? (
+            <div style={styles.helperText}>
+              WORKSPACE SOURCE:{" "}
+              {localWorkspaceStatus.teamforgeWorkspaceSource.toUpperCase()}
+              {localWorkspaceStatus.teamforgeWorkspaceError
+                ? ` • ${localWorkspaceStatus.teamforgeWorkspaceError}`
+                : ""}
+            </div>
+          ) : null}
+        </div>
+
         <div style={styles.buttonRow}>
           <button onClick={handleSaveLocalWorkspace} style={styles.primaryButton}>
             SAVE LOCAL WORKSPACE
@@ -1645,9 +1768,48 @@ function Settings() {
           >
             {paperclipOpening ? "OPENING..." : "OPEN PAPERCLIP UI"}
           </button>
+          <button
+            onClick={handleSyncLocalVault}
+            disabled={localVaultSyncing || !founderSyncReady}
+            style={{
+              ...styles.ghostButton,
+              opacity: localVaultSyncing || !founderSyncReady ? 0.5 : 1,
+            }}
+          >
+            {localVaultSyncing ? "SYNCING..." : "SYNC VAULT TO TEAMFORGE"}
+          </button>
         </div>
 
-        {(localWorkspaceMessage || paperclipLaunchMessage || paperclipOpenMessage) && (
+        {localWorkspaceStatus && (
+          <div style={styles.statusBox}>
+            <div style={{ ...styles.statusTitle, color: founderSyncStatusColor }}>
+              FOUNDER SYNC • {founderSyncReady ? "READY" : "BLOCKED"}
+            </div>
+            <div style={styles.statusBody}>
+              {localWorkspaceStatus.founderSyncMessage.toUpperCase()}
+            </div>
+            <div style={styles.helperText}>
+              WORKER: {localWorkspaceStatus.workerBaseUrl}
+            </div>
+            <div style={styles.helperText}>
+              NODE:{" "}
+              {localWorkspaceStatus.nodeRuntimeVersion ||
+                localWorkspaceStatus.nodeRuntimeError ||
+                "UNAVAILABLE"}
+            </div>
+            <div style={styles.helperText}>
+              PARITY SCRIPT:{" "}
+              {localWorkspaceStatus.parityScriptSource
+                ? `${localWorkspaceStatus.parityScriptSource.toUpperCase()} • ${localWorkspaceStatus.parityScriptPath}`
+                : localWorkspaceStatus.parityScriptError || "UNAVAILABLE"}
+            </div>
+          </div>
+        )}
+
+        {(localWorkspaceMessage ||
+          localVaultSyncMessage ||
+          paperclipLaunchMessage ||
+          paperclipOpenMessage) && (
           <div style={styles.statusBox}>
             {localWorkspaceMessage && (
               <div
@@ -1659,6 +1821,18 @@ function Settings() {
                 }}
               >
                 {localWorkspaceMessage.toUpperCase()}
+              </div>
+            )}
+            {localVaultSyncMessage && (
+              <div
+                style={{
+                  ...styles.statusBody,
+                  color: localVaultSyncMessage.startsWith("Error")
+                    ? "var(--lcars-red)"
+                    : "var(--lcars-green)",
+                }}
+              >
+                {localVaultSyncMessage.toUpperCase()}
               </div>
             )}
             {paperclipLaunchMessage && (

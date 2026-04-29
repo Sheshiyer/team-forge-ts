@@ -50,6 +50,7 @@ function printHelp() {
 Options:
   --apply                    Write merged project graphs to TeamForge.
   --local-only               Skip TeamForge API reads and operate from vault only.
+  --kpi-only                 Limit the pass to employee KPI notes + local TeamForge DB sync.
   --vault-root <path>        Override labs vault root.
   --worker-base-url <url>    Override TeamForge Worker base URL.
   --teamforge-db <path>      Override local TeamForge SQLite database path for KPI imports.
@@ -60,6 +61,7 @@ Options:
 
 Examples:
   node scripts/teamforge-vault-parity.mjs --local-only
+  node scripts/teamforge-vault-parity.mjs --kpi-only --local-only --apply
   node scripts/teamforge-vault-parity.mjs --workspace-id tf-prod --apply
   node scripts/teamforge-vault-parity.mjs --local-only --apply --teamforge-db ~/Library/Application\\ Support/com.thoughtseed.teamforge/teamforge.db
   node scripts/teamforge-vault-parity.mjs --project axtech --project heyzack --report /tmp/teamforge-parity.json
@@ -70,6 +72,7 @@ function parseArgs(argv) {
   const args = {
     apply: false,
     localOnly: false,
+    kpiOnly: false,
     vaultRoot: DEFAULT_VAULT_ROOT,
     workerBaseUrl: DEFAULT_WORKER_BASE_URL,
     teamforgeDbPath: DEFAULT_TEAMFORGE_DB_PATH,
@@ -90,6 +93,10 @@ function parseArgs(argv) {
     }
     if (value === "--local-only") {
       args.localOnly = true;
+      continue;
+    }
+    if (value === "--kpi-only") {
+      args.kpiOnly = true;
       continue;
     }
     if (value === "--vault-root") {
@@ -446,6 +453,19 @@ function buildParityArtifacts({ filePath, projectId, projectName, source, source
   return artifacts;
 }
 
+function findExternalRefId(externalRefs, systemNames) {
+  if (!Array.isArray(externalRefs)) return null;
+  const normalizedSystems = systemNames.map((system) => String(system).trim().toLowerCase());
+  for (const item of externalRefs) {
+    const source = normalizeOptionalString(item?.system)?.toLowerCase();
+    const externalId = normalizeOptionalString(item?.id);
+    if (source && externalId && normalizedSystems.includes(source)) {
+      return externalId;
+    }
+  }
+  return null;
+}
+
 function normalizeProjectBrief(filePath, vaultRoot) {
   return Promise.all([fs.readFile(filePath, "utf8"), fs.stat(filePath)]).then(([contents, stats]) => {
     const { data, body } = parseFrontmatter(contents);
@@ -469,10 +489,12 @@ function normalizeProjectBrief(filePath, vaultRoot) {
     const source = String(data.source ?? "").trim() || null;
     const sourceUrl = String(data.source_url ?? "").trim() || null;
     const tags = Array.isArray(data.tags) ? data.tags.map(String) : [];
+    const externalRefs = Array.isArray(data.external_refs) ? data.external_refs : [];
     const projectType = parentProject ? "deliverable" : "client-engagement";
     const portfolioName = parentProject ? titleizeSlug(parentProject) : null;
     const clientName = clientId ? titleizeSlug(clientId) : titleizeSlug(topClientFolder);
     const status = normalizeStatus(data.status, tags);
+    const clockifyProjectId = findExternalRefId(externalRefs, ["clockify", "clockify-project"]);
 
     return {
       key: projectId,
@@ -484,7 +506,9 @@ function normalizeProjectBrief(filePath, vaultRoot) {
         name: projectName,
         slug: projectId || null,
         portfolioName,
+        clientId,
         clientName: clientName || null,
+        clockifyProjectId,
         projectType,
         status,
         visibility: "workspace",
@@ -504,9 +528,11 @@ function normalizeProjectBrief(filePath, vaultRoot) {
         lastModifiedAt: stats.mtime.toISOString(),
         owner: String(data.owner ?? "").trim() || null,
         clientId,
+        clockifyProjectId,
         source,
         sourceUrl,
         tags,
+        externalRefs,
       },
       warnings,
     };
@@ -569,6 +595,85 @@ function parseChecklistOrBulletList(sectionContent) {
     .filter(Boolean);
 }
 
+function parseJsonSection(sectionContent, warnings, label) {
+  const raw = String(sectionContent ?? "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  const fencedMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const jsonText = (fencedMatch?.[1] ?? raw).trim();
+  if (!jsonText) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(jsonText);
+  } catch (error) {
+    warnings.push(`Invalid ${label} JSON: ${error.message}`);
+    return null;
+  }
+}
+
+function normalizeKpiContracts(sectionContent, warnings) {
+  const parsed = parseJsonSection(sectionContent, warnings, "kpi contracts");
+  if (parsed === null) {
+    return [];
+  }
+  if (!Array.isArray(parsed)) {
+    warnings.push("KPI contracts section must be a JSON array.");
+    return [];
+  }
+
+  return parsed
+    .map((contract, index) => {
+      if (!contract || typeof contract !== "object" || Array.isArray(contract)) {
+        warnings.push(`KPI contract #${index + 1} is not a JSON object.`);
+        return null;
+      }
+
+      const contractId =
+        normalizeOptionalString(contract.contractId) ??
+        slugify(contract.monthlyKpi ?? contract.offerLetterResponsibility ?? `contract-${index + 1}`);
+      const monthlyKpi = normalizeOptionalString(contract.monthlyKpi);
+      const offerLetterResponsibility = normalizeOptionalString(contract.offerLetterResponsibility);
+      const passCondition = normalizeOptionalString(contract.passCondition);
+      const notes = normalizeOptionalString(contract.notes);
+      const projectIds = normalizeStringArray(contract.projectIds);
+      const clientIds = normalizeStringArray(contract.clientIds);
+      const proofSignals = normalizeStringArray(contract.proofSignals);
+      const fallbackManualEvidence = normalizeStringArray(contract.fallbackManualEvidence);
+
+      if (!contractId) {
+        warnings.push(`KPI contract #${index + 1} is missing contractId.`);
+      }
+      if (!monthlyKpi) {
+        warnings.push(`KPI contract ${contractId || `#${index + 1}`} is missing monthlyKpi.`);
+      }
+      if (!offerLetterResponsibility) {
+        warnings.push(
+          `KPI contract ${contractId || `#${index + 1}`} is missing offerLetterResponsibility.`,
+        );
+      }
+      if (proofSignals.length === 0) {
+        warnings.push(`KPI contract ${contractId || `#${index + 1}`} has no proofSignals.`);
+      }
+
+      return {
+        contractId,
+        monthlyKpi,
+        offerLetterResponsibility,
+        projectIds,
+        clientIds,
+        proofSignals,
+        passCondition,
+        fallbackManualEvidence,
+        notes,
+      };
+    })
+    .filter(Boolean);
+}
+
 function normalizeKpiNote(filePath, vaultRoot) {
   return Promise.all([fs.readFile(filePath, "utf8"), fs.stat(filePath)]).then(([contents, stats]) => {
     const { data, body } = parseFrontmatter(contents);
@@ -584,6 +689,17 @@ function normalizeKpiNote(filePath, vaultRoot) {
     }
     if (!heading) {
       warnings.push("Missing H1 title; using filename-derived KPI title.");
+    }
+
+    const contractSource = {
+      type: normalizeOptionalString(data.contract_source_type) ?? "offer-letter-appendix-1",
+      file: normalizeOptionalString(data.contract_source_file),
+      section: normalizeOptionalString(data.contract_source_section) ?? "Appendix 1",
+      notes: normalizeOptionalString(data.contract_source_notes),
+    };
+    const kpiContracts = normalizeKpiContracts(findSectionContent(sections, "kpi contracts"), warnings);
+    if (kpiContracts.length > 0 && !contractSource.file) {
+      warnings.push("KPI contracts exist, but contract_source_file is missing in frontmatter.");
     }
 
     return {
@@ -608,6 +724,8 @@ function normalizeKpiNote(filePath, vaultRoot) {
         findSectionContent(sections, "cross role dependencies"),
       ),
       evidenceSources: parseChecklistOrBulletList(findSectionContent(sections, "evidence sources")),
+      contractSource,
+      kpiContracts,
       compensationMilestones: parseChecklistOrBulletList(
         findSectionContent(sections, "compensation linked milestones"),
       ),
@@ -897,6 +1015,8 @@ function employeeKpiTableSql() {
       yearly_milestones_json TEXT NOT NULL DEFAULT '[]',
       cross_role_dependencies_json TEXT NOT NULL DEFAULT '[]',
       evidence_sources_json TEXT NOT NULL DEFAULT '[]',
+      contract_source_json TEXT NOT NULL DEFAULT '{}',
+      kpi_contracts_json TEXT NOT NULL DEFAULT '[]',
       compensation_milestones_json TEXT NOT NULL DEFAULT '[]',
       gap_flags_json TEXT NOT NULL DEFAULT '[]',
       synthesis_review_markdown TEXT,
@@ -930,7 +1050,7 @@ function sqlLiteral(value) {
 }
 
 function runSqliteWrite(dbPath, sql) {
-  execFileSync("/usr/bin/sqlite3", [dbPath], {
+  execFileSync("/usr/bin/sqlite3", ["-cmd", ".timeout 5000", dbPath], {
     input: `${sql}\n`,
     encoding: "utf8",
   });
@@ -944,6 +1064,33 @@ ${employeeKpiTableSql()};
 ${employeeKpiIndexSql()};
 COMMIT;`,
   );
+
+  const db = new DatabaseSync(dbPath, { readonly: true });
+  const existingColumns = new Set(
+    db.prepare("PRAGMA table_info(employee_kpi_snapshots)").all().map((row) => row.name),
+  );
+  db.close();
+
+  const alterStatements = [];
+  if (!existingColumns.has("contract_source_json")) {
+    alterStatements.push(
+      "ALTER TABLE employee_kpi_snapshots ADD COLUMN contract_source_json TEXT NOT NULL DEFAULT '{}'",
+    );
+  }
+  if (!existingColumns.has("kpi_contracts_json")) {
+    alterStatements.push(
+      "ALTER TABLE employee_kpi_snapshots ADD COLUMN kpi_contracts_json TEXT NOT NULL DEFAULT '[]'",
+    );
+  }
+
+  if (alterStatements.length > 0) {
+    runSqliteWrite(
+      dbPath,
+      `BEGIN IMMEDIATE;
+${alterStatements.join(";\n")};
+COMMIT;`,
+    );
+  }
 }
 
 async function loadTeamforgeEmployeeContext(dbPath, writable) {
@@ -1023,6 +1170,8 @@ function buildEmployeeKpiRow(record, employee) {
     yearly_milestones_json: JSON.stringify(record.yearlyMilestones),
     cross_role_dependencies_json: JSON.stringify(record.crossRoleDependencies),
     evidence_sources_json: JSON.stringify(record.evidenceSources),
+    contract_source_json: JSON.stringify(record.contractSource),
+    kpi_contracts_json: JSON.stringify(record.kpiContracts),
     compensation_milestones_json: JSON.stringify(record.compensationMilestones),
     gap_flags_json: JSON.stringify(record.gapFlags),
     synthesis_review_markdown: record.synthesisReviewMarkdown,
@@ -1057,6 +1206,7 @@ function buildKpiDiff(record, resolvedEmployee, existingRow) {
 
   diffs.push(`employee: ${resolvedEmployee.name}`);
   diffs.push(`monthlyKpis: ${record.monthlyKpis.length}`);
+  diffs.push(`kpiContracts: ${record.kpiContracts.length}`);
   diffs.push(`quarterlyMilestones: ${record.quarterlyMilestones.length}`);
   diffs.push(`gapFlags: ${record.gapFlags.length}`);
   if (record.warnings.length > 0) {
@@ -1089,6 +1239,8 @@ INSERT INTO employee_kpi_snapshots (
   yearly_milestones_json,
   cross_role_dependencies_json,
   evidence_sources_json,
+  contract_source_json,
+  kpi_contracts_json,
   compensation_milestones_json,
   gap_flags_json,
   synthesis_review_markdown,
@@ -1116,6 +1268,8 @@ VALUES (
   ${sqlLiteral(row.yearly_milestones_json)},
   ${sqlLiteral(row.cross_role_dependencies_json)},
   ${sqlLiteral(row.evidence_sources_json)},
+  ${sqlLiteral(row.contract_source_json)},
+  ${sqlLiteral(row.kpi_contracts_json)},
   ${sqlLiteral(row.compensation_milestones_json)},
   ${sqlLiteral(row.gap_flags_json)},
   ${sqlLiteral(row.synthesis_review_markdown)},
@@ -1141,6 +1295,8 @@ ON CONFLICT(employee_id, kpi_version) DO UPDATE SET
   yearly_milestones_json = excluded.yearly_milestones_json,
   cross_role_dependencies_json = excluded.cross_role_dependencies_json,
   evidence_sources_json = excluded.evidence_sources_json,
+  contract_source_json = excluded.contract_source_json,
+  kpi_contracts_json = excluded.kpi_contracts_json,
   compensation_milestones_json = excluded.compensation_milestones_json,
   gap_flags_json = excluded.gap_flags_json,
   synthesis_review_markdown = excluded.synthesis_review_markdown,
@@ -1180,6 +1336,13 @@ function buildMergedPayload(record, existingGraph, workspaceId, extraArtifacts =
   const existingProject = existingGraph?.project ?? null;
   const resolvedWorkspaceId =
     existingProject?.workspaceId ?? workspaceId ?? "__dry_run_workspace__";
+  const clockifyProjectId =
+    normalizeOptionalString(record.metadata.clockifyProjectId) ??
+    normalizeOptionalString(existingProject?.clockifyProjectId) ??
+    normalizeOptionalString(
+      existingGraph?.externalIds?.find((item) => item.source === "clockify")?.external_id ??
+        existingGraph?.externalIds?.find((item) => item.source === "clockify")?.externalId,
+    );
 
   const clientName =
     existingProject?.clientName && existingProject.clientName.trim().length > 0
@@ -1192,7 +1355,11 @@ function buildMergedPayload(record, existingGraph, workspaceId, extraArtifacts =
       name: record.metadata.name,
       slug: record.metadata.slug,
       portfolioName: record.metadata.portfolioName ?? existingProject?.portfolioName ?? null,
+      clientId:
+        normalizeOptionalString(record.metadata.clientId) ??
+        normalizeOptionalString(existingProject?.clientId),
       clientName,
+      clockifyProjectId,
       projectType: record.metadata.projectType ?? existingProject?.projectType ?? null,
       status: record.metadata.status ?? existingProject?.status ?? "planning",
       visibility: existingProject?.visibility ?? "workspace",
@@ -1238,7 +1405,9 @@ function buildRequestBody(record, payload, existingGraph) {
     code: record.projectId,
     slug: payload.project.slug,
     portfolio_name: payload.project.portfolioName,
+    client_id: payload.project.clientId,
     client_name: payload.project.clientName,
+    clockify_project_id: payload.project.clockifyProjectId,
     project_type: payload.project.projectType,
     status: payload.project.status,
     visibility: payload.project.visibility,
@@ -1512,7 +1681,9 @@ function normalizeGraphProject(project) {
     slug: project.slug ?? null,
     name: project.name,
     portfolioName: project.portfolioName ?? null,
+    clientId: project.clientId ?? null,
     clientName: project.clientName ?? null,
+    clockifyProjectId: project.clockifyProjectId ?? null,
     projectType: project.projectType ?? null,
     status: project.status ?? "active",
     visibility: project.visibility ?? "workspace",
@@ -1531,7 +1702,9 @@ function normalizeLegacyProject(item) {
       slug: item.slug ?? item.code ?? null,
       name: item.name,
       portfolioName: item.portfolio_name ?? null,
+      clientId: item.client_id ?? null,
       clientName: item.client_name ?? null,
+      clockifyProjectId: item.clockify_project_id ?? null,
       projectType: item.project_type ?? null,
       status: item.status ?? "active",
       visibility: item.visibility ?? "workspace",
@@ -1556,7 +1729,9 @@ function normalizeLegacyMapping(item) {
       slug: null,
       name: item.projectId,
       portfolioName: null,
+      clientId: null,
       clientName: null,
+      clockifyProjectId: null,
       projectType: null,
       status: item.status ?? "active",
       visibility: "workspace",
@@ -1694,7 +1869,12 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const clientRoot = path.join(args.vaultRoot, "60-client-ecosystem");
   const teamRoot = path.join(args.vaultRoot, "50-team");
-  const token = process.env.TF_WEBHOOK_HMAC_SECRET ?? null;
+  const token =
+    process.env.TEAMFORGE_ACCESS_TOKEN ??
+    process.env.TF_API_ACCESS_TOKEN ??
+    process.env.CLOUD_CREDENTIALS_ACCESS_TOKEN ??
+    process.env.TF_WEBHOOK_HMAC_SECRET ??
+    null;
   const [clientFiles, teamFiles, teamforgeContext] = await Promise.all([
     walk(clientRoot).then((files) => files.sort()),
     walk(teamRoot).then((files) => files.sort()),
@@ -1735,14 +1915,17 @@ async function main() {
     });
     const kpiFiles = teamFiles.filter((filePath) => /-kpi\.md$/i.test(path.basename(filePath)));
 
-    const allProjectBriefRecords = (
-      await Promise.all(
-        projectBriefFiles.map((filePath) => normalizeProjectBrief(filePath, args.vaultRoot)),
-      )
-    ).filter((record) => record.projectId.length > 0);
+    const allProjectBriefRecords = args.kpiOnly
+      ? []
+      : (
+        await Promise.all(
+          projectBriefFiles.map((filePath) => normalizeProjectBrief(filePath, args.vaultRoot)),
+        )
+      ).filter((record) => record.projectId.length > 0);
 
-    const projectBriefRecords =
-      args.projects.size > 0
+    const projectBriefRecords = args.kpiOnly
+      ? []
+      : args.projects.size > 0
         ? allProjectBriefRecords.filter((record) => args.projects.has(record.projectId))
         : allProjectBriefRecords;
 
@@ -1764,11 +1947,14 @@ async function main() {
       (record) => record.relativePath.split(path.sep).length === 3,
     );
 
-    const allClientProfileRecords = await Promise.all(
-      clientProfileFiles.map((filePath) => normalizeClientProfile(filePath, args.vaultRoot)),
-    );
-    const clientProfileRecords =
-      args.projects.size > 0
+    const allClientProfileRecords = args.kpiOnly
+      ? []
+      : await Promise.all(
+        clientProfileFiles.map((filePath) => normalizeClientProfile(filePath, args.vaultRoot)),
+      );
+    const clientProfileRecords = args.kpiOnly
+      ? []
+      : args.projects.size > 0
         ? allClientProfileRecords.filter(
             (record) =>
               relevantClientFolders.has(record.clientFolder) ||
@@ -1776,19 +1962,24 @@ async function main() {
           )
         : allClientProfileRecords;
 
-    const artifactFiles = [...new Set([
-      ...technicalSpecFiles,
-      ...designFiles,
-      ...researchFiles,
-      ...closeoutFiles,
-    ])].sort();
-    const allProjectArtifactRecords = await Promise.all(
-      artifactFiles.map((filePath) =>
-        normalizeProjectArtifact(filePath, args.vaultRoot, clientRoot, projectBriefByDir),
-      ),
-    );
-    const projectArtifactRecords =
-      args.projects.size > 0
+    const artifactFiles = args.kpiOnly
+      ? []
+      : [...new Set([
+        ...technicalSpecFiles,
+        ...designFiles,
+        ...researchFiles,
+        ...closeoutFiles,
+      ])].sort();
+    const allProjectArtifactRecords = args.kpiOnly
+      ? []
+      : await Promise.all(
+        artifactFiles.map((filePath) =>
+          normalizeProjectArtifact(filePath, args.vaultRoot, clientRoot, projectBriefByDir),
+        ),
+      );
+    const projectArtifactRecords = args.kpiOnly
+      ? []
+      : args.projects.size > 0
         ? allProjectArtifactRecords.filter(
             (record) =>
               relevantProjectIds.has(record.projectId) ||
@@ -1796,16 +1987,19 @@ async function main() {
           )
         : allProjectArtifactRecords;
 
-    const allOnboardingFlowRecords = await Promise.all([
-      ...clientOnboardingFiles.map((filePath) =>
-        normalizeOnboardingFlow(filePath, args.vaultRoot, "client", args.workspaceId),
-      ),
-      ...employeeOnboardingFiles.map((filePath) =>
-        normalizeOnboardingFlow(filePath, args.vaultRoot, "employee", args.workspaceId),
-      ),
-    ]);
-    const onboardingFlowRecords =
-      args.projects.size > 0
+    const allOnboardingFlowRecords = args.kpiOnly
+      ? []
+      : await Promise.all([
+        ...clientOnboardingFiles.map((filePath) =>
+          normalizeOnboardingFlow(filePath, args.vaultRoot, "client", args.workspaceId),
+        ),
+        ...employeeOnboardingFiles.map((filePath) =>
+          normalizeOnboardingFlow(filePath, args.vaultRoot, "employee", args.workspaceId),
+        ),
+      ]);
+    const onboardingFlowRecords = args.kpiOnly
+      ? []
+      : args.projects.size > 0
         ? allOnboardingFlowRecords.filter(
             (record) =>
               record.family === "client" &&
@@ -1849,7 +2043,7 @@ async function main() {
     let existingGraphs = { byId: new Map(), bySlug: new Map() };
     let remoteShapes = [];
     let remoteWarning = null;
-    if (!args.localOnly) {
+    if (!args.localOnly && !args.kpiOnly) {
       try {
         existingGraphs = await loadExistingGraphs(args.workerBaseUrl, token);
         remoteShapes = existingGraphs.observedShapes ?? [];

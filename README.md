@@ -147,7 +147,7 @@ The repo-pinned 39-skill manifest lives at
 
 ## Releases
 
-- **Current app version in repo:** `0.1.24`
+- **Current app version in repo:** `0.1.25`
 - **Latest published tag:** `v0.1.24`
 - **Release trigger:** pushing a tag that matches `v*`
 - **Canonical OTA signing/publish path:** [`.github/workflows/release.yml`](.github/workflows/release.yml)

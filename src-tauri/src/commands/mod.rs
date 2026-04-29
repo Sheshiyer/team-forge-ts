@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -6,7 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{Datelike, Local, NaiveDate, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::State;
+use tauri::path::BaseDirectory;
+use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_shell::ShellExt;
 
@@ -35,6 +37,8 @@ use crate::vault;
 use crate::{DbPool, SchedulerState};
 
 const DEFAULT_CLOCKIFY_IGNORED_EMAILS: &str = "thoughtseedlabs@gmail.com";
+const DEFAULT_TEAMFORGE_WORKER_BASE_URL: &str =
+    "https://teamforge-api.sheshnarayan-iyer.workers.dev";
 const SLACK_REQUIRED_SCOPES: &[&str] = &[
     "channels:read",
     "channels:history",
@@ -46,6 +50,35 @@ const SLACK_REQUIRED_SCOPES: &[&str] = &[
 
 fn normalize_email(value: &str) -> String {
     value.trim().to_lowercase()
+}
+
+fn sanitize_vault_relative_path(value: &str) -> Result<PathBuf, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("Vault relative path is required".to_string());
+    }
+
+    let source_path = Path::new(trimmed);
+    if source_path.is_absolute() {
+        return Err("Vault path must be relative to the configured vault root.".to_string());
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in source_path.components() {
+        match component {
+            Component::Normal(segment) => normalized.push(segment),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err("Vault path must stay inside the configured vault root.".to_string());
+            }
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        return Err("Vault relative path is required".to_string());
+    }
+
+    Ok(normalized)
 }
 
 fn parse_multi_value_setting(value: &str) -> Vec<String> {
@@ -599,6 +632,209 @@ async fn query_hours_for_range(
     .map_err(|e| format!("time entry hours query failed: {e}"))
 }
 
+fn days_in_month(today: NaiveDate) -> u32 {
+    let month_start = NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap();
+    (next_month_start(today) - month_start).num_days() as u32
+}
+
+fn parse_iso_date(value: Option<&str>) -> Option<NaiveDate> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let candidate = trimmed.get(0..10).unwrap_or(trimmed);
+        NaiveDate::parse_from_str(candidate, "%Y-%m-%d").ok()
+    })
+}
+
+fn build_employee_kpi_status_label(status: &str) -> String {
+    match status {
+        "onTrack" => "ON TRACK",
+        "watch" => "WATCH",
+        "drift" => "DRIFT",
+        "missingInputs" => "MISSING INPUTS",
+        _ => "UNKNOWN",
+    }
+    .to_string()
+}
+
+fn compute_kpi_month_progress(today: NaiveDate, joined_on: Option<NaiveDate>) -> f64 {
+    let total_days = days_in_month(today).max(1) as f64;
+    let start_day = joined_on
+        .filter(|date| date.year() == today.year() && date.month() == today.month())
+        .map(|date| date.day())
+        .unwrap_or(1)
+        .min(today.day());
+    let active_days = today.day().saturating_sub(start_day) + 1;
+    (active_days as f64 / total_days).clamp(0.0, 1.0)
+}
+
+fn build_employee_kpi_status(
+    kpi_snapshot: Option<&EmployeeKpiSnapshotView>,
+    vault_profile: Option<&VaultTeamProfileView>,
+    work_hours_this_month: f64,
+    monthly_quota_hours: f64,
+    standups_last_7_days: u32,
+    messages_last_7_days: u32,
+    has_current_leave: bool,
+    today: NaiveDate,
+) -> EmployeeKpiStatusView {
+    let mut reasons = Vec::new();
+    let mut founder_update_reasons = Vec::new();
+
+    let Some(kpi) = kpi_snapshot else {
+        reasons.push("No KPI snapshot is mapped to this employee yet.".to_string());
+        founder_update_reasons.push("missing-kpi-snapshot".to_string());
+        return EmployeeKpiStatusView {
+            status: "missingInputs".to_string(),
+            label: build_employee_kpi_status_label("missingInputs"),
+            score_percent: 0,
+            summary: "No KPI snapshot is mapped in TeamForge yet.".to_string(),
+            reasons,
+            founder_update_required: true,
+            founder_update_reasons,
+        };
+    };
+
+    let monthly_kpi_count = kpi.monthly_kpis.len();
+    let evidence_sources_count = kpi.evidence_sources.len();
+    let gap_flags_count = kpi.gap_flags.len();
+    let joined_on = parse_iso_date(vault_profile.and_then(|profile| profile.joined.as_deref()));
+    let recent_joiner = joined_on
+        .map(|joined| (today - joined).num_days() <= 45)
+        .unwrap_or(false);
+    let month_progress = compute_kpi_month_progress(today, joined_on);
+    let expected_hours_this_month =
+        monthly_quota_hours * month_progress * if recent_joiner { 0.85 } else { 1.0 };
+    let active_this_month =
+        work_hours_this_month >= 8.0 || messages_last_7_days > 0 || standups_last_7_days > 0;
+
+    let mut score = 100_i32;
+
+    if monthly_kpi_count == 0 {
+        score -= 20;
+        reasons.push("KPI note has no monthly checkpoints.".to_string());
+        founder_update_reasons.push("missing-kpi-items".to_string());
+    }
+
+    if evidence_sources_count == 0 {
+        score -= 18;
+        reasons.push("KPI note has no evidence sources mapped.".to_string());
+        founder_update_reasons.push("missing-evidence-sources".to_string());
+    }
+
+    if gap_flags_count > 0 {
+        score -= (gap_flags_count as i32 * 6).min(24);
+        reasons.push(format!("{gap_flags_count} KPI gap flag(s) still open."));
+        if gap_flags_count >= 3 {
+            founder_update_reasons.push("open-gap-flags".to_string());
+        }
+    }
+
+    match parse_iso_date(kpi.last_reviewed.as_deref()) {
+        Some(last_reviewed) => {
+            let review_age_days = (today - last_reviewed).num_days();
+            if review_age_days > 45 {
+                score -= if review_age_days > 90 { 15 } else { 8 };
+                reasons.push(format!(
+                    "KPI note was last reviewed {review_age_days} day(s) ago."
+                ));
+                if review_age_days > 90 {
+                    founder_update_reasons.push("stale-kpi-review".to_string());
+                }
+            }
+        }
+        None => {
+            score -= 8;
+            reasons.push("KPI note has no last-reviewed date.".to_string());
+            founder_update_reasons.push("missing-review-date".to_string());
+        }
+    }
+
+    if !has_current_leave && active_this_month {
+        if standups_last_7_days == 0 {
+            score -= 25;
+            reasons.push("No standup captured in the last 7 days.".to_string());
+            founder_update_reasons.push("missed-standup".to_string());
+        } else if standups_last_7_days < 3 {
+            score -= 10;
+            reasons.push(format!(
+                "Standup coverage is low ({standups_last_7_days}/7d)."
+            ));
+        }
+
+        if messages_last_7_days == 0 {
+            score -= 12;
+            reasons.push("No daily-update signal captured in the last 7 days.".to_string());
+            founder_update_reasons.push("missing-daily-updates".to_string());
+        }
+    }
+
+    if !has_current_leave && expected_hours_this_month >= 24.0 {
+        if work_hours_this_month < expected_hours_this_month * 0.55 {
+            score -= 25;
+            reasons.push(format!(
+                "Logged hours are far below month-to-date expectation ({:.1}h / {:.1}h).",
+                work_hours_this_month, expected_hours_this_month
+            ));
+            founder_update_reasons.push("capacity-drift".to_string());
+        } else if work_hours_this_month < expected_hours_this_month * 0.8 {
+            score -= 10;
+            reasons.push(format!(
+                "Logged hours are below month-to-date expectation ({:.1}h / {:.1}h).",
+                work_hours_this_month, expected_hours_this_month
+            ));
+        }
+    }
+
+    founder_update_reasons.sort();
+    founder_update_reasons.dedup();
+    score = score.clamp(0, 100);
+
+    let missing_inputs = monthly_kpi_count == 0 || evidence_sources_count == 0;
+    let status = if missing_inputs {
+        "missingInputs"
+    } else if score < 60
+        || founder_update_reasons
+            .iter()
+            .any(|reason| reason == "missed-standup" || reason == "capacity-drift")
+    {
+        "drift"
+    } else if reasons.is_empty() {
+        "onTrack"
+    } else {
+        "watch"
+    };
+
+    let founder_update_required = status == "drift"
+        || status == "missingInputs"
+        || founder_update_reasons
+            .iter()
+            .any(|reason| reason == "missed-standup");
+    let summary = if let Some(primary_reason) = reasons.first() {
+        format!(
+            "{} standups / {} updates / {:.1}h this month. {}",
+            standups_last_7_days, messages_last_7_days, work_hours_this_month, primary_reason
+        )
+    } else {
+        format!(
+            "{} standups / {} updates / {:.1}h this month.",
+            standups_last_7_days, messages_last_7_days, work_hours_this_month
+        )
+    };
+
+    EmployeeKpiStatusView {
+        status: status.to_string(),
+        label: build_employee_kpi_status_label(status),
+        score_percent: score as u32,
+        summary,
+        reasons,
+        founder_update_required,
+        founder_update_reasons,
+    }
+}
+
 fn employee_matches_calendar_event(event: &HulyCalendarEvent, person_id: &str) -> bool {
     event.created_by.as_deref() == Some(person_id)
         || event
@@ -710,7 +946,9 @@ pub struct TeamforgeProjectInput {
     pub slug: Option<String>,
     pub name: String,
     pub portfolio_name: Option<String>,
+    pub client_id: Option<String>,
     pub client_name: Option<String>,
+    pub clockify_project_id: Option<String>,
     pub project_type: Option<String>,
     pub status: Option<String>,
     pub sync_mode: Option<String>,
@@ -785,6 +1023,17 @@ fn client_profile_match_priority(
         return Some(0);
     }
 
+    if project
+        .client_id
+        .as_deref()
+        .map(normalize_teamforge_match_key)
+        .is_some_and(|project_client_id| {
+            project_client_id == normalize_teamforge_match_key(&profile.client_id)
+        })
+    {
+        return Some(1);
+    }
+
     let project_client_name = project
         .client_name
         .as_deref()
@@ -794,12 +1043,12 @@ fn client_profile_match_priority(
 
     if let Some(project_client_name) = project_client_name {
         if project_client_name == client_id || project_client_name == client_name {
-            return Some(1);
+            return Some(2);
         }
     }
 
     if project_slug == client_id || project_slug == client_name {
-        return Some(2);
+        return Some(3);
     }
 
     None
@@ -1100,8 +1349,18 @@ pub async fn save_teamforge_project(
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty()),
+            "clientId": input
+                .client_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
             "clientName": input
                 .client_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+            "clockifyProjectId": input
+                .clockify_project_id
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty()),
@@ -1259,7 +1518,7 @@ async fn bridge_teamforge_graph_to_github_configs(
             client_name: graph.project.client_name.clone(),
             default_milestone_number: None,
             huly_project_id: primary_huly_project_id.clone(),
-            clockify_project_id: None,
+            clockify_project_id: graph.project.clockify_project_id.clone(),
             enabled: true,
             created_at: now.clone(),
             updated_at: now.clone(),
@@ -1296,6 +1555,53 @@ async fn clear_deprecated_github_repo_setting(pool: &sqlx::SqlitePool) -> Result
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LocalWorkspaceStatus {
+    local_vault_root: Option<String>,
+    vault_validation: vault::VaultDirectoryValidation,
+    paperclip_script_path: Option<String>,
+    paperclip_working_dir: Option<String>,
+    paperclip_ui_url: Option<String>,
+    teamforge_workspace_id: Option<String>,
+    teamforge_workspace_source: String,
+    teamforge_workspace_error: Option<String>,
+    worker_base_url: String,
+    cloud_access_token_configured: bool,
+    node_runtime_version: Option<String>,
+    node_runtime_error: Option<String>,
+    parity_script_path: Option<String>,
+    parity_script_source: Option<String>,
+    parity_script_error: Option<String>,
+    founder_sync_ready: bool,
+    founder_sync_message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalVaultSyncReport {
+    vault_root: String,
+    workspace_id: String,
+    worker_base_url: String,
+    script_path: String,
+    script_source: String,
+    node_runtime_version: String,
+    report_path: String,
+    mode: String,
+    project_briefs_found: usize,
+    project_creates: usize,
+    project_updates: usize,
+    client_profiles_found: usize,
+    client_profiles_applied: usize,
+    onboarding_flows_found: usize,
+    onboarding_flows_applied: usize,
+    employee_kpi_notes_found: usize,
+    employee_kpis_applied: usize,
+    warnings: Vec<String>,
+    failures: Vec<String>,
+    stdout_tail: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PaperclipLaunchResult {
     pid: u32,
     script_path: String,
@@ -1308,6 +1614,284 @@ pub struct PaperclipLaunchResult {
 #[serde(rename_all = "camelCase")]
 pub struct PaperclipUiOpenResult {
     url: String,
+}
+
+async fn trimmed_setting_value(
+    pool: &sqlx::SqlitePool,
+    key: &str,
+) -> Result<Option<String>, String> {
+    Ok(queries::get_setting(pool, key)
+        .await
+        .map_err(|error| format!("read {key}: {error}"))?
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty()))
+}
+
+fn decode_shell_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).trim().to_string()
+}
+
+fn tail_lines(value: &str, max_lines: usize) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let lines = trimmed.lines().collect::<Vec<_>>();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
+}
+
+fn repo_parity_script_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/teamforge-vault-parity.mjs")
+}
+
+fn resolve_parity_script_path(app_handle: &tauri::AppHandle) -> Result<(PathBuf, String), String> {
+    if let Ok(resource_path) = app_handle
+        .path()
+        .resolve("teamforge-vault-parity.mjs", BaseDirectory::Resource)
+    {
+        if resource_path.is_file() {
+            return Ok((resource_path, "bundled".to_string()));
+        }
+    }
+
+    let repo_path = repo_parity_script_path();
+    if repo_path.is_file() {
+        return Ok((repo_path, "repo".to_string()));
+    }
+
+    Err(
+        "TeamForge vault parity script was not found in the app bundle or the repo checkout."
+            .to_string(),
+    )
+}
+
+async fn detect_node_runtime_version(app_handle: &tauri::AppHandle) -> Result<String, String> {
+    let output = app_handle
+        .shell()
+        .command("node")
+        .args(["--version"])
+        .output()
+        .await
+        .map_err(|error| format!("run node --version: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = decode_shell_output(&output.stderr);
+        let stdout = decode_shell_output(&output.stdout);
+        if !stderr.is_empty() {
+            return Err(format!("node runtime check failed: {stderr}"));
+        }
+        if !stdout.is_empty() {
+            return Err(format!("node runtime check failed: {stdout}"));
+        }
+        return Err("node runtime check failed".to_string());
+    }
+
+    let version = decode_shell_output(&output.stdout);
+    if version.is_empty() {
+        return Err("node runtime check returned no version string".to_string());
+    }
+    Ok(version)
+}
+
+fn json_array_len(report: &Value, key: &str) -> usize {
+    report
+        .get(key)
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0)
+}
+
+fn json_usize(report: &Value, path: &[&str]) -> usize {
+    let mut current = report;
+    for segment in path {
+        let Some(next) = current.get(*segment) else {
+            return 0;
+        };
+        current = next;
+    }
+
+    current
+        .as_u64()
+        .map(|value| value as usize)
+        .or_else(|| current.as_i64().map(|value| value.max(0) as usize))
+        .unwrap_or(0)
+}
+
+fn summarize_sync_failures(report: &Value) -> Vec<String> {
+    let mut failures = Vec::new();
+
+    if let Some(entries) = report.get("failures").and_then(Value::as_array) {
+        for entry in entries {
+            let project_id = entry
+                .get("projectId")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown-project");
+            let error = entry
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error");
+            failures.push(format!("project {project_id}: {error}"));
+        }
+    }
+
+    if let Some(entries) = report
+        .get("clientProfileFailures")
+        .and_then(Value::as_array)
+    {
+        for entry in entries {
+            let client_id = entry
+                .get("clientId")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown-client");
+            let error = entry
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error");
+            failures.push(format!("client profile {client_id}: {error}"));
+        }
+    }
+
+    if let Some(entries) = report
+        .get("onboardingFlowFailures")
+        .and_then(Value::as_array)
+    {
+        for entry in entries {
+            let flow_id = entry
+                .get("flowId")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown-flow");
+            let error = entry
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error");
+            failures.push(format!("onboarding {flow_id}: {error}"));
+        }
+    }
+
+    if let Some(entries) = report.get("employeeKpiFailures").and_then(Value::as_array) {
+        for entry in entries {
+            let member_id = entry
+                .get("memberId")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown-member");
+            let error = entry
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error");
+            failures.push(format!("employee KPI {member_id}: {error}"));
+        }
+    }
+
+    failures
+}
+
+async fn read_local_workspace_status(
+    pool: &sqlx::SqlitePool,
+    app_handle: &tauri::AppHandle,
+) -> Result<LocalWorkspaceStatus, String> {
+    let local_vault_root = trimmed_setting_value(pool, "local_vault_root").await?;
+    let paperclip_script_path = trimmed_setting_value(pool, "paperclip_script_path").await?;
+    let paperclip_working_dir = trimmed_setting_value(pool, "paperclip_working_dir").await?;
+    let paperclip_ui_url = trimmed_setting_value(pool, "paperclip_ui_url").await?;
+    let explicit_workspace_id = trimmed_setting_value(pool, "teamforge_workspace_id").await?;
+    let cloud_access_token_configured =
+        trimmed_setting_value(pool, "cloud_credentials_access_token")
+            .await?
+            .is_some();
+    let worker_base_url = trimmed_setting_value(pool, "cloud_credentials_base_url")
+        .await?
+        .unwrap_or_else(|| DEFAULT_TEAMFORGE_WORKER_BASE_URL.to_string());
+
+    let vault_validation = local_vault_root
+        .as_deref()
+        .map(|path| vault::validate_vault_directory(Path::new(path)))
+        .unwrap_or_else(|| vault::validate_vault_directory(Path::new("")));
+
+    let (teamforge_workspace_id, teamforge_workspace_source, teamforge_workspace_error) =
+        if let Some(explicit) = explicit_workspace_id {
+            (Some(explicit), "saved".to_string(), None)
+        } else {
+            match teamforge_worker::resolve_teamforge_workspace_id(pool).await {
+                Ok(Some(inferred)) => (Some(inferred), "inferred".to_string(), None),
+                Ok(None) => (
+                    None,
+                    "missing".to_string(),
+                    Some("No TeamForge workspace id is configured or inferable yet.".to_string()),
+                ),
+                Err(error) => (None, "ambiguous".to_string(), Some(error)),
+            }
+        };
+
+    let (parity_script_path, parity_script_source, parity_script_error) =
+        match resolve_parity_script_path(app_handle) {
+            Ok((path, source)) => (Some(path.to_string_lossy().to_string()), Some(source), None),
+            Err(error) => (None, None, Some(error)),
+        };
+
+    let (node_runtime_version, node_runtime_error) =
+        match detect_node_runtime_version(app_handle).await {
+            Ok(version) => (Some(version), None),
+            Err(error) => (None, Some(error)),
+        };
+
+    let founder_sync_ready = local_vault_root.is_some()
+        && vault_validation.status == "ready"
+        && teamforge_workspace_id.is_some()
+        && cloud_access_token_configured
+        && parity_script_error.is_none()
+        && node_runtime_error.is_none();
+
+    let founder_sync_message = if founder_sync_ready {
+        "Ready to sync the local Thoughtseed vault into the canonical TeamForge control plane."
+            .to_string()
+    } else {
+        let mut blockers = Vec::new();
+        if local_vault_root.is_none() {
+            blockers.push("Choose and save a local vault root.");
+        } else if vault_validation.status != "ready" {
+            blockers.push("Validate the local vault root before syncing.");
+        }
+        if teamforge_workspace_id.is_none() {
+            blockers.push("Set or infer a TeamForge workspace id.");
+        }
+        if !cloud_access_token_configured {
+            blockers.push("Configure the TeamForge cloud access token.");
+        }
+        if let Some(error) = parity_script_error.as_ref() {
+            blockers.push(error.as_str());
+        }
+        if let Some(error) = node_runtime_error.as_ref() {
+            blockers.push(error.as_str());
+        }
+
+        if blockers.is_empty() {
+            "Founder sync is not ready yet.".to_string()
+        } else {
+            blockers.join(" ")
+        }
+    };
+
+    Ok(LocalWorkspaceStatus {
+        local_vault_root,
+        vault_validation,
+        paperclip_script_path,
+        paperclip_working_dir,
+        paperclip_ui_url,
+        teamforge_workspace_id,
+        teamforge_workspace_source,
+        teamforge_workspace_error,
+        worker_base_url,
+        cloud_access_token_configured,
+        node_runtime_version,
+        node_runtime_error,
+        parity_script_path,
+        parity_script_source,
+        parity_script_error,
+        founder_sync_ready,
+        founder_sync_message,
+    })
 }
 
 fn normalize_local_workspace_setting(key: &str, value: &str) -> String {
@@ -1528,6 +2112,216 @@ pub async fn open_paperclip_ui(
 }
 
 #[tauri::command]
+pub async fn open_vault_relative_path(
+    db: State<'_, DbPool>,
+    app_handle: tauri::AppHandle,
+    relative_path: String,
+) -> Result<String, String> {
+    let relative_path = sanitize_vault_relative_path(&relative_path)?;
+    let vault_root = vault::resolve_local_vault_root(&db.0).await?;
+
+    let canonical_root = std::fs::canonicalize(&vault_root)
+        .map_err(|error| format!("Resolve vault root {}: {error}", vault_root.display()))?;
+    let target = vault_root.join(&relative_path);
+    if !target.exists() {
+        return Err(format!("Vault path does not exist: {}", target.display()));
+    }
+
+    let canonical_target = std::fs::canonicalize(&target)
+        .map_err(|error| format!("Resolve vault path {}: {error}", target.display()))?;
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err("Vault path must stay inside the configured vault root.".to_string());
+    }
+
+    let canonical_string = canonical_target.to_string_lossy().to_string();
+    #[allow(deprecated)]
+    app_handle
+        .shell()
+        .open(canonical_string.clone(), None)
+        .map_err(|error| format!("open vault path: {error}"))?;
+
+    Ok(canonical_string)
+}
+
+#[tauri::command]
+pub async fn get_local_workspace_status(
+    db: State<'_, DbPool>,
+    app_handle: tauri::AppHandle,
+) -> Result<LocalWorkspaceStatus, String> {
+    read_local_workspace_status(&db.0, &app_handle).await
+}
+
+#[tauri::command]
+pub async fn sync_local_vault_to_teamforge(
+    db: State<'_, DbPool>,
+    app_handle: tauri::AppHandle,
+) -> Result<LocalVaultSyncReport, String> {
+    let pool = &db.0;
+    let status = read_local_workspace_status(pool, &app_handle).await?;
+    if !status.founder_sync_ready {
+        return Err(status.founder_sync_message);
+    }
+
+    let vault_root = status
+        .local_vault_root
+        .clone()
+        .ok_or_else(|| "Local vault root is required before syncing.".to_string())?;
+    let workspace_id = status
+        .teamforge_workspace_id
+        .clone()
+        .ok_or_else(|| "TeamForge workspace id is required before syncing.".to_string())?;
+    let node_runtime_version = status
+        .node_runtime_version
+        .clone()
+        .ok_or_else(|| "Node.js runtime is required before syncing.".to_string())?;
+    let script_path = status
+        .parity_script_path
+        .clone()
+        .ok_or_else(|| "TeamForge vault parity script is unavailable.".to_string())?;
+    let script_source = status
+        .parity_script_source
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+    let access_token = trimmed_setting_value(pool, "cloud_credentials_access_token")
+        .await?
+        .ok_or_else(|| "cloud credential access token is not configured".to_string())?;
+
+    let report_path = std::env::temp_dir().join(format!(
+        "teamforge-vault-sync-{}.json",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| format!("compute sync timestamp: {error}"))?
+            .as_millis()
+    ));
+    let report_path_string = report_path.to_string_lossy().to_string();
+
+    let output = app_handle
+        .shell()
+        .command("node")
+        .args([
+            script_path.as_str(),
+            "--apply",
+            "--vault-root",
+            vault_root.as_str(),
+            "--worker-base-url",
+            status.worker_base_url.as_str(),
+            "--workspace-id",
+            workspace_id.as_str(),
+            "--report",
+            report_path_string.as_str(),
+        ])
+        .env("TEAMFORGE_ACCESS_TOKEN", access_token)
+        .env("TEAMFORGE_WORKSPACE_ID", workspace_id.clone())
+        .env("TEAMFORGE_API_BASE_URL", status.worker_base_url.clone())
+        .env("TF_API_BASE_URL", status.worker_base_url.clone())
+        .output()
+        .await
+        .map_err(|error| format!("run TeamForge vault parity sync: {error}"))?;
+
+    let stdout = decode_shell_output(&output.stdout);
+    let stderr = decode_shell_output(&output.stderr);
+    let stdout_tail = tail_lines(&stdout, 12);
+
+    let report_raw = std::fs::read_to_string(&report_path)
+        .map_err(|error| format!("read vault sync report {}: {error}", report_path.display()))?;
+    let report: Value = serde_json::from_str(&report_raw)
+        .map_err(|error| format!("parse vault sync report {}: {error}", report_path.display()))?;
+
+    let warnings = report
+        .get("warnings")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut failures = summarize_sync_failures(&report);
+
+    if !output.status.success() {
+        let mut detail_parts = Vec::new();
+        if !stderr.is_empty() {
+            detail_parts.push(stderr);
+        }
+        if !stdout_tail.is_empty() {
+            detail_parts.push(stdout_tail.clone());
+        }
+        if failures.is_empty() {
+            let fallback = detail_parts.join("\n").trim().to_string();
+            failures.push(if fallback.is_empty() {
+                "Vault parity sync failed without structured report details.".to_string()
+            } else {
+                fallback
+            });
+        }
+        return Err(failures
+            .into_iter()
+            .filter(|value| !value.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join(" | "));
+    }
+
+    let mut refresh_warnings = Vec::new();
+    if let Err(error) = teamforge_worker::fetch_teamforge_project_graphs(pool).await {
+        refresh_warnings.push(format!("refresh TeamForge projects: {error}"));
+    }
+    if let Err(error) = teamforge_worker::fetch_teamforge_client_profiles(pool).await {
+        refresh_warnings.push(format!("refresh TeamForge client profiles: {error}"));
+    }
+    if let Err(error) = teamforge_worker::fetch_teamforge_onboarding_flows(pool, None).await {
+        refresh_warnings.push(format!("refresh TeamForge onboarding flows: {error}"));
+    }
+
+    let mut all_warnings = warnings;
+    all_warnings.extend(refresh_warnings);
+    failures.retain(|value| !value.trim().is_empty());
+
+    Ok(LocalVaultSyncReport {
+        vault_root,
+        workspace_id,
+        worker_base_url: status.worker_base_url,
+        script_path,
+        script_source,
+        node_runtime_version,
+        report_path: report_path_string,
+        mode: report
+            .get("mode")
+            .and_then(Value::as_str)
+            .unwrap_or("apply")
+            .to_string(),
+        project_briefs_found: json_usize(&report, &["counts", "projectBriefsFound"]),
+        project_creates: json_usize(&report, &["counts", "creates"]),
+        project_updates: json_usize(&report, &["counts", "updates"]),
+        client_profiles_found: json_usize(&report, &["counts", "clientProfilesFound"]),
+        client_profiles_applied: json_array_len(&report, "clientProfileApplied"),
+        onboarding_flows_found: json_usize(&report, &["counts", "onboardingFlowsFound"]),
+        onboarding_flows_applied: report
+            .get("onboardingFlowApplied")
+            .and_then(Value::as_array)
+            .map(|groups| {
+                groups
+                    .iter()
+                    .map(|group| {
+                        group
+                            .get("flowIds")
+                            .and_then(Value::as_array)
+                            .map(Vec::len)
+                            .unwrap_or(0)
+                    })
+                    .sum()
+            })
+            .unwrap_or(0),
+        employee_kpi_notes_found: json_usize(&report, &["counts", "employeeKpiNotesFound"]),
+        employee_kpis_applied: json_array_len(&report, "employeeKpiApplied"),
+        warnings: all_warnings,
+        failures,
+        stdout_tail,
+    })
+}
+
+#[tauri::command]
 pub async fn sync_github_plans(db: State<'_, DbPool>) -> Result<Vec<GithubSyncReport>, String> {
     let pool = &db.0;
     run_github_sync_from_settings(pool).await
@@ -1535,9 +2329,7 @@ pub async fn sync_github_plans(db: State<'_, DbPool>) -> Result<Vec<GithubSyncRe
 
 // ─── Dashboard commands ─────────────────────────────────────────
 
-#[tauri::command]
-pub async fn get_overview(db: State<'_, DbPool>) -> Result<OverviewData, String> {
-    let pool = &db.0;
+async fn load_overview_data(pool: &sqlx::SqlitePool) -> Result<OverviewData, String> {
     let now = Local::now();
     let month_start = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
         .unwrap()
@@ -1621,6 +2413,391 @@ pub async fn get_overview(db: State<'_, DbPool>) -> Result<OverviewData, String>
         active_count: active_row.0 as u32,
         total_count: total_row.0 as u32,
     })
+}
+
+#[tauri::command]
+pub async fn get_overview(db: State<'_, DbPool>) -> Result<OverviewData, String> {
+    load_overview_data(&db.0).await
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FounderSummaryView {
+    pub team_hours_this_month: f64,
+    pub team_quota: f64,
+    pub utilization_rate: f64,
+    pub active_count: u32,
+    pub total_count: u32,
+    pub active_delivery_streams: u32,
+    pub canonical_clients: u32,
+    pub operational_only_clients: u32,
+    pub at_risk_clients: u32,
+    pub onboarding_at_risk: u32,
+    pub unresolved_review_items: u32,
+    pub white_labelable_count: u32,
+    pub research_needs_triage: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FounderActiveStreamView {
+    pub id: String,
+    pub project_id: Option<String>,
+    pub title: String,
+    pub source: String,
+    pub status: String,
+    pub repo: Option<String>,
+    pub milestone: Option<String>,
+    pub open_issues: u32,
+    pub percent_complete: f64,
+    pub total_hours: f64,
+    pub latest_activity: Option<String>,
+    pub attention: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FounderPortfolioSummaryView {
+    pub total_surfaces: u32,
+    pub product_count: u32,
+    pub client_delivery_count: u32,
+    pub active_count: u32,
+    pub paused_count: u32,
+    pub completed_count: u32,
+    pub archived_count: u32,
+    pub other_count: u32,
+    pub white_labelable_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FounderNeedsReviewView {
+    pub total_items: u32,
+    pub stale_note_count: u32,
+    pub orphaned_identity_count: u32,
+    pub onboarding_risk_count: u32,
+    pub items: Vec<FounderNeedsReviewItemView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FounderNeedsReviewItemView {
+    pub id: String,
+    pub category: String,
+    pub title: String,
+    pub signal: String,
+    pub detail: String,
+    pub source_relative_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FounderCommandCenterView {
+    pub summary: FounderSummaryView,
+    pub active_streams: Vec<FounderActiveStreamView>,
+    pub portfolio: FounderPortfolioSummaryView,
+    pub white_labelable: Vec<vault::VaultPortfolioSurface>,
+    pub needs_review: FounderNeedsReviewView,
+    pub research_hub: vault::VaultResearchHubSummary,
+    pub vault_error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_founder_command_center(
+    db: State<'_, DbPool>,
+) -> Result<FounderCommandCenterView, String> {
+    let pool = &db.0;
+    let overview = load_overview_data(pool).await?;
+    let clients = load_clients(pool).await?;
+    let execution_projects = load_execution_projects_from_local_projection(pool).await?;
+    let onboarding_flows = load_teamforge_onboarding_flows(pool, None)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(build_imported_onboarding_view)
+        .collect::<Vec<_>>();
+    let identity_review_queue = queries::get_identity_review_queue(pool, 0.85)
+        .await
+        .map_err(|e| format!("load identity review queue: {e}"))?;
+
+    let (vault_signals, vault_error) = match vault::load_founder_vault_signals(pool).await {
+        Ok(signals) => (Some(signals), None),
+        Err(error) => (None, Some(error)),
+    };
+
+    let portfolio_surfaces = vault_signals
+        .as_ref()
+        .map(|signals| signals.portfolio_surfaces.clone())
+        .unwrap_or_default();
+    let stale_notes = vault_signals
+        .as_ref()
+        .map(|signals| signals.stale_notes.clone())
+        .unwrap_or_default();
+    let research_hub = vault_signals
+        .as_ref()
+        .map(|signals| signals.research_hub.clone())
+        .unwrap_or_else(|| vault::VaultResearchHubSummary {
+            registry_relative_path: "30-research-hub/capture-registry.md".to_string(),
+            inbox_relative_path: "30-research-hub/inbox".to_string(),
+            total_captures: 0,
+            raw_capture_count: 0,
+            needs_triage_count: 0,
+            routed_count: 0,
+            promoted_count: 0,
+            archived_count: 0,
+            duplicate_count: 0,
+            inbox_note_count: 0,
+            live_research_count: 0,
+            captures: Vec::new(),
+        });
+
+    let onboarding_risk_items = onboarding_flows
+        .iter()
+        .filter(|flow| onboarding_flow_needs_review(flow))
+        .map(|flow| FounderNeedsReviewItemView {
+            id: format!("onboarding:{}", flow.id),
+            category: "onboarding-risk".to_string(),
+            title: format!("{} · {}", flow.subject_name, flow.audience.to_uppercase()),
+            signal: flow.status.to_uppercase(),
+            detail: format!(
+                "{} / {} TASKS · {}D ELAPSED",
+                flow.completed_tasks, flow.total_tasks, flow.days_elapsed
+            ),
+            source_relative_path: None,
+        })
+        .collect::<Vec<_>>();
+
+    let orphaned_identity_count = identity_review_queue
+        .iter()
+        .filter(|entry| identity_entry_is_orphaned(entry))
+        .count() as u32;
+    let mut needs_review_items = stale_notes
+        .iter()
+        .map(|note| FounderNeedsReviewItemView {
+            id: format!("stale:{}", note.source_relative_path),
+            category: "stale-note".to_string(),
+            title: note.title.clone(),
+            signal: "STALE".to_string(),
+            detail: note.suggested_action.clone(),
+            source_relative_path: Some(note.source_relative_path.clone()),
+        })
+        .collect::<Vec<_>>();
+    needs_review_items.extend(
+        identity_review_queue
+            .iter()
+            .filter(|entry| identity_entry_is_orphaned(entry))
+            .map(|entry| FounderNeedsReviewItemView {
+                id: format!("identity:{}:{}", entry.source, entry.external_id),
+                category: "orphaned-identity".to_string(),
+                title: format!("{} • {}", entry.source.to_uppercase(), entry.external_id),
+                signal: entry.resolution_status.to_uppercase(),
+                detail: entry
+                    .match_method
+                    .clone()
+                    .unwrap_or_else(|| "UNMATCHED".to_string())
+                    .to_uppercase(),
+                source_relative_path: None,
+            }),
+    );
+    needs_review_items.extend(onboarding_risk_items.clone());
+    needs_review_items.sort_by(|left, right| {
+        review_category_rank(&left.category)
+            .cmp(&review_category_rank(&right.category))
+            .then(left.title.cmp(&right.title))
+    });
+
+    let active_streams = build_founder_active_streams(&execution_projects);
+    let canonical_clients = clients
+        .iter()
+        .filter(|client| client.registry_status == "canonical")
+        .count() as u32;
+    let operational_only_clients = clients
+        .iter()
+        .filter(|client| client.registry_status == "operational")
+        .count() as u32;
+    let at_risk_clients = clients
+        .iter()
+        .filter(|client| {
+            client
+                .operational_signals
+                .days_remaining
+                .map(|days| days < 30)
+                .unwrap_or(false)
+        })
+        .count() as u32;
+    let white_labelable = portfolio_surfaces
+        .iter()
+        .filter(|surface| portfolio_surface_is_white_labelable(surface))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let portfolio = summarize_portfolio_surfaces(&portfolio_surfaces);
+    let needs_review = FounderNeedsReviewView {
+        total_items: needs_review_items.len() as u32,
+        stale_note_count: stale_notes.len() as u32,
+        orphaned_identity_count,
+        onboarding_risk_count: onboarding_risk_items.len() as u32,
+        items: needs_review_items,
+    };
+
+    Ok(FounderCommandCenterView {
+        summary: FounderSummaryView {
+            team_hours_this_month: overview.team_hours_this_month,
+            team_quota: overview.team_quota,
+            utilization_rate: overview.utilization_rate,
+            active_count: overview.active_count,
+            total_count: overview.total_count,
+            active_delivery_streams: active_streams.len() as u32,
+            canonical_clients,
+            operational_only_clients,
+            at_risk_clients,
+            onboarding_at_risk: onboarding_risk_items.len() as u32,
+            unresolved_review_items: needs_review.total_items,
+            white_labelable_count: portfolio.white_labelable_count,
+            research_needs_triage: research_hub.needs_triage_count,
+        },
+        active_streams,
+        portfolio,
+        white_labelable,
+        needs_review,
+        research_hub,
+        vault_error,
+    })
+}
+
+fn build_founder_active_streams(
+    execution_projects: &[ExecutionProjectView],
+) -> Vec<FounderActiveStreamView> {
+    let mut rows = execution_projects
+        .iter()
+        .filter(|project| {
+            !project.status.eq_ignore_ascii_case("done")
+                || project.open_issues > 0
+                || project.total_hours > 0.0
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    rows.sort_by(|left, right| {
+        execution_status_rank(&left.status)
+            .cmp(&execution_status_rank(&right.status))
+            .then(right.open_issues.cmp(&left.open_issues))
+            .then_with(|| right.total_hours.total_cmp(&left.total_hours))
+            .then_with(|| right.latest_activity.cmp(&left.latest_activity))
+            .then(left.title.cmp(&right.title))
+    });
+
+    rows.into_iter()
+        .take(6)
+        .map(|project| {
+            let attention = if project.failing_checks > 0 {
+                format!("{} FAILING CHECKS", project.failing_checks)
+            } else if project.open_issues > 0 {
+                format!("{} OPEN ISSUES", project.open_issues)
+            } else if project.total_hours > 0.0 {
+                format!("{:.1}H LOGGED", project.total_hours)
+            } else {
+                "LOW SIGNAL".to_string()
+            };
+
+            FounderActiveStreamView {
+                id: project.id,
+                project_id: project.teamforge_project_id,
+                title: project.title,
+                source: project.source,
+                status: project.status,
+                repo: project.repo,
+                milestone: project.milestone,
+                open_issues: project.open_issues,
+                percent_complete: project.percent_complete,
+                total_hours: project.total_hours,
+                latest_activity: project.latest_activity,
+                attention,
+            }
+        })
+        .collect()
+}
+
+fn execution_status_rank(status: &str) -> u8 {
+    match status.to_ascii_lowercase().as_str() {
+        "active" => 0,
+        "at-risk" => 1,
+        "blocked" => 2,
+        "done" => 3,
+        _ => 4,
+    }
+}
+
+fn summarize_portfolio_surfaces(
+    surfaces: &[vault::VaultPortfolioSurface],
+) -> FounderPortfolioSummaryView {
+    let mut summary = FounderPortfolioSummaryView {
+        total_surfaces: surfaces.len() as u32,
+        product_count: 0,
+        client_delivery_count: 0,
+        active_count: 0,
+        paused_count: 0,
+        completed_count: 0,
+        archived_count: 0,
+        other_count: 0,
+        white_labelable_count: 0,
+    };
+
+    for surface in surfaces {
+        match surface.kind.as_str() {
+            "product" => summary.product_count += 1,
+            "client-delivery" => summary.client_delivery_count += 1,
+            _ => {}
+        }
+
+        match surface.status.as_str() {
+            "active" => summary.active_count += 1,
+            "paused" => summary.paused_count += 1,
+            "completed" => summary.completed_count += 1,
+            "archived" => summary.archived_count += 1,
+            _ => summary.other_count += 1,
+        }
+
+        if portfolio_surface_is_white_labelable(surface) {
+            summary.white_labelable_count += 1;
+        }
+    }
+
+    summary
+}
+
+fn portfolio_surface_is_white_labelable(surface: &vault::VaultPortfolioSurface) -> bool {
+    surface.status.eq_ignore_ascii_case("white-labelable")
+        || surface
+            .commercial_reuse
+            .as_deref()
+            .map(|value| value.eq_ignore_ascii_case("white-labelable"))
+            .unwrap_or(false)
+}
+
+fn identity_entry_is_orphaned(entry: &IdentityMapEntry) -> bool {
+    !entry.resolution_status.eq_ignore_ascii_case("linked") || entry.employee_id.is_none()
+}
+
+fn onboarding_flow_needs_review(flow: &OnboardingFlowView) -> bool {
+    if flow.status.eq_ignore_ascii_case("completed") {
+        return false;
+    }
+    if flow.status.eq_ignore_ascii_case("stalled") {
+        return true;
+    }
+
+    (flow.days_elapsed >= 14 && flow.progress_percent < 50.0)
+        || (flow.days_elapsed >= 30 && flow.progress_percent < 100.0)
+}
+
+fn review_category_rank(category: &str) -> u8 {
+    match category {
+        "orphaned-identity" => 0,
+        "onboarding-risk" => 1,
+        "stale-note" => 2,
+        _ => 3,
+    }
 }
 
 #[tauri::command]
@@ -1832,14 +3009,6 @@ fn month_bounds() -> (String, String) {
     (start.to_string(), end.to_string())
 }
 
-fn normalize_project_match(value: &str) -> String {
-    value
-        .chars()
-        .filter(|ch| ch.is_alphanumeric())
-        .flat_map(|ch| ch.to_lowercase())
-        .collect()
-}
-
 fn project_hours_from_row(row: &ClockifyProjectHoursRow) -> (f64, f64, u32, f64) {
     let total_hours = row.total_seconds as f64 / 3600.0;
     let billable_hours = row.billable_seconds as f64 / 3600.0;
@@ -1877,22 +3046,24 @@ async fn load_execution_projects_from_local_projection(
     .await
     .map_err(|e| format!("load clockify project hours: {e}"))?;
 
-    let all_clockify_projects = queries::get_projects(pool)
-        .await
-        .map_err(|e| format!("load clockify projects: {e}"))?;
     let clockify_by_id: HashMap<String, &ClockifyProjectHoursRow> = clockify_rows
         .iter()
         .filter_map(|row| row.project_id.as_ref().map(|id| (id.clone(), row)))
         .collect();
-    let clockify_by_normalized_name: HashMap<String, String> = all_clockify_projects
+    let teamforge_graphs = queries::get_teamforge_project_graphs(pool)
+        .await
+        .map_err(|e| format!("load TeamForge project projection: {e}"))?;
+    let repo_configs = queries::get_enabled_github_repo_configs(pool)
+        .await
+        .map_err(|e| format!("load GitHub repo configs: {e}"))?;
+    let repo_config_by_repo: HashMap<String, &GithubRepoConfig> = repo_configs
         .iter()
-        .map(|project| (normalize_project_match(&project.name), project.id.clone()))
+        .map(|config| (config.repo.clone(), config))
         .collect();
 
     #[derive(sqlx::FromRow)]
     struct GithubProjectRow {
         repo: String,
-        display_name: String,
         default_milestone_number: Option<i64>,
         huly_project_id: Option<String>,
         clockify_project_id: Option<String>,
@@ -1911,7 +3082,6 @@ async fn load_execution_projects_from_local_projection(
     let github_rows: Vec<GithubProjectRow> = sqlx::query_as(
         "SELECT
             c.repo,
-            c.display_name,
             c.default_milestone_number,
             c.huly_project_id,
             c.clockify_project_id,
@@ -1939,127 +3109,168 @@ async fn load_execution_projects_from_local_projection(
              OR (c.default_milestone_number IS NULL AND i.milestone_number IS NULL)
            )
          WHERE c.enabled = 1
-         GROUP BY c.repo, c.display_name, c.default_milestone_number, c.huly_project_id,
+         GROUP BY c.repo, c.default_milestone_number, c.huly_project_id,
                   c.clockify_project_id, m.title, m.state
          ORDER BY latest_activity DESC, c.display_name ASC",
     )
     .fetch_all(pool)
     .await
     .map_err(|e| format!("load github execution projects: {e}"))?;
+    let github_row_by_repo: HashMap<String, GithubProjectRow> = github_rows
+        .into_iter()
+        .map(|row| (row.repo.clone(), row))
+        .collect();
 
     let mut rows = Vec::new();
     let mut used_clockify_ids = HashSet::new();
+    let mut seen_repos = HashSet::new();
 
-    for row in github_rows {
-        let milestone_number = row.default_milestone_number.unwrap_or(0);
-        let project_id = github_project_id(&row.repo, milestone_number);
-        let title = row
-            .milestone_title
-            .clone()
-            .unwrap_or(row.display_name.clone());
-        let matched_clockify_id = row
-            .clockify_project_id
-            .clone()
-            .or_else(|| {
-                clockify_by_normalized_name
-                    .get(&normalize_project_match(&title))
-                    .cloned()
-            })
-            .or_else(|| {
-                clockify_by_normalized_name
-                    .get(&normalize_project_match(&row.display_name))
-                    .cloned()
-            });
-        let hours = matched_clockify_id
-            .as_ref()
-            .and_then(|id| clockify_by_id.get(id).copied());
-        if let Some(id) = matched_clockify_id.as_ref() {
-            used_clockify_ids.insert(id.clone());
-        }
-        let (total_hours, billable_hours, team_members, utilization) = hours
-            .map(project_hours_from_row)
-            .unwrap_or((0.0, 0.0, 0, 0.0));
-        let total_issues = row.total_issues.max(0) as u32;
-        let closed_issues = row.closed_issues.max(0) as u32;
-        let open_issues = row.open_issues.max(0) as u32;
-        let total_prs = row.total_prs.max(0) as u32;
-        let open_prs = row.open_prs.max(0) as u32;
-        let branches = row.branches.max(0) as u32;
-        let failing_checks = row.failing_checks.max(0) as u32;
-        let percent_complete = if total_issues > 0 {
-            closed_issues as f64 / total_issues as f64
-        } else {
-            0.0
-        };
-        let status = if total_issues > 0 && open_issues == 0 {
-            "done"
-        } else if row
-            .milestone_state
-            .as_deref()
-            .unwrap_or_default()
-            .eq_ignore_ascii_case("closed")
-        {
-            "done"
-        } else {
-            "active"
-        };
+    for graph in teamforge_graphs
+        .iter()
+        .filter(|graph| teamforge_project_status_is_active(&graph.project.status))
+    {
+        let primary_huly_project_id = graph
+            .huly_links
+            .first()
+            .map(|link| link.huly_project_id.clone());
+        let repo_links = graph
+            .github_repos
+            .iter()
+            .filter(|link| link.sync_issues)
+            .collect::<Vec<_>>();
 
-        rows.push(ExecutionProjectView {
-            id: project_id,
-            source: "github".to_string(),
-            repo: Some(row.repo),
-            milestone: row.milestone_title,
-            title,
-            status: status.to_string(),
-            total_issues,
-            open_issues,
-            closed_issues,
-            total_prs,
-            open_prs,
-            branches,
-            failing_checks,
-            percent_complete,
-            latest_activity: row.latest_activity,
-            huly_project_id: row.huly_project_id,
-            clockify_project_id: matched_clockify_id,
-            total_hours,
-            billable_hours,
-            team_members,
-            utilization,
-        });
-    }
-
-    for project in all_clockify_projects {
-        if project.is_archived || used_clockify_ids.contains(&project.id) {
+        if repo_links.is_empty() {
+            let Some(clockify_project_id) = graph.project.clockify_project_id.clone() else {
+                continue;
+            };
+            if used_clockify_ids.insert(clockify_project_id.clone()) {
+                let hours = clockify_by_id.get(&clockify_project_id).copied();
+                let (total_hours, billable_hours, team_members, utilization) = hours
+                    .map(project_hours_from_row)
+                    .unwrap_or((0.0, 0.0, 0, 0.0));
+                rows.push(ExecutionProjectView {
+                    id: format!("teamforge:{}", graph.project.id),
+                    teamforge_project_id: Some(graph.project.id.clone()),
+                    source: "clockify".to_string(),
+                    repo: None,
+                    milestone: None,
+                    title: graph.project.name.clone(),
+                    status: graph.project.status.clone(),
+                    total_issues: 0,
+                    open_issues: 0,
+                    closed_issues: 0,
+                    total_prs: 0,
+                    open_prs: 0,
+                    branches: 0,
+                    failing_checks: 0,
+                    percent_complete: 0.0,
+                    latest_activity: None,
+                    huly_project_id: primary_huly_project_id.clone(),
+                    clockify_project_id: Some(clockify_project_id),
+                    total_hours,
+                    billable_hours,
+                    team_members,
+                    utilization,
+                });
+            }
             continue;
         }
-        let hours = clockify_by_id.get(&project.id).copied();
-        let (total_hours, billable_hours, team_members, utilization) = hours
-            .map(project_hours_from_row)
-            .unwrap_or((0.0, 0.0, 0, 0.0));
-        rows.push(ExecutionProjectView {
-            id: format!("clockify:{}", project.id),
-            source: "clockify".to_string(),
-            repo: None,
-            milestone: None,
-            title: project.name,
-            status: "active".to_string(),
-            total_issues: 0,
-            open_issues: 0,
-            closed_issues: 0,
-            total_prs: 0,
-            open_prs: 0,
-            branches: 0,
-            failing_checks: 0,
-            percent_complete: 0.0,
-            latest_activity: None,
-            huly_project_id: project.huly_project_id,
-            clockify_project_id: Some(project.id),
-            total_hours,
-            billable_hours,
-            team_members,
-            utilization,
-        });
+
+        for repo_link in repo_links {
+            if !seen_repos.insert(repo_link.repo.clone()) {
+                continue;
+            }
+
+            let github_row = github_row_by_repo.get(&repo_link.repo);
+            let repo_config = repo_config_by_repo.get(&repo_link.repo);
+            let milestone_number = github_row
+                .and_then(|row| row.default_milestone_number)
+                .or_else(|| repo_config.and_then(|config| config.default_milestone_number))
+                .unwrap_or(0);
+            let matched_clockify_id = graph
+                .project
+                .clockify_project_id
+                .clone()
+                .or_else(|| github_row.and_then(|row| row.clockify_project_id.clone()))
+                .or_else(|| repo_config.and_then(|config| config.clockify_project_id.clone()));
+            let hours = matched_clockify_id
+                .as_ref()
+                .and_then(|id| clockify_by_id.get(id).copied());
+            if let Some(id) = matched_clockify_id.as_ref() {
+                used_clockify_ids.insert(id.clone());
+            }
+            let (total_hours, billable_hours, team_members, utilization) = hours
+                .map(project_hours_from_row)
+                .unwrap_or((0.0, 0.0, 0, 0.0));
+            let total_issues = github_row
+                .map(|row| row.total_issues.max(0) as u32)
+                .unwrap_or(0);
+            let closed_issues = github_row
+                .map(|row| row.closed_issues.max(0) as u32)
+                .unwrap_or(0);
+            let open_issues = github_row
+                .map(|row| row.open_issues.max(0) as u32)
+                .unwrap_or(0);
+            let total_prs = github_row
+                .map(|row| row.total_prs.max(0) as u32)
+                .unwrap_or(0);
+            let open_prs = github_row
+                .map(|row| row.open_prs.max(0) as u32)
+                .unwrap_or(0);
+            let branches = github_row
+                .map(|row| row.branches.max(0) as u32)
+                .unwrap_or(0);
+            let failing_checks = github_row
+                .map(|row| row.failing_checks.max(0) as u32)
+                .unwrap_or(0);
+            let percent_complete = if total_issues > 0 {
+                closed_issues as f64 / total_issues as f64
+            } else {
+                0.0
+            };
+            let status = if total_issues > 0 && open_issues == 0 {
+                "done".to_string()
+            } else if github_row
+                .and_then(|row| row.milestone_state.as_deref())
+                .unwrap_or_default()
+                .eq_ignore_ascii_case("closed")
+            {
+                "done".to_string()
+            } else {
+                graph.project.status.clone()
+            };
+
+            rows.push(ExecutionProjectView {
+                id: github_project_id(&repo_link.repo, milestone_number),
+                teamforge_project_id: Some(graph.project.id.clone()),
+                source: "github".to_string(),
+                repo: Some(repo_link.repo.clone()),
+                milestone: github_row.and_then(|row| row.milestone_title.clone()),
+                title: github_row
+                    .and_then(|row| row.milestone_title.clone())
+                    .or_else(|| repo_link.display_name.clone())
+                    .or_else(|| repo_config.map(|config| config.display_name.clone()))
+                    .unwrap_or_else(|| graph.project.name.clone()),
+                status,
+                total_issues,
+                open_issues,
+                closed_issues,
+                total_prs,
+                open_prs,
+                branches,
+                failing_checks,
+                percent_complete,
+                latest_activity: github_row.and_then(|row| row.latest_activity.clone()),
+                huly_project_id: github_row
+                    .and_then(|row| row.huly_project_id.clone())
+                    .or_else(|| primary_huly_project_id.clone()),
+                clockify_project_id: matched_clockify_id,
+                total_hours,
+                billable_hours,
+                team_members,
+                utilization,
+            });
+        }
     }
 
     rows.sort_by(|left, right| {
@@ -5762,6 +6973,16 @@ pub async fn get_employee_summary(
         .await
         .map_err(|e| format!("load employee KPI snapshot: {e}"))?
         .map(map_employee_kpi_snapshot);
+    let kpi_status = build_employee_kpi_status(
+        kpi_snapshot.as_ref(),
+        vault_profile.as_ref(),
+        work_hours_this_month,
+        employee.monthly_quota_hours,
+        standups_last_7_days,
+        messages_last_7_days,
+        current_leave.is_some(),
+        today,
+    );
 
     Ok(EmployeeSummaryView {
         employee,
@@ -5779,6 +7000,7 @@ pub async fn get_employee_summary(
         upcoming_leaves,
         upcoming_events,
         vault_profile,
+        kpi_status,
         kpi_snapshot,
     })
 }
@@ -7345,6 +8567,7 @@ pub struct ActiveProjectIssueView {
     pub id: String,
     pub project_id: Option<String>,
     pub project_name: String,
+    pub client_id: Option<String>,
     pub client_name: Option<String>,
     pub repo: String,
     pub number: i64,
@@ -7368,6 +8591,7 @@ fn map_teamforge_active_project_issue_cache(
         id: row.id,
         project_id: row.project_id,
         project_name: row.project_name,
+        client_id: row.client_id,
         client_name: row.client_name,
         repo: row.repo,
         number: row.number,
@@ -7394,6 +8618,7 @@ fn build_teamforge_active_project_issue_cache(
         workspace_id: "teamforge".to_string(),
         project_id: issue.project_id.clone(),
         project_name: issue.project_name.clone(),
+        client_id: issue.client_id.clone(),
         client_name: issue.client_name.clone(),
         repo: issue.repo.clone(),
         number: issue.number,
@@ -7454,6 +8679,7 @@ async fn load_teamforge_active_project_issue_projection(
 struct ActiveIssueProjectScope {
     project_id: Option<String>,
     project_name: String,
+    client_id: Option<String>,
     client_name: Option<String>,
     repo: String,
     milestone_number: Option<i64>,
@@ -7469,15 +8695,10 @@ fn teamforge_project_status_is_active(status: &str) -> bool {
 fn build_active_issue_project_scopes(
     graphs: &[TeamforgeProjectGraph],
     repo_configs: &[GithubRepoConfig],
-    clockify_projects: &[Project],
 ) -> Vec<ActiveIssueProjectScope> {
     let repo_config_by_repo: HashMap<String, &GithubRepoConfig> = repo_configs
         .iter()
         .map(|config| (config.repo.clone(), config))
-        .collect();
-    let project_by_clockify_id: HashMap<String, &Project> = clockify_projects
-        .iter()
-        .map(|project| (project.clockify_project_id.clone(), project))
         .collect();
 
     let mut scopes = Vec::new();
@@ -7488,52 +8709,35 @@ fn build_active_issue_project_scopes(
         .filter(|graph| teamforge_project_status_is_active(&graph.project.status))
     {
         for repo_link in graph.github_repos.iter().filter(|link| link.sync_issues) {
-            let Some(config) = repo_config_by_repo.get(&repo_link.repo) else {
-                continue;
-            };
             if !seen.insert(repo_link.repo.clone()) {
                 continue;
             }
+            let config = repo_config_by_repo.get(&repo_link.repo);
 
             scopes.push(ActiveIssueProjectScope {
                 project_id: Some(graph.project.id.clone()),
                 project_name: graph.project.name.clone(),
+                client_id: graph.project.client_id.clone().or_else(|| {
+                    graph
+                        .client_profile
+                        .as_ref()
+                        .map(|profile| profile.client_id.clone())
+                }),
                 client_name: graph
                     .project
                     .client_name
                     .clone()
-                    .or_else(|| config.client_name.clone()),
+                    .or_else(|| {
+                        graph
+                            .client_profile
+                            .as_ref()
+                            .map(|profile| profile.client_name.clone())
+                    })
+                    .or_else(|| config.and_then(|value| value.client_name.clone())),
                 repo: repo_link.repo.clone(),
-                milestone_number: config.default_milestone_number,
+                milestone_number: config.and_then(|value| value.default_milestone_number),
             });
         }
-    }
-
-    if !scopes.is_empty() {
-        return scopes;
-    }
-
-    for config in repo_configs.iter().filter(|config| config.enabled) {
-        if !seen.insert(config.repo.clone()) {
-            continue;
-        }
-
-        let linked_clockify_project = config
-            .clockify_project_id
-            .as_deref()
-            .and_then(|project_id| project_by_clockify_id.get(project_id));
-
-        scopes.push(ActiveIssueProjectScope {
-            project_id: None,
-            project_name: linked_clockify_project
-                .map(|project| project.name.clone())
-                .unwrap_or_else(|| config.display_name.clone()),
-            client_name: config.client_name.clone().or_else(|| {
-                linked_clockify_project.and_then(|project| project.client_name.clone())
-            }),
-            repo: config.repo.clone(),
-            milestone_number: config.default_milestone_number,
-        });
     }
 
     scopes
@@ -7552,12 +8756,7 @@ async fn load_active_project_issues(
     let repo_configs = queries::get_enabled_github_repo_configs(pool)
         .await
         .map_err(|e| format!("load GitHub repo configs for issues: {e}"))?;
-    let clockify_projects = queries::get_projects(pool)
-        .await
-        .map_err(|e| format!("load Clockify projects for issues: {e}"))?;
-
-    let scopes =
-        build_active_issue_project_scopes(&teamforge_graphs, &repo_configs, &clockify_projects);
+    let scopes = build_active_issue_project_scopes(&teamforge_graphs, &repo_configs);
     if scopes.is_empty() {
         return Ok(Vec::new());
     }
@@ -7597,6 +8796,7 @@ async fn load_active_project_issues(
             id: format!("{}#{}", issue.repo, issue.number),
             project_id: scope.project_id.clone(),
             project_name: scope.project_name.clone(),
+            client_id: scope.client_id.clone(),
             client_name: scope.client_name.clone(),
             repo: issue.repo.clone(),
             number: issue.number,
@@ -9637,7 +10837,9 @@ mod tests {
                 slug: "parkarea-phase-2".to_string(),
                 name: "ParkArea Phase 2 - Germany Launch".to_string(),
                 portfolio_name: Some("ParkArea".to_string()),
+                client_id: Some("parkarea".to_string()),
                 client_name: Some("ParkArea".to_string()),
+                clockify_project_id: Some("clockify-parkarea".to_string()),
                 project_type: Some("execution".to_string()),
                 status: "active".to_string(),
                 sync_mode: "hybrid".to_string(),
@@ -9680,6 +10882,10 @@ mod tests {
         assert_eq!(configs[0].display_name, "ParkArea Phase 2 - Germany Launch");
         assert_eq!(configs[0].client_name.as_deref(), Some("ParkArea"));
         assert_eq!(
+            configs[0].clockify_project_id.as_deref(),
+            Some("clockify-parkarea")
+        );
+        assert_eq!(
             configs[0].huly_project_id.as_deref(),
             Some("huly-project-1")
         );
@@ -9701,7 +10907,9 @@ mod tests {
                 slug: "axtech".to_string(),
                 name: "Axtech".to_string(),
                 portfolio_name: Some("Axtech".to_string()),
+                client_id: Some("axtech".to_string()),
                 client_name: Some("Axtech".to_string()),
+                clockify_project_id: Some("clockify-axtech".to_string()),
                 project_type: Some("execution".to_string()),
                 status: "active".to_string(),
                 sync_mode: "hybrid".to_string(),
@@ -9729,7 +10937,9 @@ mod tests {
                 slug: "legacy".to_string(),
                 name: "Legacy".to_string(),
                 portfolio_name: Some("Legacy".to_string()),
+                client_id: Some("legacy".to_string()),
                 client_name: Some("Legacy".to_string()),
+                clockify_project_id: Some("clockify-legacy".to_string()),
                 project_type: Some("execution".to_string()),
                 status: "archived".to_string(),
                 sync_mode: "hybrid".to_string(),
@@ -9810,6 +11020,7 @@ mod tests {
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].project_id.as_deref(), Some("tf-project-active"));
         assert_eq!(issues[0].project_name, "Axtech");
+        assert_eq!(issues[0].client_id.as_deref(), Some("axtech"));
         assert_eq!(issues[0].client_name.as_deref(), Some("Axtech"));
         assert_eq!(issues[0].repo, "Sheshiyer/axtech-aleph");
         assert_eq!(issues[0].number, 12);
@@ -9835,6 +11046,7 @@ mod tests {
                 workspace_id: "workspace-1".to_string(),
                 project_id: Some("tf-project-active".to_string()),
                 project_name: "Axtech".to_string(),
+                client_id: Some("axtech".to_string()),
                 client_name: Some("Axtech".to_string()),
                 repo: "Sheshiyer/axtech-aleph".to_string(),
                 number: 42,
@@ -9863,7 +11075,9 @@ mod tests {
                     slug: "axtech".to_string(),
                     name: "Axtech".to_string(),
                     portfolio_name: Some("Axtech".to_string()),
+                    client_id: Some("axtech".to_string()),
                     client_name: Some("Axtech".to_string()),
+                    clockify_project_id: Some("clockify-axtech".to_string()),
                     project_type: Some("execution".to_string()),
                     status: "active".to_string(),
                     sync_mode: "hybrid".to_string(),

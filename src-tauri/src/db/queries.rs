@@ -22,6 +22,8 @@ pub async fn init_db(app_data_dir: &Path) -> Result<SqlitePool, sqlx::Error> {
         .await?;
     ensure_identity_map_columns(&pool).await?;
     ensure_github_repo_config_columns(&pool).await?;
+    ensure_teamforge_project_columns(&pool).await?;
+    ensure_teamforge_active_issue_columns(&pool).await?;
     ensure_slack_message_activity_columns(&pool).await?;
 
     Ok(pool)
@@ -45,6 +47,33 @@ async fn ensure_identity_map_columns(pool: &SqlitePool) -> Result<(), sqlx::Erro
 
 async fn ensure_github_repo_config_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     for statement in ["ALTER TABLE github_repo_configs ADD COLUMN client_name TEXT"] {
+        if let Err(error) = sqlx::query(statement).execute(pool).await {
+            let message = error.to_string().to_lowercase();
+            if !message.contains("duplicate column name") {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_teamforge_project_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    for statement in [
+        "ALTER TABLE teamforge_projects ADD COLUMN client_id TEXT",
+        "ALTER TABLE teamforge_projects ADD COLUMN clockify_project_id TEXT",
+    ] {
+        if let Err(error) = sqlx::query(statement).execute(pool).await {
+            let message = error.to_string().to_lowercase();
+            if !message.contains("duplicate column name") {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_teamforge_active_issue_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    for statement in ["ALTER TABLE teamforge_active_project_issues ADD COLUMN client_id TEXT"] {
         if let Err(error) = sqlx::query(statement).execute(pool).await {
             let message = error.to_string().to_lowercase();
             if !message.contains("duplicate column name") {
@@ -627,19 +656,23 @@ pub async fn replace_teamforge_project_graph(
             slug,
             name,
             portfolio_name,
+            client_id,
             client_name,
+            clockify_project_id,
             project_type,
             status,
             sync_mode,
             created_at,
             updated_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
         ON CONFLICT(id) DO UPDATE SET
           slug = excluded.slug,
           name = excluded.name,
           portfolio_name = excluded.portfolio_name,
+          client_id = excluded.client_id,
           client_name = excluded.client_name,
+          clockify_project_id = excluded.clockify_project_id,
           project_type = excluded.project_type,
           status = excluded.status,
           sync_mode = excluded.sync_mode,
@@ -649,7 +682,9 @@ pub async fn replace_teamforge_project_graph(
     .bind(&graph.project.slug)
     .bind(&graph.project.name)
     .bind(&graph.project.portfolio_name)
+    .bind(&graph.project.client_id)
     .bind(&graph.project.client_name)
+    .bind(&graph.project.clockify_project_id)
     .bind(&graph.project.project_type)
     .bind(&graph.project.status)
     .bind(&graph.project.sync_mode)
@@ -1195,6 +1230,7 @@ pub async fn replace_teamforge_active_project_issue_projection(
                 workspace_id,
                 project_id,
                 project_name,
+                client_id,
                 client_name,
                 repo,
                 number,
@@ -1211,12 +1247,13 @@ pub async fn replace_teamforge_active_project_issue_projection(
                 closed_at,
                 last_synced_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
         )
         .bind(&issue.id)
         .bind(&issue.workspace_id)
         .bind(&issue.project_id)
         .bind(&issue.project_name)
+        .bind(&issue.client_id)
         .bind(&issue.client_name)
         .bind(&issue.repo)
         .bind(issue.number)
@@ -3057,7 +3094,9 @@ mod tests {
                 slug: "parkarea-germany-launch".to_string(),
                 name: "ParkArea Phase 2 - Germany Launch".to_string(),
                 portfolio_name: Some("Thoughtseed".to_string()),
+                client_id: Some("parkarea".to_string()),
                 client_name: Some("ParkArea".to_string()),
+                clockify_project_id: Some("clockify-parkarea".to_string()),
                 project_type: Some("client-delivery".to_string()),
                 status: "active".to_string(),
                 sync_mode: "bidirectional".to_string(),
@@ -3161,7 +3200,9 @@ mod tests {
                 slug: "internal-ops".to_string(),
                 name: "Internal Ops".to_string(),
                 portfolio_name: Some("Thoughtseed".to_string()),
+                client_id: None,
                 client_name: None,
+                clockify_project_id: None,
                 project_type: Some("internal".to_string()),
                 status: "active".to_string(),
                 sync_mode: "bidirectional".to_string(),

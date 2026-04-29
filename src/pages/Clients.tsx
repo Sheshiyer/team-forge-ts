@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { SkeletonCard, SkeletonTable } from "../components/ui/Skeleton";
 import { useInvoke } from "../hooks/useInvoke";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
@@ -17,6 +18,26 @@ function formatDateTime(value: string | null): string {
     day: "numeric",
     year: "numeric",
   });
+}
+
+function normalizeClientFilter(value: string | null): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized.toLowerCase() : null;
+}
+
+function matchesClientReference(client: ClientView, reference: string | null): boolean {
+  const normalizedReference = normalizeClientFilter(reference);
+  if (!normalizedReference) return true;
+
+  return (
+    client.id.toLowerCase() === normalizedReference ||
+    client.name.trim().toLowerCase() === normalizedReference
+  );
+}
+
+function clientHasContractRisk(client: ClientView): boolean {
+  const daysRemaining = client.operationalSignals.daysRemaining;
+  return daysRemaining !== null && daysRemaining < 30;
 }
 
 function clientAccent(client: ClientView): string {
@@ -579,13 +600,21 @@ function DetailPanel({
 
 function Clients() {
   const api = useInvoke();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [clients, setClients] = useState<ClientView[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ClientDetailView | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+
+  const registryFilter = searchParams.get("registry");
+  const activeRegistryFilter =
+    registryFilter === "canonical" || registryFilter === "operational"
+      ? registryFilter
+      : null;
+  const contractRiskFilter = searchParams.get("risk") === "contract";
+  const selectedClientRef = searchParams.get("client");
 
   const load = useCallback(async () => {
     try {
@@ -603,43 +632,129 @@ function Clients() {
     load();
   }, [load]);
 
-  const handleSelectClient = useCallback(
-    async (clientId: string) => {
-      setSelectedClientId(clientId);
-      setDetailLoading(true);
-      setDetail(null);
-      setDetailError(null);
-      try {
-        const data = await api.getClientDetail(clientId);
-        setDetail(data);
-      } catch {
-        setDetailError("CLIENT DETAIL UNAVAILABLE.");
-      } finally {
-        setDetailLoading(false);
-      }
+  const updateSearchParam = useCallback(
+    (key: string, value: string | null) => {
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current);
+        if (value && value.trim()) {
+          next.set(key, value);
+        } else {
+          next.delete(key);
+        }
+        return next;
+      });
     },
-    [api]
+    [setSearchParams],
+  );
+
+  const clearFilters = useCallback(() => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("registry");
+      next.delete("risk");
+      next.delete("client");
+      return next;
+    });
+  }, [setSearchParams]);
+
+  const handleSelectClient = useCallback(
+    (clientId: string) => {
+      updateSearchParam("client", clientId);
+    },
+    [updateSearchParam],
   );
 
   const handleCloseDetail = useCallback(() => {
-    setSelectedClientId(null);
     setDetail(null);
-  }, []);
+    setDetailError(null);
+    updateSearchParam("client", null);
+  }, [updateSearchParam]);
 
-  const canonicalClients = clients.filter(
+  const filteredClients = useMemo(
+    () =>
+      clients.filter((client) => {
+        if (activeRegistryFilter && client.registryStatus !== activeRegistryFilter) {
+          return false;
+        }
+        if (contractRiskFilter && !clientHasContractRisk(client)) {
+          return false;
+        }
+        if (selectedClientRef && !matchesClientReference(client, selectedClientRef)) {
+          return false;
+        }
+        return true;
+      }),
+    [clients, activeRegistryFilter, contractRiskFilter, selectedClientRef],
+  );
+
+  const resolvedSelectedClient = useMemo(
+    () =>
+      selectedClientRef
+        ? clients.find((client) => matchesClientReference(client, selectedClientRef)) ?? null
+        : null,
+    [clients, selectedClientRef],
+  );
+
+  useEffect(() => {
+    if (!selectedClientRef) {
+      setDetail(null);
+      setDetailLoading(false);
+      setDetailError(null);
+      return;
+    }
+
+    if (!resolvedSelectedClient) {
+      setDetail(null);
+      setDetailLoading(false);
+      setDetailError(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    setDetailLoading(true);
+    setDetail(null);
+    setDetailError(null);
+
+    void api
+      .getClientDetail(resolvedSelectedClient.id)
+      .then((data) => {
+        if (!cancelled) {
+          setDetail(data);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDetailError("CLIENT DETAIL UNAVAILABLE.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setDetailLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api, resolvedSelectedClient, selectedClientRef]);
+
+  const canonicalClients = filteredClients.filter(
     (client) => client.registryStatus === "canonical"
   );
-  const operationalOnlyClients = clients.filter(
+  const operationalOnlyClients = filteredClients.filter(
     (client) => client.registryStatus === "operational"
   );
-  const monthBillableHours = clients.reduce(
+  const monthBillableHours = filteredClients.reduce(
     (sum, client) => sum + client.operationalSignals.monthBillableHours,
     0
   );
-  const openGithubIssues = clients.reduce(
+  const openGithubIssues = filteredClients.reduce(
     (sum, client) => sum + client.operationalSignals.githubOpenIssues,
     0
   );
+  const hasActiveFilters =
+    activeRegistryFilter !== null || contractRiskFilter || Boolean(selectedClientRef);
 
   if (loading) {
     return (
@@ -687,6 +802,24 @@ function Clients() {
         />
       </div>
 
+      {hasActiveFilters ? (
+        <div style={styles.filterBanner}>
+          <div style={styles.filterBannerText}>
+            FOCUSED VIEW
+            {activeRegistryFilter ? ` · ${activeRegistryFilter.toUpperCase()} REGISTRY` : ""}
+            {contractRiskFilter ? " · CONTRACT RISK" : ""}
+            {resolvedSelectedClient ? ` · ${resolvedSelectedClient.name.toUpperCase()}` : ""}
+          </div>
+          <button
+            type="button"
+            onClick={clearFilters}
+            style={styles.filterClearButton}
+          >
+            CLEAR DRILL-DOWN
+          </button>
+        </div>
+      ) : null}
+
       <div style={styles.card}>
         <h2 style={styles.sectionTitle}>CANONICAL CLIENT REGISTRY</h2>
         <div style={styles.sectionDivider} />
@@ -731,7 +864,7 @@ function Clients() {
         )}
       </div>
 
-      {selectedClientId ? (
+      {selectedClientRef ? (
         detailLoading ? (
           <div style={styles.overlay} onClick={handleCloseDetail}>
             <div style={styles.detailPanel} onClick={(event) => event.stopPropagation()}>
@@ -802,6 +935,33 @@ const styles: Record<string, React.CSSProperties> = {
   sectionDivider: lcarsPageStyles.sectionDivider,
   emptyText: lcarsPageStyles.emptyText,
   helperText: lcarsPageStyles.helperText,
+  filterBanner: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap" as const,
+    marginBottom: 20,
+    padding: "12px 16px",
+    background: "rgba(0, 204, 255, 0.05)",
+    border: "1px solid rgba(0, 204, 255, 0.14)",
+    borderLeft: "6px solid var(--lcars-cyan)",
+    borderRadius: "0 18px 18px 0",
+  },
+  filterBannerText: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    color: "var(--lcars-cyan)",
+    letterSpacing: "1px",
+    textTransform: "uppercase" as const,
+  },
+  filterClearButton: {
+    ...lcarsPageStyles.ghostButton,
+    padding: "6px 12px",
+    fontSize: 10,
+    color: "var(--lcars-cyan)",
+    border: "1px solid rgba(0, 204, 255, 0.3)",
+  },
   clientGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",

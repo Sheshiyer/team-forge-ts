@@ -91,6 +91,15 @@ Storage:
 
 Use a simple workspace-scoped app token or device bootstrap token.
 
+Current implementation note:
+
+- TeamForge desktop currently uses `TF_CREDENTIAL_ENVELOPE_KEY` as the bearer
+  token for app-authenticated `/v1/*` routes
+- the local `cloud_credentials_access_token` setting is the stored copy of that
+  app token on founder/operator machines
+- `TF_WEBHOOK_HMAC_SECRET` is reserved for internal callbacks and parity
+  canaries that intentionally use internal auth, not normal desktop surfaces
+
 Required claims or metadata:
 
 - `workspace_id`

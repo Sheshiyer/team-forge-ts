@@ -1,6 +1,6 @@
 {
   "productName": "TeamForge",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "identifier": "com.thoughtseed.teamforge",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -50,7 +50,9 @@
     "copyright": "Copyright 2026 Thoughtseed",
     "publisher": "Thoughtseed",
     "homepage": "https://github.com/Sheshiyer/team-forge-ts",
-    "resources": []
+    "resources": {
+      "../scripts/teamforge-vault-parity.mjs": "teamforge-vault-parity.mjs"
+    }
   },
   "plugins": {
     "shell": {

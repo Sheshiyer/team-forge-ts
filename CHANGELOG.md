@@ -2,6 +2,57 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.25 - 2026-04-30
+
+This release turns TeamForge further into the founder control plane: Overview
+now routes into canonical ID-backed work queues, Settings gains a real founder
+workspace status + vault sync surface, and the Worker app-auth contract is
+aligned so desktop founder sync can write project, client, onboarding, and KPI
+state through the same Cloudflare-backed control plane.
+
+### Changed
+
+- Expanded the founder dashboard and canonical identity bridge:
+  - Overview now drills into Clients, Issues, and Onboarding by canonical IDs
+    instead of name-based heuristics
+  - TeamForge project graphs now persist explicit client and Clockify linkage
+    through Worker/D1 and the local cache
+  - local execution and active-issue loading no longer depend on the older
+    name-fallback joins
+- Added founder-local workspace control and sync in Settings:
+  - surfaced TeamForge workspace id, vault readiness, Node/runtime status, and
+    parity-script status in the Local Workspace section
+  - added a `Sync Vault to TeamForge` action that reuses the canonical vault
+    parity importer from the app contract
+  - bundled the parity importer into the Tauri app resources so the sync path
+    is no longer repo-checkout-only
+- Fixed the Worker route auth gap:
+  - aligned the main desktop `/v1/*` project/client/onboarding/control-plane
+    routes onto the desktop app bearer token contract
+  - stopped requiring the internal webhook secret for normal desktop founder
+    sync writes
+- Rebased the GitHub backlog on the shipped founder roadmap:
+  - closed the stale Huly-first device, knowledge, training, and old rollout
+    tracker issues
+  - opened canonical follow-ons for founder-sync hardening and vault metadata
+    completion
+- Bumped release metadata to `0.1.25` across the frontend package, Tauri
+  config, and Rust crate.
+
+### Verification
+
+- `node --check scripts/teamforge-vault-parity.mjs`
+- `cargo fmt --manifest-path src-tauri/Cargo.toml`
+- `pnpm build`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+- `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit`
+- `pnpm --dir cloudflare/worker run deploy`
+- `TEAMFORGE_ACCESS_TOKEN=... node scripts/teamforge-vault-parity.mjs --vault-root /Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs --worker-base-url https://teamforge-api.sheshnarayan-iyer.workers.dev --workspace-id ws_thoughtseed --apply --report /tmp/teamforge-founder-sync-proof.json`
+- `cargo tauri build --bundles app --config src-tauri/tauri.conf.json`
+  - produced the macOS app and updater bundle, then stopped at the expected
+    local signing-key check because CI owns updater signing
+- `git diff --check`
+
 ## v0.1.24 - 2026-04-28
 
 This release hardens the OTA publication path by separating release publish

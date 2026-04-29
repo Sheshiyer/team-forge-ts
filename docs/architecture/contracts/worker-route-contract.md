@@ -37,6 +37,13 @@ This document freezes the public and internal HTTP contract for the TeamForge Wo
 
 ## Public App Routes
 
+Current bearer token implementation:
+
+- desktop app routes currently authenticate with
+  `Authorization: Bearer <TF_CREDENTIAL_ENVELOPE_KEY>`
+- this same token is stored locally as `cloud_credentials_access_token`
+- the webhook/internal secret must not be required for normal desktop route use
+
 | Method | Route | Purpose |
 |---|---|---|
 | `GET` | `/v1/bootstrap` | app bootstrap payload |

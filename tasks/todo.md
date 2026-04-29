@@ -2,6 +2,477 @@
 
 ## Goal
 
+Close the remaining founder-console setup gaps by making local workspace
+readiness and vault parity sync first-class Settings workflows, aligning the
+parity importer with the app's real Cloudflare access token model, and cleaning
+the stale GitHub roadmap before the next OTA release.
+
+## Plan
+
+- [ ] Review the relevant Tauri skill docs and active planning docs before
+- [x] Review the relevant Tauri skill docs and active planning docs before
+      implementation:
+      - `building-tauri-with-github-actions`
+      - `calling-rust-from-tauri-frontend`
+      - `understanding-tauri-ipc`
+      - `managing-tauri-app-resources`
+      - `docs/plans/2026-04-22-teamforge-founder-console.md`
+      - `docs/plans/2026-04-20-teamforge-vault-population-phase-2.md`
+      - `docs/plans/2026-04-29-teamforge-dashboard-realignment.md`
+- [x] Add native local-workspace readiness reporting and expose the canonical
+      TeamForge workspace id in Settings instead of keeping it implicit.
+- [x] Add a founder-facing `Sync Vault to TeamForge` action in Settings that
+      reuses the canonical parity importer with the app's stored vault path,
+      Worker base URL, workspace id, and cloud access token.
+- [x] Bundle the parity importer as an app resource and update its auth input
+      so founder sync uses the real TeamForge access token contract instead of
+      the old webhook-secret shortcut.
+- [x] Triage the remaining stale GitHub issues against the shipped founder
+      dashboard direction and record the still-open product/data gaps.
+- [ ] Verify the app/build/release slice, then cut and watch the next OTA tag
+      through the existing GitHub Actions workflow if the checks pass.
+
+## Review
+
+- Tauri skills used:
+  - `building-tauri-with-github-actions`
+    - used to keep the release validation and next-tag decision grounded in the
+      existing OTA workflow instead of treating local Tauri builds as the final
+      release authority
+  - `calling-rust-from-tauri-frontend`
+    - used to keep founder sync and local-workspace readiness as typed native
+      commands rather than ad hoc frontend shell behavior
+  - `understanding-tauri-ipc`
+    - used to keep the new Settings founder-sync surface on the same explicit
+      Tauri command boundary as the rest of TeamForge
+  - `managing-tauri-app-resources`
+    - used to bundle the canonical parity importer into the app instead of
+      leaving the founder sync path tied only to a repo checkout
+- Planning/docs reviewed before implementation:
+  - `docs/plans/2026-04-22-teamforge-founder-console.md`
+  - `docs/plans/2026-04-20-teamforge-vault-population-phase-2.md`
+  - `docs/plans/2026-04-29-teamforge-dashboard-realignment.md`
+  - `docs/architecture/contracts/worker-route-contract.md`
+  - `docs/architecture/contracts/secrets-auth-contract.md`
+  - no repo-local `.context/*` or GSD artifacts were present in this checkout
+- Implemented:
+  - added native `get_local_workspace_status` and
+    `sync_local_vault_to_teamforge` commands in `src-tauri/src/commands/mod.rs`
+  - bundled `scripts/teamforge-vault-parity.mjs` into the Tauri app resources
+    through `src-tauri/tauri.conf.json`
+  - updated the parity importer to prefer `TEAMFORGE_ACCESS_TOKEN` /
+    `TF_API_ACCESS_TOKEN` / `CLOUD_CREDENTIALS_ACCESS_TOKEN` before the older
+    internal-secret fallback
+  - exposed TeamForge workspace id, founder-sync readiness, Node/runtime
+    status, and the `SYNC VAULT TO TEAMFORGE` action in `src/pages/Settings.tsx`
+  - fixed the Worker app-auth gap by requiring desktop bearer auth for the main
+    `/v1/*` project/client/onboarding/control-plane routes via
+    `TF_CREDENTIAL_ENVELOPE_KEY`, instead of leaving some routes open and some
+    incorrectly gated behind `TF_WEBHOOK_HMAC_SECRET`
+- Live gap found and fixed during verification:
+  - first founder-sync proof showed that project graph writes still worked but
+    client profile and onboarding writes failed with `403 invalid_authorization`
+    when using the app-stored cloud access token
+  - root cause: `cloud_credentials_access_token` was the desktop app token for
+    `/v1/credentials`, but several other `/v1/*` write routes still required
+    `TF_WEBHOOK_HMAC_SECRET`
+  - fixed by aligning those desktop-consumed routes onto the app token
+    contract and redeploying the Worker
+- GitHub backlog cleanup:
+  - closed stale issues:
+    - `#17` completed docs task
+    - `#16` stale rollout tracker
+    - `#5` superseded Huly-only client dashboard
+    - `#6` obsolete device registry
+    - `#7` obsolete knowledge page in current form
+    - `#11` obsolete training dashboard
+  - opened new canonical follow-ons:
+    - `#45` Founder Sync Hardening: Remove external Node dependency from
+      Settings vault sync
+    - `#46` Vault Parity Data Completion: Backfill missing client metadata and
+      external refs
+- Verification:
+  - `node --check scripts/teamforge-vault-parity.mjs` passed
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml` passed
+  - `pnpm build` passed
+  - `cargo check --manifest-path src-tauri/Cargo.toml` passed
+  - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit` passed
+  - `pnpm --dir cloudflare/worker run deploy` passed
+    - deployed Worker version `3e11d789-659c-4d5b-a5bf-35d4a9413072`
+  - live founder-sync proof passed with:
+    - `TEAMFORGE_ACCESS_TOKEN=... node scripts/teamforge-vault-parity.mjs --vault-root /Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs --worker-base-url https://teamforge-api.sheshnarayan-iyer.workers.dev --workspace-id ws_thoughtseed --apply --report /tmp/teamforge-founder-sync-proof.json`
+  - the successful founder-sync proof verified:
+    - `23` project brief updates
+    - `2` client profiles verified
+    - `2` onboarding flows verified
+    - `6` employee KPI updates verified
+  - the remaining warnings are now content/data gaps, not route/auth failures:
+    - missing client profile notes
+    - missing technical specs
+    - missing design/research/closeout docs
+    - missing client onboarding notes
+  - release/tag step is still pending
+
+# Task Plan
+
+## Goal
+
+Finish the canonical identity path for vault-backed TeamForge projects by
+completing the Worker/D1 parity apply, persisting explicit Clockify and client
+linkage in the canonical project graph, removing local name-fallback joins, and
+switching founder drill-downs onto stable IDs.
+
+## Plan
+
+- [x] Extend the Worker/D1 project graph contract to persist explicit
+      `clockify_project_id` linkage using the canonical external-id path instead
+      of relying on display-name reconciliation.
+- [x] Update the vault parity/import flow so project graph writes, client
+      profiles, and onboarding flows can be applied end-to-end against the
+      Worker and verified back from D1.
+- [x] Extend the Tauri Worker bridge and SQLite TeamForge projection to cache
+      canonical Clockify/client identifiers alongside the existing project graph.
+- [x] Remove the name-fallback joins in:
+      - `src-tauri/src/commands/mod.rs` execution project loading
+      - `src-tauri/src/commands/mod.rs` active issue scope loading
+      - any remaining client/detail joins that still key only on client names
+- [x] Change founder/dashboard drill-down routing to use canonical IDs where the
+      data now carries them, instead of client/project display names.
+- [x] Verify with Worker type-checks, parity/import checks, frontend build,
+      Rust checks, and diff hygiene, then record the review here.
+
+- [x] Review the relevant Tauri skill docs and canonical repo docs before
+      implementation:
+      - `calling-rust-from-tauri-frontend`
+      - `understanding-tauri-ipc`
+      - `docs/plans/2026-04-20-teamforge-vault-population-phase-2.md`
+      - `docs/plans/2026-04-17-cloudflare-project-backend-implementation.md`
+      - `docs/architecture/contracts/vault-ingestion-contract.md`
+      - `docs/architecture/contracts/worker-route-contract.md`
+
+## Review
+
+- Tauri/Cloudflare skills used:
+  - `calling-rust-from-tauri-frontend`
+    - kept the new canonical ID fields on the typed Tauri side instead of
+      adding ad hoc frontend-only joins
+  - `understanding-tauri-ipc`
+    - kept the founder dashboard and project graph changes inside the existing
+      IPC contracts rather than inventing a second data path
+  - Cloudflare `wrangler` / `workers-best-practices`
+    - used for the additive D1 migration, Worker deploy, and keeping the
+      canonical project graph change inside the Worker repository boundary
+- Planning/docs reviewed before implementation:
+  - `docs/plans/2026-04-20-teamforge-vault-population-phase-2.md`
+  - `docs/plans/2026-04-17-cloudflare-project-backend-implementation.md`
+  - `docs/architecture/contracts/vault-ingestion-contract.md`
+  - `docs/architecture/contracts/worker-route-contract.md`
+  - `docs/architecture/contracts/d1-schema-contract.md`
+  - no repo-local `.context/*` or GSD artifacts were present in this checkout
+- Canonical identity changes:
+  - Worker/D1 now exposes `project.clientId` and `project.clockifyProjectId`
+    in the canonical TeamForge project graph, while keeping Clockify linkage in
+    `project_external_ids`
+  - the vault parity importer now writes `clientId` and `clockifyProjectId`
+    from project briefs instead of leaving them implicit
+  - local SQLite `teamforge_projects` now caches `client_id` and
+    `clockify_project_id`, and active issue projection rows now cache
+    `client_id`
+  - local execution project loading no longer falls back from GitHub milestone
+    titles to normalized Clockify names
+  - local active issue scopes no longer fall back to graphless GitHub repo
+    configs or name-derived Clockify joins
+  - founder drill-downs now route by canonical IDs where available:
+    - active delivery -> TeamForge `projectId`
+    - white-labelable -> canonical `clientId`
+    - onboarding risk -> `flowId`
+- Live Worker/D1 rollout:
+  - applied remote D1 migration `0005_project_identity_links.sql`
+  - deployed Worker version `4b3469e1-547e-4586-8d93-ddf8b6437b5b`
+  - rotated `TF_WEBHOOK_HMAC_SECRET` in Cloudflare and GitHub so the parity
+    importer could complete authenticated client-profile and onboarding writes
+  - executed full parity apply into workspace `ws_thoughtseed`
+- Live parity result:
+  - `22` project briefs processed
+  - `20` project creates, `2` project updates
+  - `2` client profiles applied and verified
+  - `2` onboarding flows applied and verified
+  - `6` employee KPI updates verified
+  - direct live spot-check confirms `axtech` now returns canonical
+    `clientId: "axdis-group"` from `/v1/project-mappings`
+- Verification:
+  - `pnpm exec tsc -p cloudflare/worker/tsconfig.json --noEmit` passed
+  - `pnpm build` passed
+  - `node --check scripts/teamforge-vault-parity.mjs` passed
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml` passed
+  - `cargo check --manifest-path src-tauri/Cargo.toml` passed
+  - `cargo test --manifest-path src-tauri/Cargo.toml cached_teamforge_graphs_bridge_into_github_repo_configs -- --nocapture` passed
+  - `cargo test --manifest-path src-tauri/Cargo.toml active_project_issues_are_grouped_from_active_teamforge_projects -- --nocapture` passed
+  - `pnpm --dir cloudflare/worker d1:migrate:remote` passed
+  - `pnpm --dir cloudflare/worker run deploy` passed
+  - `TF_WEBHOOK_HMAC_SECRET=... node scripts/teamforge-vault-parity.mjs --workspace-id ws_thoughtseed --apply` passed
+  - `git diff --check` passed
+
+# Task Plan
+
+## Goal
+
+Turn the founder command-center rails into real route-level drill-downs, so
+`Overview` opens filtered `Clients`, `Issues`, and `Onboarding` subsets instead
+of just dropping the operator onto a generic page.
+
+## Plan
+
+- [x] Add a minimal URL search-param contract for the drill-down targets:
+      - `Clients`: registry status, contract-risk, and detail selection
+      - `Issues`: client/project/state presets
+      - `Onboarding`: audience/status attention preset, including `audience=all`
+- [x] Update `Overview` action buttons so the founder rails navigate into those
+      filtered subsets instead of only opening the base route.
+- [x] Keep the filtering contract local to the existing pages instead of adding
+      a new global dashboard store or extra Tauri IPC.
+- [x] Verify the slice with frontend build and diff hygiene, then record the
+      review here.
+
+- [x] Review the relevant Tauri skill docs and repo planning docs before
+      implementation:
+      - `calling-rust-from-tauri-frontend`
+      - `understanding-tauri-ipc`
+      - `docs/plans/2026-04-22-teamforge-founder-console.md`
+      - `docs/plans/2026-04-20-teamforge-vault-population-phase-2.md`
+      - `docs/plans/2026-04-29-teamforge-dashboard-realignment.md`
+
+## Review
+
+- Tauri skills used:
+  - `calling-rust-from-tauri-frontend`
+    - used to keep the founder drill-down behavior aligned with the existing
+      typed Tauri command surface instead of inventing a parallel client-only
+      state model
+  - `understanding-tauri-ipc`
+    - used to preserve the existing boundary: route drill-down state stays in
+      the URL, while native actions remain explicit Rust commands
+- Planning/docs reviewed before implementation:
+  - `docs/plans/2026-04-22-teamforge-founder-console.md`
+  - `docs/plans/2026-04-20-teamforge-vault-population-phase-2.md`
+  - `docs/plans/2026-04-29-teamforge-dashboard-realignment.md`
+  - no repo-local `.context/*` or GSD artifacts were present in this checkout
+- Frontend changes:
+  - `src/pages/Clients.tsx`
+    - added URL-backed drill-down filters for:
+      - `registry=canonical|operational`
+      - `risk=contract`
+      - `client=<id-or-name>`
+    - moved client detail opening onto the route contract so founder links can
+      deep-link directly into the relevant client subset or detail overlay
+  - `src/pages/Issues.tsx`
+    - moved client/project/state filtering onto URL search params so Overview
+      can open open issues for a specific delivery stream instead of landing on
+      the full issue table
+  - `src/pages/Onboarding.tsx`
+    - added URL-backed `audience` and `status` filtering, including
+      `audience=all` for founder-level onboarding risk review
+    - kept the at-risk heuristic aligned with the Rust founder command-center
+      logic
+  - `src/pages/Overview.tsx`
+    - portfolio lifecycle now opens canonical clients
+    - active delivery streams now open filtered open-issue views
+    - white-labelable rows can open the related canonical client subset
+    - needs-review now opens operational-only clients, at-risk onboarding, or
+      the relevant vault note based on category
+- Verification:
+  - `pnpm build` passed
+  - `git diff --check` passed
+
+# Task Plan
+
+## Goal
+
+Make the founder command center actionable by wiring its rails into real app
+drill-downs and constrained vault-backed file opens, so Overview becomes an
+operating surface rather than a static summary screen.
+
+## Plan
+
+- [ ] Add a constrained Tauri command to open a vault-relative file or folder
+      using the saved/resolved local vault root.
+- [ ] Expose the new command through the typed frontend invoke surface.
+- [ ] Add action controls to `Overview` that route into the app or open the
+      relevant vault control notes for portfolio, white-labelable, needs-review,
+      and research-intake surfaces.
+- [ ] Verify the new command and UI slice with frontend build, Rust checks, and
+      diff hygiene, then record the review in `tasks/todo.md`.
+
+## Review
+
+- Tauri skills used:
+  - `calling-rust-from-tauri-frontend`
+    - used to keep the new vault-open action as an explicit typed command
+      rather than leaking filesystem assumptions into the React layer
+  - `understanding-tauri-ipc`
+    - used to keep the founder command-center action model on the same
+      frontend-to-Rust IPC boundary as the rest of TeamForge
+- Backend changes:
+  - added `open_vault_relative_path` in `src-tauri/src/commands/mod.rs`
+  - constrained the command to vault-relative paths only, rejecting absolute
+    and parent-directory traversal
+  - resolved the active local vault root through the existing TeamForge vault
+    resolution flow before opening a file or folder with the shell plugin
+  - registered the new command in `src-tauri/src/lib.rs`
+- Frontend changes:
+  - exposed `openVaultRelativePath(...)` in `src/hooks/useInvoke.ts`
+  - updated `src/pages/Overview.tsx` so the founder rails now have real
+    actions:
+    - active delivery opens `Projects` and the vault `active-work` note
+    - portfolio lifecycle opens `Clients` and the portfolio review note
+    - white-labelable opens `Clients` and the white-labelable inventory note
+    - needs review opens `Settings` and the stale-review note
+    - research intake opens the capture registry note
+  - added user-visible vault-open failure feedback in the Overview screen so
+    missing vault-root or missing-note problems surface clearly
+- Verification:
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml` passed
+  - `pnpm build` passed
+  - `cargo check --manifest-path src-tauri/Cargo.toml` passed
+  - `git diff --check` passed
+- Remaining warning state:
+  - Rust still has the same 9 pre-existing dead-code warnings outside this
+    founder-console action slice
+
+# Task Plan
+
+## Goal
+
+Turn TeamForge `Overview` into the founder command center, demote `Boards`
+from primary navigation, and surface real founder rails for portfolio
+lifecycle, white-labelable opportunities, needs-review queues, and the vault
+research hub.
+
+## Plan
+
+- [ ] Add a founder command-center Tauri view model and IPC command that
+      aggregates:
+      - existing TeamForge overview/utilization data
+      - canonical client and onboarding projections
+      - identity review queue counts for orphaned/unmatched signals
+      - vault portfolio status / white-labelable signals
+      - vault research hub / capture-registry signals
+- [ ] Replace `src/pages/Overview.tsx` with a founder-facing command center
+      built from LCARS rails and console sections instead of generic telemetry
+      cards.
+- [ ] Demote `Boards` from the primary shell navigation while keeping the route
+      available for direct access until it has real authority.
+- [ ] Verify the slice with frontend build, Rust checks, and diff hygiene, then
+      record the implementation review in `tasks/todo.md`.
+
+## Review
+
+- Tauri skills used:
+  - `calling-rust-from-tauri-frontend`
+    - used to keep the founder dashboard as a single typed Tauri command
+      instead of a frontend-only braid of loosely coupled fetches
+  - `understanding-tauri-ipc`
+    - used to keep the new overview slice on a clear IPC boundary with a
+      serializable founder command-center view model and graceful vault
+      fallback
+- Backend changes:
+  - added `get_founder_command_center` in `src-tauri/src/commands/mod.rs`
+  - refactored the old overview query into `load_overview_data(...)` so the
+    founder command-center command can reuse the existing utilization/quota
+    projection cleanly
+  - added founder-dashboard aggregation for:
+    - active execution streams from the TeamForge execution bridge
+    - canonical vs operational client counts
+    - onboarding risk via canonical onboarding flows
+    - orphaned identity review counts via the existing identity-map queue
+  - extended `src-tauri/src/vault.rs` with founder-facing vault parsing for:
+    - portfolio surfaces from product + client project briefs
+    - stale review notes from `00-meta/mocs/stale-needs-review.md`
+    - research intake summary from `30-research-hub/README.md`,
+      `capture-registry.md`, and the inbox folder
+- Frontend changes:
+  - replaced `src/pages/Overview.tsx` with a founder command-center layout
+    centered on:
+    - active delivery streams
+    - portfolio lifecycle
+    - white-labelable opportunities
+    - needs-review queues
+    - research intake
+  - added the new typed invoke surface in `src/hooks/useInvoke.ts`
+  - added the new founder command-center types in `src/lib/types.ts`
+  - demoted `Boards` from the primary shell navigation in `src/App.tsx`
+    while keeping the route available for direct access
+  - renamed the shell sections away from the old Huly-first framing toward a
+    command-center / execution / registry split
+- Verification:
+  - `pnpm build` passed
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml` passed
+  - `cargo check --manifest-path src-tauri/Cargo.toml` passed
+  - `git diff --check` passed
+- Remaining known warning state:
+  - Rust still has the same 9 pre-existing dead-code warnings outside this
+    founder-dashboard slice
+
+# Task Plan
+
+## Goal
+
+Audit the remaining GitHub backlog, active planning docs, and adjacent
+`thoughtseed-labs` vault signals so TeamForge can be re-aligned around a real
+founder dashboard instead of continuing stale Huly-first backlog work.
+
+## Plan
+
+- [x] Review the remaining open GitHub issues and classify them against the
+      current shipped app state.
+- [x] Review the current TeamForge shell and the key pages that still define
+      the product shape: `Overview`, `Boards`, `Projects`, `Issues`, and the
+      navigation layout.
+- [x] Review the adjacent vault material that defines the stronger founder
+      operating model and identify the highest-value signals TeamForge still is
+      not surfacing.
+- [x] Write a repo-owned realignment plan that says which issues to close,
+      which to rewrite, and what the next founder-dashboard implementation
+      slice should be.
+
+## Review
+
+- GitHub backlog state:
+  - the open issue list is materially stale against the shipped product
+  - `#5`, `#6`, `#7`, `#11`, `#16`, and `#17` should not continue as written
+  - `#8`, `#9`, `#12`, `#14`, and `#15` still have useful intent, but need to
+    be rewritten around the current canonical TeamForge model
+- Product-shell state:
+  - `src/App.tsx` still organizes the app as a Huly-oriented multi-page ops
+    shell
+  - `src/pages/Boards.tsx` is still a thin board-card table, so it predictably
+    goes empty whenever Huly board data is sparse
+  - `src/pages/Overview.tsx` is still mostly utilization/quota telemetry, not
+    the founder command center described in the vault
+- Vault signal state:
+  - the adjacent vault already defines the stronger product model in:
+    - `thoughtseed-labs/00-meta/founder-command-center.md`
+    - `thoughtseed-labs/00-meta/system-of-records.md`
+    - `thoughtseed-labs/00-meta/mocs/command-center-architecture.md`
+    - `thoughtseed-labs/20-operations/project-management/portfolio-source-of-truth-review.md`
+    - `thoughtseed-labs/20-operations/project-management/vault-next-20-improvements.md`
+  - TeamForge is only partially surfacing that model today
+  - important vault-backed signals still missing from the dashboard include:
+    - portfolio lifecycle state
+    - white-labelable inventory
+    - founder review / needs-review queues
+    - research intake control
+    - active work and stale-work command surfaces
+- Repo outputs:
+  - added `docs/plans/2026-04-29-teamforge-dashboard-realignment.md`
+  - that plan records the issue triage, identifies which earlier plans are
+    still canonical, and recommends replacing the current Overview/Boards
+    posture with a founder command-center slice
+
+# Task Plan
+
+## Goal
+
 Ship `v0.1.24` from the hardened OTA publish path so the next release validates
 the dedicated `TF_RELEASE_PUBLISH_TOKEN` contract in the real GitHub Actions
 workflow.

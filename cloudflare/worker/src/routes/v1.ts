@@ -30,6 +30,12 @@ interface DatabaseStatus {
 
 export async function handleV1Request(request: Request, env: Env, url: URL): Promise<Response> {
   const { method, pathname } = { method: request.method, pathname: url.pathname };
+  const requireAppAuth = () =>
+    requireBearerAuth(
+      request,
+      env.TF_CREDENTIAL_ENVELOPE_KEY,
+      "app",
+    );
 
   // Agent feed (Paperclip bridge) — auth required, shared HMAC secret
   if (method === "GET" && pathname === "/v1/agent-feed/export") {
@@ -70,50 +76,70 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Projects
   if (method === "GET" && pathname === "/v1/projects") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handleGetProjects(env, url);
   }
   const projectMatch = pathname.match(/^\/v1\/projects\/([^/]+)$/);
   if (method === "PUT" && projectMatch) {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handlePutProject(env, projectMatch[1], request);
   }
   if (method === "GET" && pathname === "/v1/client-profiles") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handleGetClientProfiles(env, url);
   }
   const clientProfileMatch = pathname.match(/^\/v1\/client-profiles\/([^/]+)$/);
   if (method === "GET" && clientProfileMatch) {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handleGetClientProfile(env, clientProfileMatch[1], url);
   }
   if (method === "PUT" && clientProfileMatch) {
-    const authFailure = requireBearerAuth(request, env.TF_WEBHOOK_HMAC_SECRET, "internal");
+    const authFailure = requireAppAuth();
     if (authFailure) return authFailure;
     return handlePutClientProfile(env, clientProfileMatch[1], request);
   }
   if (method === "GET" && pathname === "/v1/onboarding-flows") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handleGetOnboardingFlows(env, url);
   }
   if (method === "PUT" && pathname === "/v1/onboarding-flows") {
-    const authFailure = requireBearerAuth(request, env.TF_WEBHOOK_HMAC_SECRET, "internal");
+    const authFailure = requireAppAuth();
     if (authFailure) return authFailure;
     return handlePutOnboardingFlows(env, request);
   }
 
   // Project mappings — alias to projects with mapping context
   if (method === "GET" && pathname === "/v1/project-mappings") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handleGetProjectMappings(env, url);
   }
   if (method === "GET" && pathname === "/v1/project-mappings/issues") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handleGetProjectMappingIssues(env, url);
   }
   const mappingMatch = pathname.match(/^\/v1\/project-mappings\/([^/]+)$/);
   if (method === "PUT" && mappingMatch) {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handlePutProjectMappings(env, mappingMatch[1], request);
   }
   const controlPlaneMatch = pathname.match(/^\/v1\/project-mappings\/([^/]+)\/control-plane$/);
   if (method === "GET" && controlPlaneMatch) {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handleGetProjectControlPlane(env, controlPlaneMatch[1]);
   }
   const projectActionMatch = pathname.match(/^\/v1\/project-mappings\/([^/]+)\/actions$/);
   if (method === "POST" && projectActionMatch) {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handlePostProjectAction(env, projectActionMatch[1], request);
   }
 
@@ -124,22 +150,32 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Connections
   if (method === "GET" && pathname === "/v1/connections") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handleGetConnections(env, url);
   }
   const connTestMatch = pathname.match(/^\/v1\/connections\/([^/]+)\/test$/);
   if (method === "POST" && connTestMatch) {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handleTestConnection(env, connTestMatch[1], request);
   }
 
   // Sync
   if (method === "POST" && pathname === "/v1/sync/jobs") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handlePostSyncJob(env, request);
   }
   const syncJobMatch = pathname.match(/^\/v1\/sync\/jobs\/([^/]+)$/);
   if (method === "GET" && syncJobMatch) {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handleGetSyncJob(env, syncJobMatch[1]);
   }
   if (method === "GET" && pathname === "/v1/sync/runs") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
     return handleGetSyncRuns(env, url);
   }
 
@@ -152,13 +188,33 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   }
 
   // Team snapshot
-  if (method === "GET" && pathname === "/v1/team/snapshot") return handleGetTeamSnapshot(env, url);
-  if (method === "POST" && pathname === "/v1/team/refresh") return handlePostTeamRefresh(env, request);
+  if (method === "GET" && pathname === "/v1/team/snapshot") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
+    return handleGetTeamSnapshot(env, url);
+  }
+  if (method === "POST" && pathname === "/v1/team/refresh") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
+    return handlePostTeamRefresh(env, request);
+  }
 
   // Huly normalization
-  if (method === "POST" && pathname === "/v1/huly/normalization/preview") return handleNormalizationPreview(env, request);
-  if (method === "POST" && pathname === "/v1/huly/normalization/apply") return handleNormalizationApply(env, request);
-  if (method === "GET" && pathname === "/v1/huly/normalization/history") return handleGetNormalizationHistory(env, url);
+  if (method === "POST" && pathname === "/v1/huly/normalization/preview") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
+    return handleNormalizationPreview(env, request);
+  }
+  if (method === "POST" && pathname === "/v1/huly/normalization/apply") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
+    return handleNormalizationApply(env, request);
+  }
+  if (method === "GET" && pathname === "/v1/huly/normalization/history") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
+    return handleGetNormalizationHistory(env, url);
+  }
 
   return jsonNotImplemented(pathname, method);
 }

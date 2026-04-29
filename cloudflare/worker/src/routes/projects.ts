@@ -29,7 +29,9 @@ interface ProjectMetadataRequest {
   name?: string;
   slug?: string | null;
   portfolioName?: string | null;
+  clientId?: string | null;
   clientName?: string | null;
+  clockifyProjectId?: string | null;
   projectType?: string | null;
   status?: string;
   visibility?: string;
@@ -92,7 +94,9 @@ function normalizeProjectMetadataRequest(body: ProjectMetadataRequest): ProjectM
     name: project.name ?? body.name,
     slug: project.slug ?? body.slug,
     portfolioName: project.portfolioName ?? body.portfolioName,
+    clientId: project.clientId ?? body.clientId,
     clientName: project.clientName ?? body.clientName,
+    clockifyProjectId: project.clockifyProjectId ?? body.clockifyProjectId,
     projectType: project.projectType ?? body.projectType,
     status: project.status ?? body.status,
     visibility: project.visibility ?? body.visibility,

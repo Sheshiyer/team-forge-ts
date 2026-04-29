@@ -8,11 +8,13 @@ interface ProjectRow {
   slug: string | null;
   code: string | null;
   portfolio_name: string | null;
+  client_id: string | null;
   client_name: string | null;
   project_type: string | null;
   status: string;
   visibility: string;
   sync_mode: string;
+  clockify_project_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -67,6 +69,15 @@ interface ProjectArtifactRow {
   is_primary: number;
   created_at: string;
   updated_at: string;
+}
+
+interface ProjectExternalIdRow {
+  id: string;
+  project_id: string;
+  source: string;
+  external_id: string;
+  external_secondary_id: string | null;
+  created_at: string;
 }
 
 interface ProjectSyncPolicyRow {
@@ -176,7 +187,9 @@ export interface ProjectView {
   slug: string | null;
   name: string;
   portfolioName: string | null;
+  clientId: string | null;
   clientName: string | null;
+  clockifyProjectId: string | null;
   projectType: string | null;
   status: string;
   visibility: string;
@@ -251,7 +264,20 @@ export interface ProjectSyncPolicy {
   updatedAt: string;
 }
 
-export type ProjectClientProfileMatchSource = "project_id" | "client_name" | "project_slug";
+export interface ProjectExternalId {
+  id: string;
+  projectId: string;
+  source: string;
+  externalId: string;
+  externalSecondaryId: string | null;
+  createdAt: string;
+}
+
+export type ProjectClientProfileMatchSource =
+  | "project_id"
+  | "client_id"
+  | "client_name"
+  | "project_slug";
 
 export interface ProjectClientProfileSummary {
   id: string;
@@ -356,6 +382,7 @@ export interface ProjectGraph {
   hulyLinks: ProjectHulyLink[];
   artifacts: ProjectArtifact[];
   policy: ProjectSyncPolicy | null;
+  externalIds: ProjectExternalId[];
   clientProfile: ProjectClientProfileSummary | null;
 }
 
@@ -364,7 +391,9 @@ export interface ProjectMetadataInput {
   name?: string;
   slug?: string | null;
   portfolioName?: string | null;
+  clientId?: string | null;
   clientName?: string | null;
+  clockifyProjectId?: string | null;
   projectType?: string | null;
   status?: string;
   visibility?: string;
@@ -466,6 +495,8 @@ export interface OnboardingFlowInput {
 
 export interface ProjectGraphInput {
   workspaceId?: string;
+  clientId?: string | null;
+  clockifyProjectId?: string | null;
   project?: ProjectMetadataInput;
   githubLinks?: ProjectGithubLinkInput[];
   hulyLinks?: ProjectHulyLinkInput[];
@@ -493,7 +524,9 @@ function mapProject(row: ProjectRow): ProjectView {
     slug: row.slug,
     name: row.name,
     portfolioName: row.portfolio_name,
+    clientId: normalizeOptionalString(row.client_id),
     clientName: row.client_name,
+    clockifyProjectId: normalizeOptionalString(row.clockify_project_id),
     projectType: row.project_type,
     status: row.status,
     visibility: row.visibility,
@@ -578,6 +611,17 @@ function mapArtifact(row: ProjectArtifactRow): ProjectArtifact {
     isPrimary: toBool(row.is_primary),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function mapProjectExternalId(row: ProjectExternalIdRow): ProjectExternalId {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    source: row.source,
+    externalId: row.external_id,
+    externalSecondaryId: row.external_secondary_id,
+    createdAt: row.created_at,
   };
 }
 
@@ -779,6 +823,7 @@ function matchProjectToClientProfile(
   profile: ClientProfile,
 ): ProjectClientProfileMatchSource | null {
   const projectSlug = normalizeLookupKey(project.slug);
+  const projectClientId = normalizeLookupKey(project.clientId);
   const projectClientName = normalizeLookupKey(project.clientName);
   const clientId = normalizeLookupKey(profile.clientId);
   const clientName = normalizeLookupKey(profile.clientName);
@@ -786,6 +831,9 @@ function matchProjectToClientProfile(
 
   if (projectSlug && projectIds.has(projectSlug)) {
     return "project_id";
+  }
+  if (projectClientId && projectClientId === clientId) {
+    return "client_id";
   }
   if (projectClientName && (projectClientName === clientId || projectClientName === clientName)) {
     return "client_name";
@@ -799,8 +847,9 @@ function matchProjectToClientProfile(
 
 function matchPriority(matchSource: ProjectClientProfileMatchSource): number {
   if (matchSource === "project_id") return 0;
-  if (matchSource === "client_name") return 1;
-  return 2;
+  if (matchSource === "client_id") return 1;
+  if (matchSource === "client_name") return 2;
+  return 3;
 }
 
 function findClientProfileSummaryForProject(
@@ -863,6 +912,7 @@ function buildProjectGraph(
   hulyLinks: ProjectHulyLinkRow[],
   artifacts: ProjectArtifactRow[],
   policy: ProjectSyncPolicyRow | null,
+  externalIds: ProjectExternalIdRow[],
 ): ProjectGraph {
   return {
     project: mapProject(project),
@@ -870,8 +920,37 @@ function buildProjectGraph(
     hulyLinks: hulyLinks.map(mapHulyLink),
     artifacts: artifacts.map(mapArtifact),
     policy: policy ? mapPolicy(policy) : null,
+    externalIds: externalIds.map(mapProjectExternalId),
     clientProfile: null,
   };
+}
+
+function projectRowSelectSql(): string {
+  return `
+    SELECT
+      p.id,
+      p.workspace_id,
+      p.name,
+      p.slug,
+      p.code,
+      p.portfolio_name,
+      p.client_id,
+      COALESCE(cp.client_name, p.client_name) AS client_name,
+      p.project_type,
+      p.status,
+      p.visibility,
+      p.sync_mode,
+      p.created_at,
+      p.updated_at,
+      pe.external_id AS clockify_project_id
+    FROM projects p
+    LEFT JOIN client_profiles cp
+      ON cp.workspace_id = p.workspace_id
+      AND cp.client_id = p.client_id
+    LEFT JOIN project_external_ids pe
+      ON pe.project_id = p.id
+      AND pe.source = 'clockify'
+  `;
 }
 
 async function queryProjectRows(
@@ -879,10 +958,11 @@ async function queryProjectRows(
   workspaceId?: string | null,
   status: string | null = "active",
 ): Promise<ProjectRow[]> {
+  const selectSql = projectRowSelectSql();
   if (workspaceId && status) {
     return queryAll<ProjectRow>(
       db,
-      "SELECT * FROM projects WHERE workspace_id = ? AND status = ? ORDER BY name",
+      `${selectSql} WHERE p.workspace_id = ? AND p.status = ? ORDER BY p.name`,
       workspaceId,
       status,
     );
@@ -890,7 +970,7 @@ async function queryProjectRows(
   if (workspaceId) {
     return queryAll<ProjectRow>(
       db,
-      "SELECT * FROM projects WHERE workspace_id = ? ORDER BY name",
+      `${selectSql} WHERE p.workspace_id = ? ORDER BY p.name`,
       workspaceId,
     );
   }
@@ -898,14 +978,25 @@ async function queryProjectRows(
   if (status) {
     return queryAll<ProjectRow>(
       db,
-      "SELECT * FROM projects WHERE status = ? ORDER BY name",
+      `${selectSql} WHERE p.status = ? ORDER BY p.name`,
       status,
     );
   }
 
   return queryAll<ProjectRow>(
     db,
-    "SELECT * FROM projects ORDER BY name",
+    `${selectSql} ORDER BY p.name`,
+  );
+}
+
+async function queryProjectRowById(
+  db: D1DatabaseLike,
+  projectId: string,
+): Promise<ProjectRow | null> {
+  return queryFirst<ProjectRow>(
+    db,
+    `${projectRowSelectSql()} WHERE p.id = ?`,
+    projectId,
   );
 }
 
@@ -953,6 +1044,18 @@ async function queryPoliciesByProjectIds(
   return queryAll<ProjectSyncPolicyRow>(
     db,
     `SELECT * FROM project_sync_policies WHERE project_id IN (${projectIds.map(() => "?").join(",")})`,
+    ...projectIds,
+  );
+}
+
+async function queryProjectExternalIdsByProjectIds(
+  db: D1DatabaseLike,
+  projectIds: string[],
+): Promise<ProjectExternalIdRow[]> {
+  if (projectIds.length === 0) return [];
+  return queryAll<ProjectExternalIdRow>(
+    db,
+    `SELECT * FROM project_external_ids WHERE project_id IN (${projectIds.map(() => "?").join(",")}) ORDER BY source, external_id`,
     ...projectIds,
   );
 }
@@ -1041,7 +1144,21 @@ async function queryProjectSummaryRows(
 ): Promise<ProjectSummaryRow[]> {
   let sql = `
     SELECT
-      p.*,
+      p.id,
+      p.workspace_id,
+      p.name,
+      p.slug,
+      p.code,
+      p.portfolio_name,
+      p.client_id,
+      COALESCE(cp.client_name, p.client_name) AS client_name,
+      p.project_type,
+      p.status,
+      p.visibility,
+      p.sync_mode,
+      p.created_at,
+      p.updated_at,
+      pe.external_id AS clockify_project_id,
       (SELECT COUNT(*) FROM project_github_links g WHERE g.project_id = p.id) AS github_repo_count,
       (SELECT COUNT(*) FROM project_huly_links h WHERE h.project_id = p.id) AS huly_link_count,
       (SELECT COUNT(*) FROM project_artifacts a WHERE a.project_id = p.id) AS artifact_count,
@@ -1055,6 +1172,12 @@ async function queryProjectSummaryRows(
         ELSE 'healthy'
       END AS sync_health
     FROM projects p
+    LEFT JOIN client_profiles cp
+      ON cp.workspace_id = p.workspace_id
+      AND cp.client_id = p.client_id
+    LEFT JOIN project_external_ids pe
+      ON pe.project_id = p.id
+      AND pe.source = 'clockify'
     LEFT JOIN project_sync_policies psp ON psp.project_id = p.id
   `;
   const params: unknown[] = [];
@@ -1235,11 +1358,12 @@ export async function listProjectGraphs(
 ): Promise<ProjectGraph[]> {
   const projects = await queryProjectRows(db, workspaceId, status);
   const projectIds = projects.map((project) => project.id);
-  const [githubLinks, hulyLinks, artifacts, policies, clientProfiles] = await Promise.all([
+  const [githubLinks, hulyLinks, artifacts, policies, externalIds, clientProfiles] = await Promise.all([
     queryGithubLinksByProjectIds(db, projectIds),
     queryHulyLinksByProjectIds(db, projectIds),
     queryArtifactsByProjectIds(db, projectIds),
     queryPoliciesByProjectIds(db, projectIds),
+    queryProjectExternalIdsByProjectIds(db, projectIds),
     listClientProfiles(db, workspaceId),
   ]);
 
@@ -1269,6 +1393,13 @@ export async function listProjectGraphs(
     policyByProject.set(row.project_id, row);
   }
 
+  const externalIdsByProject = new Map<string, ProjectExternalIdRow[]>();
+  for (const row of externalIds) {
+    const list = externalIdsByProject.get(row.project_id) ?? [];
+    list.push(row);
+    externalIdsByProject.set(row.project_id, list);
+  }
+
   return enrichProjectGraphsWithClientProfiles(projects.map((project) =>
     buildProjectGraph(
       project,
@@ -1276,6 +1407,7 @@ export async function listProjectGraphs(
       hulyByProject.get(project.id) ?? [],
       artifactsByProject.get(project.id) ?? [],
       policyByProject.get(project.id) ?? null,
+      externalIdsByProject.get(project.id) ?? [],
     ),
   ), clientProfiles);
 }
@@ -1284,19 +1416,20 @@ export async function getProjectGraph(
   db: D1DatabaseLike,
   projectId: string,
 ): Promise<ProjectGraph | null> {
-  const project = await queryFirst<ProjectRow>(db, "SELECT * FROM projects WHERE id = ?", projectId);
+  const project = await queryProjectRowById(db, projectId);
   if (!project) return null;
 
-  const [githubLinks, hulyLinks, artifacts, policy, clientProfiles] = await Promise.all([
+  const [githubLinks, hulyLinks, artifacts, policy, externalIds, clientProfiles] = await Promise.all([
     queryAll<ProjectGithubLinkRow>(db, "SELECT * FROM project_github_links WHERE project_id = ? ORDER BY is_primary DESC, repo_owner, repo_name", projectId),
     queryAll<ProjectHulyLinkRow>(db, "SELECT * FROM project_huly_links WHERE project_id = ? ORDER BY huly_project_id", projectId),
     queryAll<ProjectArtifactRow>(db, "SELECT * FROM project_artifacts WHERE project_id = ? ORDER BY is_primary DESC, title", projectId),
     queryFirst<ProjectSyncPolicyRow>(db, "SELECT * FROM project_sync_policies WHERE project_id = ?", projectId),
+    queryAll<ProjectExternalIdRow>(db, "SELECT * FROM project_external_ids WHERE project_id = ? ORDER BY source, external_id", projectId),
     listClientProfiles(db, project.workspace_id),
   ]);
 
   return enrichProjectGraphWithClientProfiles(
-    buildProjectGraph(project, githubLinks, hulyLinks, artifacts, policy),
+    buildProjectGraph(project, githubLinks, hulyLinks, artifacts, policy, externalIds),
     clientProfiles,
   );
 }
@@ -1473,11 +1606,12 @@ export async function upsertProjectMetadata(
     await execute(
       db,
       `UPDATE projects
-       SET name = ?, slug = ?, portfolio_name = ?, client_name = ?, project_type = ?, status = ?, visibility = ?, sync_mode = ?, updated_at = ?
+       SET name = ?, slug = ?, portfolio_name = ?, client_id = ?, client_name = ?, project_type = ?, status = ?, visibility = ?, sync_mode = ?, updated_at = ?
        WHERE id = ?`,
       input.name ?? existing.name,
       input.slug ?? existing.slug,
       input.portfolioName ?? existing.portfolio_name,
+      input.clientId === undefined ? existing.client_id ?? null : normalizeOptionalString(input.clientId),
       input.clientName ?? existing.client_name,
       input.projectType ?? existing.project_type,
       input.status ?? existing.status,
@@ -1492,14 +1626,15 @@ export async function upsertProjectMetadata(
     await execute(
       db,
       `INSERT INTO projects
-        (id, workspace_id, name, slug, code, portfolio_name, client_name, project_type, status, visibility, sync_mode, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, workspace_id, name, slug, code, portfolio_name, client_id, client_name, project_type, status, visibility, sync_mode, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       projectId,
       workspaceId,
       name,
       input.slug ?? null,
       null,
       input.portfolioName ?? null,
+      normalizeOptionalString(input.clientId),
       input.clientName ?? null,
       input.projectType ?? null,
       input.status ?? "active",
@@ -1510,11 +1645,39 @@ export async function upsertProjectMetadata(
     );
   }
 
-  const updated = await queryFirst<ProjectRow>(db, "SELECT * FROM projects WHERE id = ?", projectId);
+  const updated = await queryProjectRowById(db, projectId);
   if (!updated) {
     throw new Error(`Project ${projectId} was not found after upsert.`);
   }
   return mapProject(updated);
+}
+
+async function upsertProjectClockifyExternalId(
+  db: D1DatabaseLike,
+  projectId: string,
+  clockifyProjectId: string | null | undefined,
+): Promise<void> {
+  const normalizedClockifyProjectId = normalizeOptionalString(clockifyProjectId);
+  await execute(
+    db,
+    "DELETE FROM project_external_ids WHERE project_id = ? AND source = 'clockify'",
+    projectId,
+  );
+
+  if (!normalizedClockifyProjectId) {
+    return;
+  }
+
+  await execute(
+    db,
+    `INSERT INTO project_external_ids
+      (id, project_id, source, external_id, external_secondary_id, created_at)
+     VALUES (?, ?, 'clockify', ?, NULL, ?)`,
+    nanoid(),
+    projectId,
+    normalizedClockifyProjectId,
+    now(),
+  );
 }
 
 export async function replaceProjectGithubLinks(
@@ -1690,6 +1853,7 @@ export async function upsertProjectGraph(
   input: ProjectGraphInput,
 ): Promise<ProjectGraph> {
   const projectInput = input.project ?? input;
+  const clockifyProjectId = input.project?.clockifyProjectId ?? input.clockifyProjectId;
   const workspaceId =
     normalizeOptionalString(projectInput.workspaceId) ?? normalizeOptionalString(input.workspaceId);
   const existing = await queryFirst<ProjectRow>(db, "SELECT * FROM projects WHERE id = ?", projectId);
@@ -1704,6 +1868,7 @@ export async function upsertProjectGraph(
     ...projectInput,
     workspaceId: resolvedWorkspaceId,
   });
+  await upsertProjectClockifyExternalId(db, projectId, clockifyProjectId);
   await replaceProjectGithubLinks(db, projectId, resolvedWorkspaceId, input.githubLinks ?? []);
   await replaceProjectHulyLinks(db, projectId, resolvedWorkspaceId, input.hulyLinks ?? []);
   await replaceProjectArtifacts(db, projectId, resolvedWorkspaceId, input.artifacts ?? []);

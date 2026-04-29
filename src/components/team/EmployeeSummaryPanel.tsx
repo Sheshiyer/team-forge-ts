@@ -40,6 +40,25 @@ function stripMarkdown(value: string): string {
   return value.replace(/\*\*/g, "").replace(/`/g, "").trim();
 }
 
+function toneForKpiStatus(
+  status: EmployeeSummaryView["kpiStatus"]["status"],
+): "good" | "warn" | "info" | "neutral" {
+  switch (status) {
+    case "onTrack":
+      return "good";
+    case "watch":
+      return "info";
+    case "drift":
+      return "warn";
+    case "missingInputs":
+      return "neutral";
+  }
+}
+
+function humanizeSignalCode(value: string): string {
+  return value.replace(/[-_]/g, " ").toUpperCase();
+}
+
 function MetricTile({
   label,
   value,
@@ -178,6 +197,7 @@ export default function EmployeeSummaryPanel({
       : summary?.vaultProfile?.department
         ? [summary.vaultProfile.department]
         : [];
+  const kpiStatus = summary?.kpiStatus ?? null;
   const hasEvents = Boolean(summary?.upcomingEvents.length);
   const hasCurrentLeave = Boolean(summary?.currentLeave);
   const hasKpi = Boolean(summary?.kpiSnapshot);
@@ -257,6 +277,12 @@ export default function EmployeeSummaryPanel({
           <div style={styles.statusStrip}>
             <StatusPill label={hasVaultProfile ? "VAULT LINKED" : "NO VAULT"} tone={hasVaultProfile ? "good" : "warn"} />
             <StatusPill label={hasKpi ? "KPI READY" : "NO KPI"} tone={hasKpi ? "info" : "neutral"} />
+            {kpiStatus ? (
+              <StatusPill
+                label={`${kpiStatus.label} · ${kpiStatus.scorePercent}%`}
+                tone={toneForKpiStatus(kpiStatus.status)}
+              />
+            ) : null}
             <StatusPill label={hasCurrentLeave ? "ON LEAVE" : "AVAILABLE"} tone={hasCurrentLeave ? "warn" : "good"} />
             <StatusPill label={hasEvents ? "SCHEDULED" : "OPEN CALENDAR"} tone={hasEvents ? "info" : "neutral"} />
           </div>
@@ -494,6 +520,9 @@ export default function EmployeeSummaryPanel({
               {summary.kpiSnapshot ? (
                 <div style={styles.metaPillRow}>
                   <span style={styles.metaPill}>
+                    {summary.kpiStatus.label} {summary.kpiStatus.scorePercent}%
+                  </span>
+                  <span style={styles.metaPill}>
                     {summary.kpiSnapshot.kpiVersion.toUpperCase()}
                   </span>
                   <span style={styles.metaPill}>
@@ -545,6 +574,42 @@ export default function EmployeeSummaryPanel({
                     {summary.kpiSnapshot.roleScopeMarkdown}
                   </div>
                 ) : null}
+
+                <div style={styles.kpiStatusCard}>
+                  <div style={detailRowStyle}>
+                    <span style={styles.detailPrimary}>{summary.kpiStatus.label}</span>
+                    <span style={styles.detailMeta}>
+                      SCORE {summary.kpiStatus.scorePercent}%
+                    </span>
+                  </div>
+                  <div style={styles.detailSubtle}>{summary.kpiStatus.summary}</div>
+                  <div style={styles.pillRow}>
+                    <StatusPill
+                      label={
+                        summary.kpiStatus.founderUpdateRequired
+                          ? "FOUNDER UPDATE REQUIRED"
+                          : "NO FOUNDER UPDATE"
+                      }
+                      tone={
+                        summary.kpiStatus.founderUpdateRequired ? "warn" : "good"
+                      }
+                    />
+                    {summary.kpiStatus.founderUpdateReasons.map((reason) => (
+                      <span key={reason} style={styles.metaPill}>
+                        {humanizeSignalCode(reason)}
+                      </span>
+                    ))}
+                  </div>
+                  {summary.kpiStatus.reasons.length > 0 ? (
+                    <div style={styles.detailList}>
+                      {summary.kpiStatus.reasons.map((reason) => (
+                        <div key={reason} style={styles.listItem}>
+                          <div style={styles.detailSubtle}>{reason}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
 
                 <div style={kpiGridStyle}>
                   <div style={styles.kpiSection}>
@@ -820,6 +885,12 @@ const styles: Record<string, React.CSSProperties> = {
     ...lcarsPageStyles.subtleCard,
     borderLeftColor: "rgba(255, 153, 0, 0.28)",
     padding: 12,
+  },
+  kpiStatusCard: {
+    ...lcarsPageStyles.subtleCard,
+    borderLeftColor: "var(--lcars-green)",
+    marginTop: 14,
+    marginBottom: 2,
   },
   kpiSectionTitle: {
     ...lcarsPageStyles.metricLabel,

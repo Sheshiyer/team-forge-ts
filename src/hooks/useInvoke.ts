@@ -3,6 +3,7 @@ import type {
   ClockifyUser,
   ClockifyWorkspace,
   OverviewData,
+  FounderCommandCenterView,
   QuotaRow,
   TimeEntry,
   ProjectStats,
@@ -15,6 +16,8 @@ import type {
   TeamforgeProjectInput,
   TeamforgeProjectActionInput,
   VaultDirectoryValidation,
+  LocalWorkspaceStatus,
+  LocalVaultSyncReport,
   PaperclipLaunchResult,
   PaperclipUiOpenResult,
   ActivityItem,
@@ -64,6 +67,10 @@ const invokeApi = {
   pickVaultDirectory: () => invoke<string | null>("pick_vault_directory"),
   validateVaultDirectory: (path: string) =>
     invoke<VaultDirectoryValidation>("validate_vault_directory", { path }),
+  getLocalWorkspaceStatus: () =>
+    invoke<LocalWorkspaceStatus>("get_local_workspace_status"),
+  syncLocalVaultToTeamforge: () =>
+    invoke<LocalVaultSyncReport>("sync_local_vault_to_teamforge"),
   launchPaperclipScript: (scriptPath: string, workingDir: string | null) =>
     invoke<PaperclipLaunchResult>("launch_paperclip_script", {
       scriptPath,
@@ -71,8 +78,12 @@ const invokeApi = {
     }),
   openPaperclipUi: (url: string) =>
     invoke<PaperclipUiOpenResult>("open_paperclip_ui", { url }),
+  openVaultRelativePath: (relativePath: string) =>
+    invoke<string>("open_vault_relative_path", { relativePath }),
   triggerSync: () => invoke<string>("trigger_sync"),
   getOverview: () => invoke<OverviewData>("get_overview"),
+  getFounderCommandCenter: () =>
+    invoke<FounderCommandCenterView>("get_founder_command_center"),
   getQuotaCompliance: () => invoke<QuotaRow[]>("get_quota_compliance"),
   getTimeEntries: (
     employeeId: string | null,

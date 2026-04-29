@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 import { SkeletonTable } from "../components/ui/Skeleton";
 import { useInvoke } from "../hooks/useInvoke";
@@ -108,6 +109,24 @@ function IssueDetail({ issue }: { issue: ActiveProjectIssueView }) {
   );
 }
 
+function matchesIssueProjectFilter(issue: ActiveProjectIssueView, filter: string | null): boolean {
+  const normalized = filter?.trim().toLowerCase();
+  if (!normalized) return true;
+  return (
+    issue.projectName.trim().toLowerCase() === normalized ||
+    issue.projectId?.trim().toLowerCase() === normalized
+  );
+}
+
+function matchesIssueClientFilter(issue: ActiveProjectIssueView, filter: string | null): boolean {
+  const normalized = filter?.trim().toLowerCase();
+  if (!normalized) return true;
+  return (
+    issue.clientName?.trim().toLowerCase() === normalized ||
+    issue.clientId?.trim().toLowerCase() === normalized
+  );
+}
+
 type ProjectIssueGroup = {
   key: string;
   projectName: string;
@@ -118,13 +137,15 @@ type ProjectIssueGroup = {
 
 function Issues() {
   const api = useInvoke();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [issues, setIssues] = useState<ActiveProjectIssueView[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [filterClient, setFilterClient] = useState<string | null>(null);
-  const [filterProject, setFilterProject] = useState<string | null>(null);
-  const [filterState, setFilterState] = useState<string | null>(null);
+
+  const filterClient = searchParams.get("client");
+  const filterProject = searchParams.get("project");
+  const filterState = searchParams.get("state");
 
   const load = useCallback(async () => {
     try {
@@ -145,6 +166,31 @@ function Issues() {
     load();
   }, [load]);
 
+  const updateSearchParam = useCallback(
+    (key: string, value: string | null) => {
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current);
+        if (value && value.trim()) {
+          next.set(key, value);
+        } else {
+          next.delete(key);
+        }
+        return next;
+      });
+    },
+    [setSearchParams],
+  );
+
+  const clearFilters = useCallback(() => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("client");
+      next.delete("project");
+      next.delete("state");
+      return next;
+    });
+  }, [setSearchParams]);
+
   const clients = useMemo(
     () =>
       [...new Set(issues.map((issue) => issue.clientName).filter(Boolean))] as string[],
@@ -164,8 +210,8 @@ function Issues() {
   const filteredIssues = useMemo(
     () =>
       issues.filter((issue) => {
-        if (filterClient && issue.clientName !== filterClient) return false;
-        if (filterProject && issue.projectName !== filterProject) return false;
+        if (!matchesIssueClientFilter(issue, filterClient)) return false;
+        if (!matchesIssueProjectFilter(issue, filterProject)) return false;
         if (filterState && issue.state !== filterState) return false;
         return true;
       }),
@@ -228,14 +274,16 @@ function Issues() {
             <FilterPill
               label="ALL"
               active={filterClient === null}
-              onClick={() => setFilterClient(null)}
+              onClick={() => updateSearchParam("client", null)}
             />
             {clients.map((client) => (
               <FilterPill
                 key={client}
                 label={client}
                 active={filterClient === client}
-                onClick={() => setFilterClient(filterClient === client ? null : client)}
+                onClick={() =>
+                  updateSearchParam("client", filterClient === client ? null : client)
+                }
               />
             ))}
           </div>
@@ -247,14 +295,16 @@ function Issues() {
             <FilterPill
               label="ALL"
               active={filterProject === null}
-              onClick={() => setFilterProject(null)}
+              onClick={() => updateSearchParam("project", null)}
             />
             {projects.map((project) => (
               <FilterPill
                 key={project}
                 label={project}
                 active={filterProject === project}
-                onClick={() => setFilterProject(filterProject === project ? null : project)}
+                onClick={() =>
+                  updateSearchParam("project", filterProject === project ? null : project)
+                }
               />
             ))}
           </div>
@@ -266,14 +316,16 @@ function Issues() {
             <FilterPill
               label="ALL"
               active={filterState === null}
-              onClick={() => setFilterState(null)}
+              onClick={() => updateSearchParam("state", null)}
             />
             {states.map((state) => (
               <FilterPill
                 key={state}
                 label={state}
                 active={filterState === state}
-                onClick={() => setFilterState(filterState === state ? null : state)}
+                onClick={() =>
+                  updateSearchParam("state", filterState === state ? null : state)
+                }
               />
             ))}
           </div>
@@ -281,11 +333,7 @@ function Issues() {
 
         {hasActiveFilters && (
           <button
-            onClick={() => {
-              setFilterClient(null);
-              setFilterProject(null);
-              setFilterState(null);
-            }}
+            onClick={clearFilters}
             style={{
               ...lcarsPageStyles.ghostButton,
               padding: "4px 12px",

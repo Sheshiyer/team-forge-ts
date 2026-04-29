@@ -11,9 +11,15 @@ use crate::db::models::{Employee, VaultTeamProfileView};
 use crate::db::queries;
 
 pub const LOCAL_VAULT_ROOT_SETTING_KEY: &str = "local_vault_root";
+const PRODUCT_DIR_NAME: &str = "40-products";
 const TEAM_DIR_NAME: &str = "50-team";
 const CLIENT_ECOSYSTEM_DIR_NAME: &str = "60-client-ecosystem";
+const RESEARCH_HUB_DIR_NAME: &str = "30-research-hub";
 const OBSIDIAN_DIR_NAME: &str = ".obsidian";
+const RESEARCH_HUB_INBOX_DIR_NAME: &str = "inbox";
+const STALE_REVIEW_NOTE_RELATIVE_PATH: &str = "00-meta/mocs/stale-needs-review.md";
+const RESEARCH_HUB_README_RELATIVE_PATH: &str = "30-research-hub/README.md";
+const CAPTURE_REGISTRY_RELATIVE_PATH: &str = "30-research-hub/capture-registry.md";
 const THOUGHTSEED_VAULT_ENV_KEYS: &[&str] = &[
     "TEAMFORGE_VAULT_ROOT",
     "THOUGHTSEED_VAULT_ROOT",
@@ -30,6 +36,67 @@ pub struct VaultDirectoryValidation {
     pub has_team_directory: bool,
     pub has_client_ecosystem_directory: bool,
     pub has_obsidian_directory: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FounderVaultSignals {
+    pub portfolio_surfaces: Vec<VaultPortfolioSurface>,
+    pub stale_notes: Vec<VaultStaleNoteSignal>,
+    pub research_hub: VaultResearchHubSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultPortfolioSurface {
+    pub id: String,
+    pub project_id: Option<String>,
+    pub client_id: Option<String>,
+    pub title: String,
+    pub kind: String,
+    pub status: String,
+    pub commercial_reuse: Option<String>,
+    pub client_name: Option<String>,
+    pub source_relative_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultStaleNoteSignal {
+    pub title: String,
+    pub source_relative_path: String,
+    pub stale_signal: String,
+    pub suggested_action: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultResearchHubSummary {
+    pub registry_relative_path: String,
+    pub inbox_relative_path: String,
+    pub total_captures: u32,
+    pub raw_capture_count: u32,
+    pub needs_triage_count: u32,
+    pub routed_count: u32,
+    pub promoted_count: u32,
+    pub archived_count: u32,
+    pub duplicate_count: u32,
+    pub inbox_note_count: u32,
+    pub live_research_count: u32,
+    pub captures: Vec<VaultCaptureRegistryEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultCaptureRegistryEntry {
+    pub captured: Option<String>,
+    pub source: String,
+    pub title: String,
+    pub status: String,
+    pub triage_owner: Option<String>,
+    pub promotion_target: Option<String>,
+    pub raw_note: Option<String>,
+    pub destination: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,6 +243,20 @@ pub fn validate_vault_directory(path: &Path) -> VaultDirectoryValidation {
         has_client_ecosystem_directory,
         has_obsidian_directory,
     }
+}
+
+pub async fn load_founder_vault_signals(pool: &SqlitePool) -> Result<FounderVaultSignals, String> {
+    let vault_root = resolve_obsidian_vault_root(pool).await?;
+
+    Ok(FounderVaultSignals {
+        portfolio_surfaces: load_portfolio_surfaces(&vault_root)?,
+        stale_notes: load_stale_review_notes(&vault_root)?,
+        research_hub: load_research_hub_summary(&vault_root)?,
+    })
+}
+
+pub async fn resolve_local_vault_root(pool: &SqlitePool) -> Result<PathBuf, String> {
+    resolve_obsidian_vault_root(pool).await
 }
 
 async fn resolve_obsidian_vault_root(pool: &SqlitePool) -> Result<PathBuf, String> {
@@ -402,6 +483,418 @@ fn parse_frontmatter(contents: &str) -> ParsedFrontmatter {
     }
 
     parsed
+}
+
+fn load_portfolio_surfaces(vault_root: &Path) -> Result<Vec<VaultPortfolioSurface>, String> {
+    let mut files = Vec::new();
+    collect_named_files(
+        &vault_root.join(PRODUCT_DIR_NAME),
+        "product-overview.md",
+        &mut files,
+    )?;
+    collect_named_files(
+        &vault_root.join(CLIENT_ECOSYSTEM_DIR_NAME),
+        "project-brief.md",
+        &mut files,
+    )?;
+    files.sort();
+
+    let mut surfaces = Vec::new();
+    for file_path in files {
+        if file_path
+            .components()
+            .any(|component| component.as_os_str() == "90-archives")
+        {
+            continue;
+        }
+
+        let relative_path = file_path
+            .strip_prefix(vault_root)
+            .unwrap_or(&file_path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let contents = fs::read_to_string(&file_path)
+            .map_err(|error| format!("read portfolio note {}: {error}", file_path.display()))?;
+        let parsed = parse_frontmatter(&contents);
+        let title = extract_h1_title(&parsed.body).unwrap_or_else(|| {
+            file_path
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|value| value.to_str())
+                .map(titleize_slug)
+                .unwrap_or_else(|| "Untitled".to_string())
+        });
+        let status = parsed
+            .scalars
+            .get("status")
+            .map(|value| value.trim().to_lowercase())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "unknown".to_string());
+        let commercial_reuse = parsed
+            .scalars
+            .get("commercial_reuse")
+            .map(|value| value.trim().to_lowercase())
+            .filter(|value| !value.is_empty());
+
+        let kind = if relative_path.starts_with(&format!("{PRODUCT_DIR_NAME}/")) {
+            "product".to_string()
+        } else {
+            "client-delivery".to_string()
+        };
+
+        let client_name = if kind == "client-delivery" {
+            parsed
+                .scalars
+                .get("client_id")
+                .map(|value| titleize_slug(value))
+                .or_else(|| relative_path.split('/').nth(1).map(titleize_slug))
+        } else {
+            None
+        };
+
+        let id = parsed
+            .scalars
+            .get(if kind == "product" {
+                "product_id"
+            } else {
+                "project_id"
+            })
+            .cloned()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| relative_path.clone());
+        let project_id = if kind == "client-delivery" {
+            parsed
+                .scalars
+                .get("project_id")
+                .cloned()
+                .filter(|value| !value.trim().is_empty())
+        } else {
+            None
+        };
+        let client_id = if kind == "client-delivery" {
+            parsed
+                .scalars
+                .get("client_id")
+                .cloned()
+                .filter(|value| !value.trim().is_empty())
+        } else {
+            None
+        };
+
+        surfaces.push(VaultPortfolioSurface {
+            id,
+            project_id,
+            client_id,
+            title,
+            kind,
+            status,
+            commercial_reuse,
+            client_name,
+            source_relative_path: relative_path,
+        });
+    }
+
+    surfaces.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then(left.status.cmp(&right.status))
+            .then(left.title.cmp(&right.title))
+    });
+    Ok(surfaces)
+}
+
+fn load_stale_review_notes(vault_root: &Path) -> Result<Vec<VaultStaleNoteSignal>, String> {
+    let path = vault_root.join(STALE_REVIEW_NOTE_RELATIVE_PATH);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+
+    let contents = fs::read_to_string(&path)
+        .map_err(|error| format!("read stale review note {}: {error}", path.display()))?;
+    let mut rows = Vec::new();
+
+    for cells in extract_markdown_table_rows(
+        &contents,
+        "| File | Folder | Stale signal | Suggested action |",
+    ) {
+        if cells.len() < 4 {
+            continue;
+        }
+        let (title, source_relative_path) = parse_wiki_link_cell(&cells[0]);
+        if title.is_empty() && source_relative_path.is_empty() {
+            continue;
+        }
+        rows.push(VaultStaleNoteSignal {
+            title,
+            source_relative_path,
+            stale_signal: clean_markdown_cell(&cells[2]),
+            suggested_action: clean_markdown_cell(&cells[3]),
+        });
+    }
+
+    Ok(rows)
+}
+
+fn load_research_hub_summary(vault_root: &Path) -> Result<VaultResearchHubSummary, String> {
+    let registry_relative_path = CAPTURE_REGISTRY_RELATIVE_PATH.to_string();
+    let inbox_relative_path = format!("{RESEARCH_HUB_DIR_NAME}/{RESEARCH_HUB_INBOX_DIR_NAME}");
+
+    let inbox_root = vault_root.join(&inbox_relative_path);
+    let inbox_note_count = count_markdown_notes(&inbox_root)?;
+
+    let live_research_count =
+        read_optional_file(&vault_root.join(RESEARCH_HUB_README_RELATIVE_PATH))
+            .map(|contents| {
+                extract_markdown_table_rows(
+                    &contents,
+                    "| Research line | Note | Current interpretation |",
+                )
+                .len() as u32
+            })
+            .unwrap_or(0);
+
+    let mut summary = VaultResearchHubSummary {
+        registry_relative_path,
+        inbox_relative_path,
+        total_captures: 0,
+        raw_capture_count: 0,
+        needs_triage_count: 0,
+        routed_count: 0,
+        promoted_count: 0,
+        archived_count: 0,
+        duplicate_count: 0,
+        inbox_note_count,
+        live_research_count,
+        captures: Vec::new(),
+    };
+
+    let Some(contents) = read_optional_file(&vault_root.join(CAPTURE_REGISTRY_RELATIVE_PATH))
+    else {
+        return Ok(summary);
+    };
+
+    for cells in extract_markdown_table_rows(
+        &contents,
+        "| Captured | Source | Title / slug | Status | Triage owner | Promotion target | Raw note | Destination |",
+    ) {
+        if cells.len() < 8 {
+            continue;
+        }
+        let title = clean_markdown_cell(&cells[2]);
+        if title.is_empty() {
+            continue;
+        }
+
+        let status = clean_markdown_cell(&cells[3]).to_lowercase();
+        summary.total_captures += 1;
+        match status.as_str() {
+            "raw-capture" => summary.raw_capture_count += 1,
+            "needs-triage" => summary.needs_triage_count += 1,
+            "routed" => summary.routed_count += 1,
+            "promoted" => summary.promoted_count += 1,
+            "archived" => summary.archived_count += 1,
+            "duplicate" => summary.duplicate_count += 1,
+            _ => {}
+        }
+
+        summary.captures.push(VaultCaptureRegistryEntry {
+            captured: optional_clean_markdown_cell(&cells[0]),
+            source: clean_markdown_cell(&cells[1]),
+            title,
+            status,
+            triage_owner: optional_clean_markdown_cell(&cells[4]),
+            promotion_target: optional_clean_markdown_cell(&cells[5]),
+            raw_note: optional_clean_markdown_cell(&cells[6]),
+            destination: optional_clean_markdown_cell(&cells[7]),
+        });
+    }
+
+    Ok(summary)
+}
+
+fn collect_named_files(
+    root: &Path,
+    target_name: &str,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    if !root.is_dir() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(root)
+        .map_err(|error| format!("read vault directory {}: {error}", root.display()))?
+    {
+        let entry = entry.map_err(|error| format!("read entry in {}: {error}", root.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_named_files(&path, target_name, files)?;
+            continue;
+        }
+
+        if path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(|value| value.eq_ignore_ascii_case(target_name))
+            .unwrap_or(false)
+        {
+            files.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn count_markdown_notes(root: &Path) -> Result<u32, String> {
+    let mut files = Vec::new();
+    collect_markdown_files(root, &mut files)?;
+    Ok(files
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .map(|value| !value.eq_ignore_ascii_case("README.md"))
+                .unwrap_or(false)
+        })
+        .count() as u32)
+}
+
+fn collect_markdown_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    if !root.is_dir() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(root)
+        .map_err(|error| format!("read vault directory {}: {error}", root.display()))?
+    {
+        let entry = entry.map_err(|error| format!("read entry in {}: {error}", root.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_markdown_files(&path, files)?;
+            continue;
+        }
+
+        let is_markdown = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.eq_ignore_ascii_case("md"))
+            .unwrap_or(false);
+        if is_markdown {
+            files.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn read_optional_file(path: &Path) -> Option<String> {
+    if !path.is_file() {
+        return None;
+    }
+    fs::read_to_string(path).ok()
+}
+
+fn extract_markdown_table_rows(contents: &str, header_prefix: &str) -> Vec<Vec<String>> {
+    let mut collecting = false;
+    let mut rows = Vec::new();
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if !collecting {
+            if trimmed.starts_with(header_prefix) {
+                collecting = true;
+            }
+            continue;
+        }
+
+        if trimmed.starts_with("|---") {
+            continue;
+        }
+
+        if !trimmed.starts_with('|') {
+            if !rows.is_empty() {
+                break;
+            }
+            continue;
+        }
+
+        let cells = split_markdown_row(trimmed);
+        if !cells.is_empty() {
+            rows.push(cells);
+        }
+    }
+
+    rows
+}
+
+fn split_markdown_row(line: &str) -> Vec<String> {
+    let trimmed = line.trim().trim_start_matches('|').trim_end_matches('|');
+    let mut cells = Vec::new();
+    let mut current = String::new();
+    let mut in_wiki_link = false;
+    let mut chars = trimmed.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '[' && chars.peek() == Some(&'[') {
+            in_wiki_link = true;
+            current.push(ch);
+            current.push(chars.next().unwrap_or('['));
+            continue;
+        }
+
+        if ch == ']' && chars.peek() == Some(&']') {
+            current.push(ch);
+            current.push(chars.next().unwrap_or(']'));
+            in_wiki_link = false;
+            continue;
+        }
+
+        if ch == '|' && !in_wiki_link {
+            cells.push(current.trim().to_string());
+            current.clear();
+            continue;
+        }
+
+        current.push(ch);
+    }
+
+    cells.push(current.trim().to_string());
+
+    cells
+}
+
+fn parse_wiki_link_cell(cell: &str) -> (String, String) {
+    let trimmed = cell.trim();
+    if let Some(start) = trimmed.find("[[") {
+        if let Some(end) = trimmed[start + 2..].find("]]") {
+            let inner = &trimmed[start + 2..start + 2 + end];
+            if let Some((path, label)) = inner.split_once('|') {
+                return (clean_markdown_cell(label), clean_markdown_cell(path));
+            }
+            let path = clean_markdown_cell(inner);
+            let title = path
+                .rsplit('/')
+                .next()
+                .map(|value| titleize_slug(value.trim_end_matches(".md")))
+                .unwrap_or_else(|| path.clone());
+            return (title, path);
+        }
+    }
+
+    let cleaned = clean_markdown_cell(trimmed);
+    (cleaned.clone(), cleaned)
+}
+
+fn clean_markdown_cell(value: &str) -> String {
+    value.trim().trim_matches('`').trim().to_string()
+}
+
+fn optional_clean_markdown_cell(value: &str) -> Option<String> {
+    let cleaned = clean_markdown_cell(value);
+    if cleaned.is_empty() || cleaned == "—" {
+        None
+    } else {
+        Some(cleaned)
+    }
 }
 
 fn split_field(line: &str) -> Option<(&str, &str)> {
