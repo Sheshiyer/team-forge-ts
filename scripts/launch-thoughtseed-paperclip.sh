@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEFAULT_PAPERCLIP_ROOT="/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thougghtseed-paperclip"
+DEFAULT_PAPERCLIP_ROOT="/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-paperclip"
 PAPERCLIP_ROOT="${THOUGHTSEED_PAPERCLIP_ROOT:-${PAPERCLIP_ROOT:-$DEFAULT_PAPERCLIP_ROOT}}"
 ACTION="${1:-start}"
 

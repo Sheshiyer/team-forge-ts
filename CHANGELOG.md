@@ -2,6 +2,45 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.26 - 2026-04-30
+
+This release brings the Paperclip daily shell fully into TeamForge: the new
+Agents route and Overview runtime band now surface Paperclip telemetry,
+personal work context, rooms, escalations, and startup controls directly in
+the desktop app, while the local companion launcher and release docs are
+cleaned up for the next OTA line.
+
+### Changed
+
+- Added the TeamForge-native Paperclip runtime layer:
+  - new native commands for Paperclip API readiness, telemetry, roster,
+    personal context, rooms, escalations, and boot-time runtime startup
+  - new `/agents` route replaces the old `Live` route as the daily runtime
+    surface, while `/live` now redirects safely
+  - Overview now includes a runtime status band with healthy/stale agent counts
+    and drilldowns into Agents
+- Expanded desktop workspace controls in Settings:
+  - added explicit Paperclip API URL and bearer token settings
+  - added API readiness checks and machine-local startup mode control
+  - simplified shipped copy from internal sync language toward operator-facing
+    labels
+- Fixed release-path and launcher drift:
+  - corrected the bundled `launch-thoughtseed-paperclip.sh` default sibling
+    repo path so auto-launch works without a manual override
+  - refreshed README route/release docs so Agents, current release notes, and
+    the current app version are accurate
+  - fixed the historical `thoughtseed-paperclip` typo in the `v0.1.21`
+    changelog/launcher notes
+- Bumped release metadata to `0.1.26` across the frontend package, Tauri
+  config, and Rust crate.
+
+### Verification
+
+- `pnpm build`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+- `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+- `git diff --check`
+
 ## v0.1.25 - 2026-04-30
 
 This release turns TeamForge further into the founder control plane: Overview
@@ -167,7 +206,7 @@ of the Worker-backed project and issue control plane.
   - `launch_paperclip_script`
   - `open_paperclip_ui`
 - Added `scripts/launch-thoughtseed-paperclip.sh` so TeamForge can launch the
-  real sibling `thougghtseed-paperclip` repo through its existing
+  real sibling `thoughtseed-paperclip` repo through its existing
   `babysitter.sh start` contract without requiring extra CLI args in settings.
 - Updated vault resolution so TeamForge prefers the saved local
   `local_vault_root` setting before falling back to environment variables or

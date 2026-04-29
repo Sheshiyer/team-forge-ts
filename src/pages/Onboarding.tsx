@@ -467,8 +467,8 @@ function Onboarding() {
       <div style={styles.infoBanner}>
         <div style={styles.infoBannerIcon}>◈</div>
         <div style={styles.infoBannerText}>
-          TEAMFORGE ONBOARDING FLOWS ONLY. IF NO CANONICAL FLOW EXISTS YET, THIS
-          VIEW STAYS EMPTY INSTEAD OF SYNTHESIZING A FALLBACK RECORD.
+          This page shows saved onboarding flows only. If a flow has not been
+          created yet, the view stays empty.
         </div>
       </div>
 
@@ -589,10 +589,10 @@ function Onboarding() {
         ) : visibleFlows.length === 0 ? (
           <p style={styles.emptyText}>
             {tab === "client"
-              ? "NO CANONICAL CLIENT ONBOARDING FLOWS YET."
+              ? "NO CLIENT ONBOARDING FLOWS YET."
               : tab === "employee"
-                ? "NO CANONICAL EMPLOYEE ONBOARDING FLOWS YET."
-                : "NO CANONICAL ONBOARDING FLOWS MATCH CURRENT FILTERS."}
+                ? "NO EMPLOYEE ONBOARDING FLOWS YET."
+                : "NO ONBOARDING FLOWS MATCH THESE FILTERS."}
           </p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>

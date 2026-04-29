@@ -4,6 +4,7 @@ mod db;
 mod github;
 mod huly;
 mod ops;
+mod paperclip;
 mod slack;
 mod sync;
 mod vault;
@@ -56,7 +57,7 @@ pub fn run() {
                 app,
                 &[
                     &MenuItem::with_id(app, "show", "Show TeamForge", true, None::<&str>)?,
-                    &MenuItem::with_id(app, "live", "Live Crew Check", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "live", "Agent Runtime", true, None::<&str>)?,
                     &MenuItem::with_id(app, "timeline", "Weekly Timeline", true, None::<&str>)?,
                     &MenuItem::with_id(app, "sync", "Sync Now", true, None::<&str>)?,
                     &MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
@@ -69,7 +70,7 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "show" => focus_main_window(app),
-                    "live" => open_main_route(app, "/live"),
+                    "live" => open_main_route(app, "/agents"),
                     "timeline" => open_main_route(app, "/activity"),
                     "sync" => {
                         let app_handle = app.clone();
@@ -110,6 +111,14 @@ pub fn run() {
             commands::validate_vault_directory,
             commands::launch_paperclip_script,
             commands::open_paperclip_ui,
+            commands::ensure_paperclip_runtime_started,
+            commands::probe_paperclip_api,
+            commands::get_paperclip_runtime_summary,
+            commands::get_paperclip_users,
+            commands::get_paperclip_telemetry,
+            commands::get_paperclip_personal_context,
+            commands::get_paperclip_rooms,
+            commands::create_paperclip_escalation,
             commands::open_vault_relative_path,
             commands::get_local_workspace_status,
             commands::sync_local_vault_to_teamforge,

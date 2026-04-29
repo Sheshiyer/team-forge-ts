@@ -74,7 +74,7 @@ function RegistryPill({ status }: { status: ClientView["registryStatus"] }) {
   const color =
     status === "canonical" ? "var(--lcars-cyan)" : "var(--lcars-orange)";
   const label =
-    status === "canonical" ? "CANONICAL PROFILE" : "OPERATIONAL ONLY";
+    status === "canonical" ? "CORE PROFILE" : "NEEDS PROFILE";
   return (
     <span
       style={{
@@ -217,8 +217,8 @@ function ClientCard({
       ) : (
         <div style={styles.cardSection}>
           <div style={styles.cardSubtext}>
-            NEEDS A TEAMFORGE CLIENT PROFILE BEFORE IT JOINS THE CANONICAL
-            REGISTRY.
+            Needs a client profile before it appears in the main client
+            directory.
           </div>
           {contact ? (
             <div style={styles.cardSubtext}>CONTACT SIGNAL: {contact}</div>
@@ -289,11 +289,11 @@ function DetailPanel({
         <div style={styles.detailDivider} />
 
         <div style={styles.detailSection}>
-          <div style={styles.detailSectionTitle}>TEAMFORGE PROFILE</div>
+          <div style={styles.detailSectionTitle}>CLIENT PROFILE</div>
           {!profile ? (
             <div style={styles.emptyText}>
-              NO TEAMFORGE CLIENT PROFILE YET. THIS RECORD IS STILL OPERATIONAL-ONLY
-              UNTIL A CANONICAL PROFILE EXISTS.
+              No client profile yet. This record is still showing raw activity
+              only.
             </div>
           ) : (
             <>
@@ -781,7 +781,7 @@ function Clients() {
 
       <div style={styles.metricsRow}>
         <MetricCard
-          label="CANONICAL CLIENTS"
+          label="CORE CLIENTS"
           value={String(canonicalClients.length)}
           color="var(--lcars-cyan)"
         />
@@ -821,12 +821,12 @@ function Clients() {
       ) : null}
 
       <div style={styles.card}>
-        <h2 style={styles.sectionTitle}>CANONICAL CLIENT REGISTRY</h2>
+        <h2 style={styles.sectionTitle}>CLIENT DIRECTORY</h2>
         <div style={styles.sectionDivider} />
         {loadError ? (
           <p style={styles.emptyText}>{loadError}</p>
         ) : canonicalClients.length === 0 ? (
-          <p style={styles.emptyText}>NO TEAMFORGE CLIENT PROFILES YET.</p>
+          <p style={styles.emptyText}>NO CLIENT PROFILES YET.</p>
         ) : (
           <div style={styles.clientGrid}>
             {canonicalClients.map((client) => (
@@ -841,11 +841,11 @@ function Clients() {
       </div>
 
       <div style={{ ...styles.card, borderLeftColor: "var(--lcars-orange)" }}>
-        <h2 style={styles.sectionTitle}>OPERATIONAL-ONLY SIGNALS</h2>
+        <h2 style={styles.sectionTitle}>UNLINKED SIGNALS</h2>
         <div style={styles.sectionDivider} />
         <div style={styles.helperText}>
-          THESE RECORDS STILL NEED A TEAMFORGE CLIENT PROFILE BEFORE THEY SHOULD
-          READ AS CANONICAL APP ENTITIES.
+          These records still need a client profile before they move into the
+          main directory.
         </div>
         {loadError ? (
           <p style={styles.emptyText}>{loadError}</p>

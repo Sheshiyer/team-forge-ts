@@ -124,6 +124,8 @@ export interface FounderCommandCenterView {
   whiteLabelable: VaultPortfolioSurface[];
   needsReview: FounderNeedsReviewView;
   researchHub: VaultResearchHubSummary;
+  paperclipRuntime: PaperclipRuntimeOverview | null;
+  paperclipError: string | null;
   vaultError: string | null;
 }
 
@@ -389,12 +391,127 @@ export interface PaperclipUiOpenResult {
   url: string;
 }
 
+export interface PaperclipStartupResult {
+  autoLaunchEnabled: boolean;
+  scriptStatus: string;
+  scriptMessage: string;
+  scriptPid: number | null;
+  adapterStatus: string;
+  adapterMessage: string;
+  adapterPid: number | null;
+}
+
+export interface PaperclipUser {
+  userId: string;
+  userName: string;
+  title: string | null;
+  department: string | null;
+  role: string | null;
+  reportsTo: string | null;
+  icon: string | null;
+}
+
+export interface PaperclipTelemetryItem {
+  userId: string;
+  userName: string;
+  department: string | null;
+  role: string | null;
+  status: string;
+  lastCycle: string | null;
+  outcome: string | null;
+  steps: number;
+  blocked: number;
+  stale: boolean;
+  uninitialized: boolean;
+  missingFiles: number;
+}
+
+export interface PaperclipTaskSummary {
+  pending: number;
+  inProgress: number;
+  blocked: number;
+  completed: number;
+}
+
+export interface PaperclipTask {
+  id: string;
+  title: string;
+  status: string;
+  priority: string | null;
+  department: string | null;
+  tags: string[];
+  source: string | null;
+  sourceRef: string | null;
+  updatedAt: string | null;
+  projectCode: string | null;
+  projectId: string | null;
+  clientId: string | null;
+}
+
+export interface PaperclipPersonalContext {
+  userId: string;
+  userName: string;
+  currentKrebs: string | null;
+  latestHeartbeatAt: string | null;
+  summary: PaperclipTaskSummary;
+  tasks: PaperclipTask[];
+}
+
+export interface PaperclipRoomDefinition {
+  id: string;
+  name: string;
+  roomType: string;
+  description: string | null;
+  projectCode: string | null;
+  projectName: string | null;
+  projectId: string | null;
+  clientId: string | null;
+}
+
+export interface PaperclipEscalationInput {
+  title: string;
+  body: string;
+  severity?: string | null;
+  userId?: string | null;
+  projectCode?: string | null;
+  projectId?: string | null;
+}
+
+export interface PaperclipEscalationResponse {
+  id: string;
+  issueKey: string;
+}
+
+export interface PaperclipRuntimeOverview {
+  healthyCount: number;
+  staleCount: number;
+  uninitializedCount: number;
+  totalAgents: number;
+  activeTaskCount: number;
+  escalationBacklogCount: number;
+  latestActivityAt: string | null;
+  latestActivityLabel: string | null;
+  latestEscalationTitle: string | null;
+  latestEscalationAt: string | null;
+}
+
+export interface PaperclipApiProbeResult {
+  ready: boolean;
+  baseUrl: string;
+  message: string;
+  userCount: number;
+  telemetryCount: number;
+}
+
 export interface LocalWorkspaceStatus {
   localVaultRoot: string | null;
   vaultValidation: VaultDirectoryValidation;
   paperclipScriptPath: string | null;
   paperclipWorkingDir: string | null;
   paperclipUiUrl: string | null;
+  paperclipApiUrl: string | null;
+  paperclipApiTokenConfigured: boolean;
+  paperclipAutoLaunchEnabled: boolean;
   teamforgeWorkspaceId: string | null;
   teamforgeWorkspaceSource: string;
   teamforgeWorkspaceError: string | null;

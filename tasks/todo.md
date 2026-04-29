@@ -2,6 +2,347 @@
 
 ## Goal
 
+Do one final release pass on the TeamForge + Paperclip daily-shell work,
+capture the remaining gaps as a concrete 20-item checklist, fix the last
+high-signal misses, and ship the next OTA line through the existing GitHub
+Actions release workflow.
+
+## Plan
+
+- [x] Audit the current release tree, dirty worktree, open GitHub issues, and
+      release metadata before cutting a new tag.
+- [x] Fix the release-critical Paperclip launcher path typo in the bundled
+      wrapper script.
+- [x] Reconcile the Paperclip startup task log so reviewed work is also marked
+      complete.
+- [x] Sweep the shipped Settings copy for the last internal-sync phrasing that
+      still leaks into the app shell.
+- [x] Refresh README route and release notes so the repo reflects the shipped
+      `Agents` route and Paperclip runtime flow.
+- [x] Add a new changelog entry for the next release and fix the historical
+      `thoughtseed-paperclip` typo.
+- [x] Bump release metadata for the next OTA line.
+- [x] Re-run build/test hygiene and `git diff --check`.
+- [ ] Commit the current TeamForge tree, create the next tag, and push `main`
+      plus the release tag.
+- [ ] Watch the GitHub Actions OTA workflow and record the result.
+
+## 20-Item Final Checklist
+
+- [x] Paperclip daily-shell integration is in the TeamForge repo and no longer
+      stranded as local-only code.
+- [x] `/live` has been repurposed into `/agents`, with the old route preserved
+      as a redirect.
+- [x] Overview includes live Paperclip runtime status and a drilldown into
+      Agents.
+- [x] Settings exposes separate Paperclip UI and API configuration.
+- [x] Settings can probe the Paperclip API without requiring frontend-direct
+      local HTTP logic.
+- [x] Settings exposes machine-local Paperclip startup mode.
+- [x] TeamForge can request Paperclip startup on app launch through native IPC.
+- [x] The bundled Paperclip launcher now points at the correct sibling repo by
+      default.
+- [x] The Projects page still shows TeamForge projects even before linked
+      GitHub/Clockify telemetry is complete.
+- [x] The highest-visibility internal/admin copy has been reduced in shipped
+      screens, especially Settings and Projects.
+- [x] The README now reflects the current app routes, including Agents instead
+      of Live.
+- [x] The README current-version line now matches the release being prepared.
+- [x] The historical `thoughtseed-paperclip` typo is fixed in release docs.
+- [x] The startup task review section is no longer left in a reviewed-but-open
+      state.
+- [x] Open GitHub issues have been rechecked so the remaining backlog is
+      explicit: `#45`, `#46`, `#4`, `#8`, `#9`, `#12`, `#14`, `#15`.
+- [x] Build passes on the release candidate tree.
+- [x] Rust check passes on the release candidate tree.
+- [x] Focused Paperclip Rust tests pass on the release candidate tree.
+- [ ] Release commit and `v0.1.26` tag are pushed to trigger OTA CI.
+- [ ] The GitHub Actions OTA workflow finishes successfully for the new tag.
+
+## Review
+
+- Tauri skills used:
+  - `testing-tauri-apps`
+    - used to treat the final pass as a release-candidate verification task,
+      not only a code sweep
+  - `understanding-tauri-ipc`
+    - used to audit the app-launch and Settings integration points before
+      cutting the next release
+  - `building-tauri-with-github-actions`
+    - used to align the final pass with the real OTA release path instead of
+      stopping at local build output
+- Highest-signal fixes in this pass:
+  - corrected the bundled Paperclip launcher sibling path typo
+  - tightened the last shipped workspace/sync copy in Settings
+  - refreshed README/changelog drift so the repo reflects the real app shell
+  - prepared the next OTA version line
+- Verification completed before tagging:
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `pnpm build`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+  - `git diff --check`
+- Remaining follow-on backlog after this release:
+  - `#45` remove the external Node dependency from founder sync
+  - `#46` finish vault metadata and external-ref backfill
+  - `#4`, `#8`, `#9`, `#12`, `#14`, `#15` remain as the substantive next
+    product slices after the daily-shell integration ships
+
+# Task Plan
+
+## Goal
+
+Wire the local Paperclip runtime startup into TeamForge app launch so the
+machine can automatically bring up the configured Paperclip companion services
+when the desktop app opens, while keeping the behavior explicit and
+machine-local in Settings.
+
+## Plan
+
+- [x] Review the existing app startup flow plus the current Paperclip launcher
+      and adapter paths before changing boot behavior.
+- [x] Add a native startup command that can safely ensure the configured
+      Paperclip script and local adapter are running without depending on
+      frontend-direct process orchestration.
+- [x] Add an explicit Local Workspace startup toggle so auto-launch is
+      controllable per machine and visible in Settings.
+- [x] Verify the startup contract with build/test hygiene and record the
+      review here.
+
+## Review
+
+- Tauri skills used:
+  - `calling-rust-from-tauri-frontend`
+    - used to keep startup orchestration in one native `ensure` command instead
+      of spreading launch logic across multiple React effects and local HTTP
+      checks
+  - `understanding-tauri-ipc`
+    - used to fold boot-time Paperclip startup into the same typed local
+      workspace contract as the existing launch/open/probe commands
+  - `testing-tauri-apps`
+    - used to re-run the TeamForge build/check/test verification set after
+      introducing startup-side behavior
+- Startup contract implemented:
+  - added `paperclip_auto_launch_enabled` as a machine-local local-workspace
+    setting and surfaced it in `Settings`
+  - extended `LocalWorkspaceStatus` so the app can show whether Paperclip
+    startup is automatic or manual on the current machine
+  - added native command `ensure_paperclip_runtime_started` that:
+    - respects the saved startup toggle
+    - uses the saved Paperclip script path to issue a startup request
+    - launches the local adapter only for local Paperclip API URLs
+    - skips adapter launch for remote API endpoints
+    - probes the adapter before/after launch to avoid blind duplicate spawns
+  - wired `App.tsx` to call the `ensure` command on startup after the shell
+    begins loading
+- Settings updates:
+  - Local Workspace now shows `PAPERCLIP STARTUP`
+  - Local Workspace now exposes a startup checkbox:
+    - `START PAPERCLIP RUNTIME WHEN TEAMFORGE OPENS`
+  - startup state is saved alongside the rest of the local Paperclip settings
+- Verification:
+  - `pnpm build`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+  - `git diff --check`
+- Remaining caveat:
+  - I verified the startup path through build/test coverage and the typed boot
+    wiring, but I did not open a packaged TeamForge window in this pass to
+    watch the auto-launch effect fire live against the current machine config
+
+# Task Plan
+
+## Goal
+
+Make TeamForge the daily shell for Paperclip runtime visibility by adding a
+native Paperclip API integration, repurposing `Live` into `Agents`, enriching
+Overview with Paperclip runtime signals, and keeping Paperclip UI launch/open as
+admin fallback only.
+
+## Plan
+
+- [x] Review the relevant Tauri skills, current TeamForge founder-console
+      architecture, and the sibling Paperclip adapter contract before
+      implementation:
+      - `calling-rust-from-tauri-frontend`
+      - `understanding-tauri-ipc`
+      - `testing-tauri-apps`
+      - `docs/plans/2026-04-22-teamforge-founder-console.md`
+      - `docs/plans/2026-04-29-teamforge-dashboard-realignment.md`
+      - `docs/architecture/contracts/agent-feed-export-contract.md`
+      - `thoughtseed-paperclip/ARCHITECTURE.md`
+      - `thoughtseed-paperclip/scripts/forge-aura-adapter/README.md`
+- [x] Add TeamForge-native Paperclip API configuration, typed IPC commands, and
+      frontend DTOs for runtime probe, telemetry, users, personal context,
+      rooms, and escalations.
+- [x] Enrich Overview with a Paperclip runtime band and repurpose `/live` into
+      `/agents` with founder-global runtime visibility plus selected-user
+      drilldown.
+- [x] Add a minimal Paperclip adapter shim under
+      `thoughtseed-paperclip/scripts/forge-aura-adapter/` because the six
+      documented `/api/*` endpoints are not shipped in the mounted repo.
+- [x] Verify TeamForge build/check flows plus shim behavior and record the
+      review here.
+
+## Review
+
+- Tauri skills used:
+  - `calling-rust-from-tauri-frontend`
+    - used to keep Paperclip access inside typed native commands instead of
+      letting React talk to local HTTP directly
+  - `understanding-tauri-ipc`
+    - used to define one consistent TeamForge DTO/command surface for runtime
+      probe, telemetry, roster, rooms, personal context, and escalations
+  - `testing-tauri-apps`
+    - used to verify the new Rust client logic with focused tests and to
+      validate the cross-repo adapter contract before closing the task
+- Planning/docs reviewed before implementation:
+  - `docs/plans/2026-04-22-teamforge-founder-console.md`
+  - `docs/plans/2026-04-29-teamforge-dashboard-realignment.md`
+  - `docs/architecture/contracts/agent-feed-export-contract.md`
+  - `docs/runbooks/tauri-agent-skills.md`
+  - `docs/runbooks/tauri-prompt-scaffold.md`
+  - sibling Paperclip docs:
+    - `thoughtseed-paperclip/ARCHITECTURE.md`
+    - `thoughtseed-paperclip/scripts/forge-aura-adapter/README.md`
+  - no repo-local `.context/*` or GSD artifacts were present in this checkout
+- Paperclip contract finding:
+  - the six documented adapter endpoints were present in docs and manifests,
+    but not implemented in the mounted Paperclip repo
+  - that made the shim an actual requirement, not optional cleanup
+- Implemented in TeamForge:
+  - added native Paperclip runtime client logic in
+    `src-tauri/src/paperclip.rs`
+  - added typed Tauri commands for:
+    - runtime probe
+    - runtime summary
+    - users
+    - telemetry
+    - personal context
+    - rooms
+    - escalations
+  - extended local workspace settings/status with:
+    - `paperclip_api_url`
+    - `paperclip_api_token`
+    - API readiness inspection
+  - enriched `Overview` with a Paperclip runtime band that shows:
+    - healthy/stale/uninitialized counts
+    - latest cycle signal
+    - escalation backlog/latest escalation
+    - drilldown into `/agents`
+  - replaced the old `Live` presence page with `Agents` and kept presence as a
+    subsection inside the broader runtime surface
+  - demoted `/live` into a redirect to `/agents` so old deep links still work
+- Implemented in Paperclip:
+  - added `scripts/forge-aura-adapter/server.mjs`
+  - added `scripts/forge-aura-adapter/test-contract.sh`
+  - kept the shim additive-only and composed from existing repo artifacts:
+    - `scripts/health-check.sh`
+    - `.thoughtseed/task-registry.json`
+    - `agents/*/MANIFEST.yaml`
+    - `config/projects/*.yaml`
+    - `scripts/task-registry.sh`
+    - `scripts/escalate.sh`
+  - added dry-run support for escalation contract tests so route verification
+    does not pollute the live Paperclip vault
+- Verification:
+  - `pnpm build`
+  - `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+  - `node --check ../thoughtseed-paperclip/scripts/forge-aura-adapter/server.mjs`
+  - `../thoughtseed-paperclip/scripts/forge-aura-adapter/test-contract.sh`
+  - `git diff --check`
+- Remaining caveat:
+  - the shim is intentionally separate from the Paperclip UI and therefore
+    defaults to its own API port (`3101`) instead of assuming the admin UI port
+    can also host the adapter contract
+
+# Task Plan
+
+## Goal
+
+Fix the still-empty Projects page by tracing it back to the actual canonical
+TeamForge execution read model, and remove engineering/meta commentary from app
+copy across the visible pages so the product reads like an operator dashboard
+instead of an internal planning tool.
+
+## Plan
+
+- [x] Review the relevant Tauri skills and current founder/dashboard plans
+      before implementation:
+      - `calling-rust-from-tauri-frontend`
+      - `understanding-tauri-ipc`
+      - `testing-tauri-apps`
+      - `docs/plans/2026-04-22-teamforge-founder-console.md`
+      - `docs/plans/2026-04-29-teamforge-dashboard-realignment.md`
+- [x] Trace the Projects page data path from React -> Tauri command -> SQLite /
+      Worker bridge and fix the root cause for the empty execution state.
+- [x] Sweep the visible app pages for meta/process/planning copy and replace it
+      with concise operator-facing language.
+- [x] Verify the Projects route with real data, run build/check hygiene, and
+      record the review here.
+
+## Review
+
+- Tauri skills used:
+  - `calling-rust-from-tauri-frontend`
+    - used to trace the real React -> Tauri command boundary for the Projects
+      page instead of guessing from the UI
+  - `understanding-tauri-ipc`
+    - used to keep the fix at the typed `get_execution_projects` contract and
+      its local read model rather than patching around the empty state in React
+  - `testing-tauri-apps`
+    - used to add a focused Rust test for the missing execution-view case and
+      to verify the fix before closing the task
+- Planning/docs reviewed before implementation:
+  - `docs/plans/2026-04-22-teamforge-founder-console.md`
+  - `docs/plans/2026-04-29-teamforge-dashboard-realignment.md`
+  - `docs/runbooks/tauri-agent-skills.md`
+  - `docs/runbooks/tauri-prompt-scaffold.md`
+  - no repo-local `.context/*` or GSD artifacts were present in this checkout
+- Root cause found:
+  - the Projects page was not empty because the TeamForge graph was missing
+  - the local cache already had `17` active `teamforge_projects`, but
+    `get_execution_projects` filtered away any project that did not already
+    have linked GitHub repos or a Clockify project id
+  - local proof during debugging:
+    - `teamforge_projects`: `17`
+    - `teamforge_active_project_issues`: `0`
+    - `github_repo_configs`: `1`
+- Implemented:
+  - updated `load_execution_projects_from_local_projection` in
+    `src-tauri/src/commands/mod.rs` so active TeamForge projects still appear
+    in the Projects execution view even before linked delivery telemetry is in
+    place
+  - added
+    `active_teamforge_projects_without_links_still_show_in_execution_view`
+    coverage in `src-tauri/src/commands/mod.rs`
+  - cleaned visible product copy in:
+    - `src/pages/Projects.tsx`
+    - `src/pages/Overview.tsx`
+    - `src/pages/Clients.tsx`
+    - `src/pages/Onboarding.tsx`
+    - `src/pages/Settings.tsx`
+  - reduced internal/process-heavy phrases like “control plane”, “canonical”,
+    “founder sync”, and implementation narration where they were directly
+    exposed in the UI
+- Verification:
+  - `pnpm build`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml active_teamforge_projects_without_links_still_show_in_execution_view -- --nocapture`
+  - `git diff --check`
+  - live cache check via SQLite confirmed `17` active TeamForge projects exist,
+    which now have a non-empty fallback path into the Projects view
+- Remaining follow-up:
+  - the Projects setup mode still exposes real sync-management fields because
+    it is still an admin surface; if you want that area simplified further, it
+    should be a separate product pass rather than mixed into the empty-state
+    fix
+
+# Task Plan
+
+## Goal
+
 Close the remaining founder-console setup gaps by making local workspace
 readiness and vault parity sync first-class Settings workflows, aligning the
 parity importer with the app's real Cloudflare access token model, and cleaning

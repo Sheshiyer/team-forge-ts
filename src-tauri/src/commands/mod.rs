@@ -28,6 +28,7 @@ use crate::huly::types::{
     HulyWorkspaceNormalizationAction, HulyWorkspaceNormalizationReport,
     HulyWorkspaceNormalizationSnapshot,
 };
+use crate::paperclip;
 use crate::slack::client::SlackClient;
 use crate::slack::sync::SlackSyncEngine;
 use crate::slack::types::{SlackConversation, SlackMessage, SlackUser};
@@ -1561,6 +1562,9 @@ pub struct LocalWorkspaceStatus {
     paperclip_script_path: Option<String>,
     paperclip_working_dir: Option<String>,
     paperclip_ui_url: Option<String>,
+    paperclip_api_url: Option<String>,
+    paperclip_api_token_configured: bool,
+    paperclip_auto_launch_enabled: bool,
     teamforge_workspace_id: Option<String>,
     teamforge_workspace_source: String,
     teamforge_workspace_error: Option<String>,
@@ -1614,6 +1618,18 @@ pub struct PaperclipLaunchResult {
 #[serde(rename_all = "camelCase")]
 pub struct PaperclipUiOpenResult {
     url: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaperclipStartupResult {
+    auto_launch_enabled: bool,
+    script_status: String,
+    script_message: String,
+    script_pid: Option<u32>,
+    adapter_status: String,
+    adapter_message: String,
+    adapter_pid: Option<u32>,
 }
 
 async fn trimmed_setting_value(
@@ -1795,6 +1811,16 @@ async fn read_local_workspace_status(
     let paperclip_script_path = trimmed_setting_value(pool, "paperclip_script_path").await?;
     let paperclip_working_dir = trimmed_setting_value(pool, "paperclip_working_dir").await?;
     let paperclip_ui_url = trimmed_setting_value(pool, "paperclip_ui_url").await?;
+    let paperclip_api_url = trimmed_setting_value(pool, "paperclip_api_url").await?;
+    let paperclip_api_token_configured = trimmed_setting_value(pool, "paperclip_api_token")
+        .await?
+        .is_some();
+    let paperclip_auto_launch_enabled = resolve_paperclip_auto_launch_enabled(
+        pool,
+        paperclip_script_path.as_deref(),
+        paperclip_api_url.as_deref(),
+    )
+    .await?;
     let explicit_workspace_id = trimmed_setting_value(pool, "teamforge_workspace_id").await?;
     let cloud_access_token_configured =
         trimmed_setting_value(pool, "cloud_credentials_access_token")
@@ -1844,8 +1870,7 @@ async fn read_local_workspace_status(
         && node_runtime_error.is_none();
 
     let founder_sync_message = if founder_sync_ready {
-        "Ready to sync the local Thoughtseed vault into the canonical TeamForge control plane."
-            .to_string()
+        "Ready to sync local Thoughtseed notes into TeamForge.".to_string()
     } else {
         let mut blockers = Vec::new();
         if local_vault_root.is_none() {
@@ -1867,7 +1892,7 @@ async fn read_local_workspace_status(
         }
 
         if blockers.is_empty() {
-            "Founder sync is not ready yet.".to_string()
+            "TeamForge sync is not ready yet.".to_string()
         } else {
             blockers.join(" ")
         }
@@ -1879,6 +1904,9 @@ async fn read_local_workspace_status(
         paperclip_script_path,
         paperclip_working_dir,
         paperclip_ui_url,
+        paperclip_api_url,
+        paperclip_api_token_configured,
+        paperclip_auto_launch_enabled,
         teamforge_workspace_id,
         teamforge_workspace_source,
         teamforge_workspace_error,
@@ -1899,9 +1927,50 @@ fn normalize_local_workspace_setting(key: &str, value: &str) -> String {
         "local_vault_root"
         | "paperclip_script_path"
         | "paperclip_working_dir"
-        | "paperclip_ui_url" => value.trim().to_string(),
+        | "paperclip_ui_url"
+        | "paperclip_api_url"
+        | "paperclip_api_token" => value.trim().to_string(),
         _ => value.to_string(),
     }
+}
+
+fn bool_setting(value: Option<&str>, default: bool) -> bool {
+    match value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+    {
+        Some(value) if matches!(value.as_str(), "1" | "true" | "yes" | "on") => true,
+        Some(value) if matches!(value.as_str(), "0" | "false" | "no" | "off") => false,
+        Some(_) => default,
+        None => default,
+    }
+}
+
+fn paperclip_api_url_is_local(value: Option<&str>) -> bool {
+    let Some(raw) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+
+    let Ok(url) = reqwest::Url::parse(raw) else {
+        return false;
+    };
+
+    matches!(
+        url.host_str(),
+        Some("127.0.0.1") | Some("localhost") | Some("::1")
+    )
+}
+
+async fn resolve_paperclip_auto_launch_enabled(
+    pool: &sqlx::SqlitePool,
+    paperclip_script_path: Option<&str>,
+    paperclip_api_url: Option<&str>,
+) -> Result<bool, String> {
+    let saved = trimmed_setting_value(pool, "paperclip_auto_launch_enabled").await?;
+    let inferred_default =
+        paperclip_script_path.is_some() || paperclip_api_url_is_local(paperclip_api_url);
+    Ok(bool_setting(saved.as_deref(), inferred_default))
 }
 
 fn validate_existing_directory(path: &Path, label: &str) -> Result<(), String> {
@@ -1951,69 +2020,25 @@ fn paperclip_shell_interpreter(path: &Path) -> Option<&'static str> {
     }
 }
 
-#[tauri::command]
-pub async fn save_setting(db: State<'_, DbPool>, key: String, value: String) -> Result<(), String> {
-    let pool = &db.0;
-    if key == "github_repos" {
-        clear_deprecated_github_repo_setting(pool).await?;
-        return Ok(());
+fn resolve_paperclip_adapter_script_path(working_directory: &Path) -> Result<PathBuf, String> {
+    let candidate = working_directory.join("scripts/forge-aura-adapter/server.mjs");
+    if !candidate.exists() {
+        return Err(format!(
+            "Paperclip adapter script does not exist: {}",
+            candidate.display()
+        ));
     }
-
-    let value_to_store = if key == "clockify_ignored_emails" {
-        let normalized = normalize_ignored_email_value(&value);
-        if normalized.is_empty() {
-            DEFAULT_CLOCKIFY_IGNORED_EMAILS.to_string()
-        } else {
-            normalized
-        }
-    } else if key == "clockify_ignored_employee_ids" {
-        normalize_multi_id_value(&value)
-    } else {
-        normalize_local_workspace_setting(&key, &value)
-    };
-
-    queries::set_setting(pool, &key, &value_to_store)
-        .await
-        .map_err(|e| format!("db error: {e}"))?;
-
-    if key == "clockify_ignored_emails" || key == "clockify_ignored_employee_ids" {
-        apply_clockify_ignore_rules(pool).await?;
+    if candidate.is_dir() {
+        return Err(format!(
+            "Paperclip adapter script path points to a directory, not a file: {}",
+            candidate.display()
+        ));
     }
-
-    Ok(())
+    Ok(candidate)
 }
 
-#[tauri::command]
-pub async fn pick_vault_directory(app_handle: tauri::AppHandle) -> Result<Option<String>, String> {
-    #[cfg(desktop)]
-    {
-        let folder = app_handle.dialog().file().blocking_pick_folder();
-        let Some(folder) = folder else {
-            return Ok(None);
-        };
-        let path = folder.into_path().map_err(|_| {
-            "Selected folder could not be converted to a local filesystem path".to_string()
-        })?;
-        Ok(Some(path.to_string_lossy().to_string()))
-    }
-
-    #[cfg(not(desktop))]
-    {
-        let _ = app_handle;
-        Err("Vault directory picker is only available on desktop builds".to_string())
-    }
-}
-
-#[tauri::command]
-pub async fn validate_vault_directory(
-    path: String,
-) -> Result<vault::VaultDirectoryValidation, String> {
-    Ok(vault::validate_vault_directory(Path::new(path.trim())))
-}
-
-#[tauri::command]
-pub async fn launch_paperclip_script(
-    app_handle: tauri::AppHandle,
+async fn launch_paperclip_script_internal(
+    app_handle: &tauri::AppHandle,
     script_path: String,
     working_dir: Option<String>,
 ) -> Result<PaperclipLaunchResult, String> {
@@ -2083,6 +2108,119 @@ pub async fn launch_paperclip_script(
     })
 }
 
+async fn launch_paperclip_adapter_internal(
+    app_handle: &tauri::AppHandle,
+    working_dir: String,
+    api_url: String,
+    api_token: String,
+) -> Result<PaperclipLaunchResult, String> {
+    let parsed_url = reqwest::Url::parse(api_url.trim())
+        .map_err(|error| format!("Invalid Paperclip API URL: {error}"))?;
+    if !matches!(
+        parsed_url.host_str(),
+        Some("127.0.0.1") | Some("localhost") | Some("::1")
+    ) {
+        return Err("Paperclip adapter auto-launch only supports local API URLs.".to_string());
+    }
+
+    let working_directory = resolve_paperclip_working_directory(Some(working_dir.as_str()))?
+        .ok_or_else(|| "Paperclip working directory is required for adapter launch.".to_string())?;
+    let script_path = resolve_paperclip_adapter_script_path(&working_directory)?;
+    let port = parsed_url
+        .port_or_known_default()
+        .ok_or_else(|| "Paperclip API URL must include a reachable port.".to_string())?;
+
+    let script_string = script_path.to_string_lossy().to_string();
+    let mut command = app_handle.shell().command("node");
+    command = command
+        .args([script_string.clone()])
+        .current_dir(&working_directory)
+        .env("PORT", port.to_string())
+        .env("PAPERCLIP_API_TOKEN", api_token.trim().to_string())
+        .env("REPO_ROOT", working_directory.to_string_lossy().to_string());
+
+    let (_rx, child) = command
+        .spawn()
+        .map_err(|error| format!("launch Paperclip adapter: {error}"))?;
+
+    Ok(PaperclipLaunchResult {
+        pid: child.pid(),
+        script_path: script_string,
+        command_path: "node".to_string(),
+        working_directory: Some(working_directory.to_string_lossy().to_string()),
+        launch_mode: "node-script".to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn save_setting(db: State<'_, DbPool>, key: String, value: String) -> Result<(), String> {
+    let pool = &db.0;
+    if key == "github_repos" {
+        clear_deprecated_github_repo_setting(pool).await?;
+        return Ok(());
+    }
+
+    let value_to_store = if key == "clockify_ignored_emails" {
+        let normalized = normalize_ignored_email_value(&value);
+        if normalized.is_empty() {
+            DEFAULT_CLOCKIFY_IGNORED_EMAILS.to_string()
+        } else {
+            normalized
+        }
+    } else if key == "clockify_ignored_employee_ids" {
+        normalize_multi_id_value(&value)
+    } else {
+        normalize_local_workspace_setting(&key, &value)
+    };
+
+    queries::set_setting(pool, &key, &value_to_store)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    if key == "clockify_ignored_emails" || key == "clockify_ignored_employee_ids" {
+        apply_clockify_ignore_rules(pool).await?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pick_vault_directory(app_handle: tauri::AppHandle) -> Result<Option<String>, String> {
+    #[cfg(desktop)]
+    {
+        let folder = app_handle.dialog().file().blocking_pick_folder();
+        let Some(folder) = folder else {
+            return Ok(None);
+        };
+        let path = folder.into_path().map_err(|_| {
+            "Selected folder could not be converted to a local filesystem path".to_string()
+        })?;
+        Ok(Some(path.to_string_lossy().to_string()))
+    }
+
+    #[cfg(not(desktop))]
+    {
+        let _ = app_handle;
+        Err("Vault directory picker is only available on desktop builds".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn validate_vault_directory(
+    path: String,
+) -> Result<vault::VaultDirectoryValidation, String> {
+    Ok(vault::validate_vault_directory(Path::new(path.trim())))
+}
+
+#[tauri::command]
+pub async fn launch_paperclip_script(
+    app_handle: tauri::AppHandle,
+    script_path: String,
+    working_dir: Option<String>,
+) -> Result<PaperclipLaunchResult, String> {
+    launch_paperclip_script_internal(&app_handle, script_path, working_dir).await
+}
+
 #[tauri::command]
 pub async fn open_paperclip_ui(
     app_handle: tauri::AppHandle,
@@ -2109,6 +2247,185 @@ pub async fn open_paperclip_ui(
     Ok(PaperclipUiOpenResult {
         url: normalized_url,
     })
+}
+
+#[tauri::command]
+pub async fn ensure_paperclip_runtime_started(
+    db: State<'_, DbPool>,
+    app_handle: tauri::AppHandle,
+) -> Result<PaperclipStartupResult, String> {
+    let pool = &db.0;
+    let script_path = trimmed_setting_value(pool, "paperclip_script_path").await?;
+    let working_dir = trimmed_setting_value(pool, "paperclip_working_dir").await?;
+    let api_url = trimmed_setting_value(pool, "paperclip_api_url")
+        .await?
+        .unwrap_or_else(|| paperclip::default_api_url().to_string());
+    let api_token = trimmed_setting_value(pool, "paperclip_api_token").await?;
+    let auto_launch_enabled =
+        resolve_paperclip_auto_launch_enabled(pool, script_path.as_deref(), Some(api_url.as_str()))
+            .await?;
+
+    if !auto_launch_enabled {
+        return Ok(PaperclipStartupResult {
+            auto_launch_enabled,
+            script_status: "skipped".to_string(),
+            script_message: "Paperclip auto-launch is turned off for this machine.".to_string(),
+            script_pid: None,
+            adapter_status: "skipped".to_string(),
+            adapter_message: "Paperclip auto-launch is turned off for this machine.".to_string(),
+            adapter_pid: None,
+        });
+    }
+
+    let (script_status, script_message, script_pid) = if let Some(path) = script_path {
+        match launch_paperclip_script_internal(&app_handle, path, working_dir.clone()).await {
+            Ok(result) => (
+                "launch-requested".to_string(),
+                format!("Paperclip start request issued via {}.", result.launch_mode),
+                Some(result.pid),
+            ),
+            Err(error) => ("error".to_string(), error, None),
+        }
+    } else {
+        (
+            "not-configured".to_string(),
+            "Paperclip script path is not configured for this machine.".to_string(),
+            None,
+        )
+    };
+
+    let (adapter_status, adapter_message, adapter_pid) = if !paperclip_api_url_is_local(Some(
+        api_url.as_str(),
+    )) {
+        (
+            "remote".to_string(),
+            "Paperclip API URL is remote, so local adapter auto-launch is skipped.".to_string(),
+            None,
+        )
+    } else if working_dir.is_none() {
+        (
+            "not-configured".to_string(),
+            "Paperclip working directory is required for local adapter auto-launch.".to_string(),
+            None,
+        )
+    } else if api_token.is_none() {
+        (
+            "not-configured".to_string(),
+            "Paperclip API token is required before local adapter auto-launch can run.".to_string(),
+            None,
+        )
+    } else if paperclip::probe_url(&api_url, api_token.as_deref().unwrap())
+        .await
+        .is_ok()
+    {
+        (
+            "already-running".to_string(),
+            "Paperclip adapter is already responding on the configured local API URL.".to_string(),
+            None,
+        )
+    } else {
+        match launch_paperclip_adapter_internal(
+            &app_handle,
+            working_dir.clone().unwrap(),
+            api_url.clone(),
+            api_token.clone().unwrap(),
+        )
+        .await
+        {
+            Ok(result) => {
+                let mut ready = false;
+                for _ in 0..10 {
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    if paperclip::probe_url(&api_url, api_token.as_deref().unwrap())
+                        .await
+                        .is_ok()
+                    {
+                        ready = true;
+                        break;
+                    }
+                }
+
+                if ready {
+                    (
+                        "launched".to_string(),
+                        "Paperclip adapter launched and responded on the configured local API URL."
+                            .to_string(),
+                        Some(result.pid),
+                    )
+                } else {
+                    (
+                        "launch-requested".to_string(),
+                        "Paperclip adapter launch was requested, but readiness was not confirmed before timeout."
+                            .to_string(),
+                        Some(result.pid),
+                    )
+                }
+            }
+            Err(error) => ("error".to_string(), error, None),
+        }
+    };
+
+    Ok(PaperclipStartupResult {
+        auto_launch_enabled,
+        script_status,
+        script_message,
+        script_pid,
+        adapter_status,
+        adapter_message,
+        adapter_pid,
+    })
+}
+
+#[tauri::command]
+pub async fn probe_paperclip_api(
+    db: State<'_, DbPool>,
+) -> Result<paperclip::PaperclipApiProbeResult, String> {
+    paperclip::probe_api(&db.0).await
+}
+
+#[tauri::command]
+pub async fn get_paperclip_runtime_summary(
+    db: State<'_, DbPool>,
+) -> Result<paperclip::PaperclipRuntimeOverview, String> {
+    paperclip::fetch_runtime_overview(&db.0).await
+}
+
+#[tauri::command]
+pub async fn get_paperclip_users(
+    db: State<'_, DbPool>,
+) -> Result<Vec<paperclip::PaperclipUser>, String> {
+    paperclip::fetch_users(&db.0).await
+}
+
+#[tauri::command]
+pub async fn get_paperclip_telemetry(
+    db: State<'_, DbPool>,
+) -> Result<Vec<paperclip::PaperclipTelemetryItem>, String> {
+    paperclip::fetch_telemetry(&db.0).await
+}
+
+#[tauri::command]
+pub async fn get_paperclip_personal_context(
+    db: State<'_, DbPool>,
+    user_id: String,
+) -> Result<paperclip::PaperclipPersonalContext, String> {
+    paperclip::fetch_personal_context(&db.0, &user_id).await
+}
+
+#[tauri::command]
+pub async fn get_paperclip_rooms(
+    db: State<'_, DbPool>,
+    user_id: String,
+) -> Result<Vec<paperclip::PaperclipRoomDefinition>, String> {
+    paperclip::fetch_rooms(&db.0, &user_id).await
+}
+
+#[tauri::command]
+pub async fn create_paperclip_escalation(
+    db: State<'_, DbPool>,
+    input: paperclip::PaperclipEscalationInput,
+) -> Result<paperclip::PaperclipEscalationResponse, String> {
+    paperclip::create_escalation(&db.0, &input).await
 }
 
 #[tauri::command]
@@ -2499,6 +2816,8 @@ pub struct FounderCommandCenterView {
     pub white_labelable: Vec<vault::VaultPortfolioSurface>,
     pub needs_review: FounderNeedsReviewView,
     pub research_hub: vault::VaultResearchHubSummary,
+    pub paperclip_runtime: Option<paperclip::PaperclipRuntimeOverview>,
+    pub paperclip_error: Option<String>,
     pub vault_error: Option<String>,
 }
 
@@ -2519,6 +2838,21 @@ pub async fn get_founder_command_center(
     let identity_review_queue = queries::get_identity_review_queue(pool, 0.85)
         .await
         .map_err(|e| format!("load identity review queue: {e}"))?;
+    let (paperclip_runtime, paperclip_error) =
+        match paperclip::read_api_config_optional(pool).await? {
+            Some((_url, true)) => match paperclip::fetch_runtime_overview(pool).await {
+                Ok(runtime) => (Some(runtime), None),
+                Err(error) => (None, Some(error)),
+            },
+            Some((_url, false)) => (
+                None,
+                Some("Paperclip API token is missing from local workspace settings.".to_string()),
+            ),
+            None => (
+                None,
+                Some("Paperclip API is not configured for this machine yet.".to_string()),
+            ),
+        };
 
     let (vault_signals, vault_error) = match vault::load_founder_vault_signals(pool).await {
         Ok(signals) => (Some(signals), None),
@@ -2661,6 +2995,8 @@ pub async fn get_founder_command_center(
         white_labelable,
         needs_review,
         research_hub,
+        paperclip_runtime,
+        paperclip_error,
         vault_error,
     })
 }
@@ -3140,39 +3476,42 @@ async fn load_execution_projects_from_local_projection(
             .collect::<Vec<_>>();
 
         if repo_links.is_empty() {
-            let Some(clockify_project_id) = graph.project.clockify_project_id.clone() else {
-                continue;
-            };
-            if used_clockify_ids.insert(clockify_project_id.clone()) {
-                let hours = clockify_by_id.get(&clockify_project_id).copied();
-                let (total_hours, billable_hours, team_members, utilization) = hours
-                    .map(project_hours_from_row)
-                    .unwrap_or((0.0, 0.0, 0, 0.0));
-                rows.push(ExecutionProjectView {
-                    id: format!("teamforge:{}", graph.project.id),
-                    teamforge_project_id: Some(graph.project.id.clone()),
-                    source: "clockify".to_string(),
-                    repo: None,
-                    milestone: None,
-                    title: graph.project.name.clone(),
-                    status: graph.project.status.clone(),
-                    total_issues: 0,
-                    open_issues: 0,
-                    closed_issues: 0,
-                    total_prs: 0,
-                    open_prs: 0,
-                    branches: 0,
-                    failing_checks: 0,
-                    percent_complete: 0.0,
-                    latest_activity: None,
-                    huly_project_id: primary_huly_project_id.clone(),
-                    clockify_project_id: Some(clockify_project_id),
-                    total_hours,
-                    billable_hours,
-                    team_members,
-                    utilization,
-                });
-            }
+            let clockify_project_id = graph.project.clockify_project_id.clone();
+            let hours = clockify_project_id.as_ref().and_then(|id| {
+                used_clockify_ids.insert(id.clone());
+                clockify_by_id.get(id).copied()
+            });
+            let (total_hours, billable_hours, team_members, utilization) = hours
+                .map(project_hours_from_row)
+                .unwrap_or((0.0, 0.0, 0, 0.0));
+            rows.push(ExecutionProjectView {
+                id: format!("teamforge:{}", graph.project.id),
+                teamforge_project_id: Some(graph.project.id.clone()),
+                source: if clockify_project_id.is_some() {
+                    "clockify".to_string()
+                } else {
+                    "teamforge".to_string()
+                },
+                repo: None,
+                milestone: None,
+                title: graph.project.name.clone(),
+                status: graph.project.status.clone(),
+                total_issues: 0,
+                open_issues: 0,
+                closed_issues: 0,
+                total_prs: 0,
+                open_prs: 0,
+                branches: 0,
+                failing_checks: 0,
+                percent_complete: 0.0,
+                latest_activity: None,
+                huly_project_id: primary_huly_project_id.clone(),
+                clockify_project_id,
+                total_hours,
+                billable_hours,
+                team_members,
+                utilization,
+            });
             continue;
         }
 
@@ -10888,6 +11227,53 @@ mod tests {
         assert_eq!(
             configs[0].huly_project_id.as_deref(),
             Some("huly-project-1")
+        );
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(&app_data_dir);
+    }
+
+    #[tokio::test]
+    async fn active_teamforge_projects_without_links_still_show_in_execution_view() {
+        let app_data_dir = temp_app_data_dir("execution-projects-teamforge-only");
+        std::fs::create_dir_all(&app_data_dir).expect("create temp app data dir");
+        let pool = queries::init_db(&app_data_dir).await.expect("init temp db");
+        let now = Utc::now().to_rfc3339();
+
+        let graph = TeamforgeProjectGraph {
+            project: TeamforgeProject {
+                id: "tf-project-unstyled".to_string(),
+                slug: "heyzack-crm".to_string(),
+                name: "HeyZack CRM".to_string(),
+                portfolio_name: Some("HeyZack".to_string()),
+                client_id: Some("heyzack".to_string()),
+                client_name: Some("HeyZack".to_string()),
+                clockify_project_id: None,
+                project_type: Some("execution".to_string()),
+                status: "active".to_string(),
+                sync_mode: "hybrid".to_string(),
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            },
+            github_repos: vec![],
+            huly_links: vec![],
+            artifacts: vec![],
+            client_profile: None,
+        };
+
+        cache_and_bridge_teamforge_project_graphs(&pool, &[graph])
+            .await
+            .expect("cache teamforge graph");
+
+        let projects = load_execution_projects_from_local_projection(&pool)
+            .await
+            .expect("load execution projects");
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].title, "HeyZack CRM");
+        assert_eq!(projects[0].source, "teamforge");
+        assert_eq!(
+            projects[0].teamforge_project_id.as_deref(),
+            Some("tf-project-unstyled")
         );
 
         pool.close().await;

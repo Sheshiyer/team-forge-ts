@@ -13,7 +13,7 @@ import Calendar from "./pages/Calendar";
 import Comms from "./pages/Comms";
 import Boards from "./pages/Boards";
 import Activity from "./pages/Activity";
-import Live from "./pages/Live";
+import Agents from "./pages/Agents";
 import Settings from "./pages/Settings";
 import Clients from "./pages/Clients";
 import Issues from "./pages/Issues";
@@ -23,7 +23,7 @@ import Avatar from "./components/ui/Avatar";
 import DateRangePicker from "./components/ui/DateRangePicker";
 import { useViewportWidth } from "./hooks/useViewportWidth";
 import { useAppStore } from "./stores/appStore";
-import type { PresenceStatus } from "./lib/types";
+import type { PaperclipStartupResult, PresenceStatus } from "./lib/types";
 
 const navSections = [
   {
@@ -60,7 +60,7 @@ const navSections = [
     color: "var(--lcars-tan)",
     items: [
       { path: "/activity", label: "Activity" },
-      { path: "/live", label: "Live" },
+      { path: "/agents", label: "Agents" },
     ],
   },
   {
@@ -121,6 +121,30 @@ function App() {
     };
   }, []);
 
+  // Local Paperclip runtime startup on launch
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      invoke<PaperclipStartupResult>("ensure_paperclip_runtime_started")
+        .then((result) => {
+          if (cancelled) return;
+          if (result.scriptStatus !== "skipped" || result.adapterStatus !== "skipped") {
+            console.log("[teamforge] paperclip startup:", result);
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            console.warn("[teamforge] paperclip startup skipped:", err);
+          }
+        });
+    }, 1200);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, []);
+
   // Background sync on launch
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -153,7 +177,7 @@ function App() {
       if (e.metaKey || e.ctrlKey) {
         const routes = [
           "/", "/timesheet", "/projects", "/sprints", "/insights",
-          "/team", "/calendar", "/comms", "/activity", "/live",
+          "/team", "/calendar", "/comms", "/activity", "/agents",
         ];
         const num = parseInt(e.key);
         if (num >= 1 && num <= 9) {
@@ -456,7 +480,8 @@ function App() {
             <Route path="/onboarding" element={<Onboarding />} />
             <Route path="/planner" element={<Navigate to="/team/capacity" replace />} />
             <Route path="/activity" element={<Activity />} />
-            <Route path="/live" element={<Live />} />
+            <Route path="/agents" element={<Agents />} />
+            <Route path="/live" element={<Navigate to="/agents" replace />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </div>

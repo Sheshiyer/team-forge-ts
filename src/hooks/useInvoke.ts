@@ -18,8 +18,17 @@ import type {
   VaultDirectoryValidation,
   LocalWorkspaceStatus,
   LocalVaultSyncReport,
+  PaperclipApiProbeResult,
+  PaperclipEscalationInput,
+  PaperclipEscalationResponse,
   PaperclipLaunchResult,
+  PaperclipPersonalContext,
+  PaperclipRoomDefinition,
+  PaperclipRuntimeOverview,
+  PaperclipStartupResult,
+  PaperclipTelemetryItem,
   PaperclipUiOpenResult,
+  PaperclipUser,
   ActivityItem,
   PresenceStatus,
   Employee,
@@ -78,6 +87,26 @@ const invokeApi = {
     }),
   openPaperclipUi: (url: string) =>
     invoke<PaperclipUiOpenResult>("open_paperclip_ui", { url }),
+  ensurePaperclipRuntimeStarted: () =>
+    invoke<PaperclipStartupResult>("ensure_paperclip_runtime_started"),
+  probePaperclipApi: () =>
+    invoke<PaperclipApiProbeResult>("probe_paperclip_api"),
+  getPaperclipRuntimeSummary: () =>
+    invoke<PaperclipRuntimeOverview>("get_paperclip_runtime_summary"),
+  getPaperclipUsers: () =>
+    invoke<PaperclipUser[]>("get_paperclip_users"),
+  getPaperclipTelemetry: () =>
+    invoke<PaperclipTelemetryItem[]>("get_paperclip_telemetry"),
+  getPaperclipPersonalContext: (userId: string) =>
+    invoke<PaperclipPersonalContext>("get_paperclip_personal_context", {
+      userId,
+    }),
+  getPaperclipRooms: (userId: string) =>
+    invoke<PaperclipRoomDefinition[]>("get_paperclip_rooms", { userId }),
+  createPaperclipEscalation: (input: PaperclipEscalationInput) =>
+    invoke<PaperclipEscalationResponse>("create_paperclip_escalation", {
+      input,
+    }),
   openVaultRelativePath: (relativePath: string) =>
     invoke<string>("open_vault_relative_path", { relativePath }),
   triggerSync: () => invoke<string>("trigger_sync"),

@@ -150,7 +150,7 @@ function Projects() {
       setDraft(buildDraft(detail));
       setControlMessage(null);
     } catch (error) {
-      const message = describeInvokeError(error, "Could not load TeamForge control plane.");
+      const message = describeInvokeError(error, "Could not load project setup.");
       setControlMessage(message);
       setControlPlane(null);
     } finally {
@@ -326,8 +326,8 @@ function Projects() {
       ownershipDomain,
       reason:
         ownershipDomain === "engineering"
-          ? "Promoted to engineering scope from the control plane."
-          : "Forced to execution/admin scope from the control plane.",
+          ? "Moved to engineering scope."
+          : "Moved to delivery scope.",
     });
   };
 
@@ -344,7 +344,7 @@ function Projects() {
                 ...(mode === "execution" ? styles.modeButtonActive : null),
               }}
             >
-              EXECUTION
+              DELIVERY
             </button>
             <button
               onClick={() => setMode("control")}
@@ -353,7 +353,7 @@ function Projects() {
                 ...(mode === "control" ? styles.modeButtonActive : null),
               }}
             >
-              CONTROL PLANE
+              SETUP
             </button>
           </div>
           {mode === "execution" && (
@@ -374,8 +374,8 @@ function Projects() {
           )}
           {!executionError && executionSourceError && (
             <div style={styles.message}>
-              TEAMFORGE REGISTRY REFRESH FAILED. SHOWING CACHED OR LOCAL EXECUTION DATA.{" "}
-              {executionSourceError}
+              PROJECT LINKS COULD NOT BE REFRESHED. SHOWING THE LATEST AVAILABLE
+              ACTIVITY. {executionSourceError}
             </div>
           )}
           {executionLoading ? (
@@ -422,12 +422,10 @@ function Projects() {
               </p>
             ) : executionSourceError && projects.length === 0 ? (
               <p style={styles.emptyText}>
-                EXECUTION PROJECTS UNAVAILABLE. {executionSourceError}
+                PROJECT ACTIVITY IS UNAVAILABLE. {executionSourceError}
               </p>
             ) : projects.length === 0 ? (
-              <p style={styles.emptyText}>
-                NO EXECUTION PROJECTS.
-              </p>
+              <p style={styles.emptyText}>NO ACTIVE PROJECTS YET.</p>
             ) : (
               <table style={styles.table}>
                 <thead>
@@ -448,12 +446,13 @@ function Projects() {
                     <tr key={project.id}>
                       <td style={{ ...styles.td, fontWeight: 600, color: "var(--lcars-orange)" }}>
                         <div>{project.title}</div>
-                        {project.repo && (
-                          <div style={styles.projectSubtext}>
-                            {project.repo}
-                            {project.milestone ? ` · ${project.milestone}` : ""}
-                          </div>
-                        )}
+                        <div style={styles.projectSubtext}>
+                          {project.repo
+                            ? `${project.repo}${project.milestone ? ` · ${project.milestone}` : ""}`
+                            : project.source === "teamforge"
+                              ? "Awaiting linked delivery data"
+                              : "Time tracked without linked GitHub activity"}
+                        </div>
                       </td>
                       <td style={styles.td}>
                         <SourceBadge source={project.source} />
@@ -517,11 +516,11 @@ function Projects() {
           <div style={styles.controlGrid}>
             <div style={styles.registryRail}>
               <div style={styles.card}>
-                <div style={styles.sectionLabel}>TEAMFORGE REGISTRY</div>
+                <div style={styles.sectionLabel}>PROJECT DIRECTORY</div>
                 {registryLoading ? (
                   <SkeletonTable rows={6} cols={1} />
                 ) : teamforgeProjects.length === 0 ? (
-                  <p style={styles.emptyText}>NO TEAMFORGE PROJECTS FOUND.</p>
+                  <p style={styles.emptyText}>NO PROJECTS FOUND.</p>
                 ) : (
                   <div style={styles.projectList}>
                     {teamforgeProjects.map((graph) => (
@@ -546,12 +545,12 @@ function Projects() {
 
             <div style={styles.detailRail}>
               <div style={styles.card}>
-                <div style={styles.sectionLabel}>CONTROL SURFACE</div>
+                <div style={styles.sectionLabel}>PROJECT SETUP</div>
                 {controlMessage && <div style={styles.message}>{controlMessage}</div>}
                 {detailLoading ? (
                   <SkeletonTable rows={6} cols={4} />
                 ) : !selectedProjectId || !selectedProject ? (
-                  <p style={styles.emptyText}>SELECT A TEAMFORGE PROJECT TO MANAGE IT.</p>
+                  <p style={styles.emptyText}>SELECT A PROJECT TO MANAGE IT.</p>
                 ) : (
                   <>
                     <div style={styles.actionRow}>
@@ -590,7 +589,7 @@ function Projects() {
 
                     {selectedProject.clientProfile && (
                       <div style={styles.readOnlyCard}>
-                        <div style={styles.sectionLabel}>VAULT CLIENT CONTEXT</div>
+                        <div style={styles.sectionLabel}>CLIENT CONTEXT</div>
                         <div style={styles.readOnlyGrid}>
                           <div>
                             <div style={styles.fieldLabel}>CLIENT</div>
@@ -639,7 +638,7 @@ function Projects() {
                     )}
 
                     <div style={styles.readOnlyCard}>
-                      <div style={styles.sectionLabel}>VAULT ARTIFACT RAIL</div>
+                      <div style={styles.sectionLabel}>PROJECT DOCUMENTS</div>
                       <div style={styles.readOnlyStack}>
                         {ARTIFACT_GROUPS.map((group) => {
                           const artifacts = selectedProject.artifacts.filter((artifact) =>
@@ -671,7 +670,7 @@ function Projects() {
                           artifact.artifactType.startsWith("vault-"),
                         ).length === 0 && (
                           <div style={styles.emptyText}>
-                            NO IMPORTED VAULT ARTIFACTS YET.
+                            NO PROJECT DOCUMENTS LINKED YET.
                           </div>
                         )}
                       </div>
@@ -945,7 +944,7 @@ function Projects() {
                               onClick={() =>
                                 runProjectAction("resolve_conflict", {
                                   conflictId: conflict.id,
-                                  resolutionNote: "Accepted current canonical state from control plane.",
+                                  resolutionNote: "Accepted the current project setup.",
                                 })
                               }
                               style={styles.miniButton}
@@ -1140,15 +1139,23 @@ function formatShortDate(value: string) {
 
 function SourceBadge({ source }: { source: string }) {
   const isGitHub = source === "github";
+  const isClockify = source === "clockify";
+  const color = isGitHub
+    ? "var(--lcars-cyan)"
+    : isClockify
+      ? "var(--lcars-orange)"
+      : "var(--lcars-lavender)";
+  const label =
+    source === "github" ? "GITHUB" : source === "clockify" ? "TIME" : "TRACKED";
   return (
     <span
       style={{
         ...styles.sourceBadge,
-        borderColor: isGitHub ? "var(--lcars-cyan)" : "var(--lcars-orange)",
-        color: isGitHub ? "var(--lcars-cyan)" : "var(--lcars-orange)",
+        borderColor: color,
+        color,
       }}
     >
-      {source.toUpperCase()}
+      {label}
     </span>
   );
 }

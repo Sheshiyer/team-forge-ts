@@ -32,7 +32,7 @@
 
 ---
 
-> **Tracking your team shouldn't require switching between 6 browser tabs.** TeamForge unifies Clockify time tracking, Huly execution workflows, and a Cloudflare-backed TeamForge project control plane into a single native Mac applet — with a Star Trek LCARS interface that makes mission control feel like the bridge of the Enterprise.
+> **Tracking your team shouldn't require switching between 6 browser tabs.** TeamForge unifies Clockify time tracking, Huly execution workflows, Paperclip runtime visibility, and a Cloudflare-backed TeamForge project registry into a single native Mac app — with a Star Trek LCARS interface that makes mission control feel like the bridge of the Enterprise.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
@@ -56,7 +56,7 @@ Cross-reference Clockify hours with Huly time reports. Spot discrepancies. Track
 <tr>
 <td width="50%" valign="top">
 
-### Canonical Project Control Plane
+### Shared Project Registry
 Cloudflare Worker + D1 now own TeamForge project identity, GitHub repo links, Huly project links, artifacts, and sync policy metadata.
 
 </td>
@@ -85,12 +85,12 @@ Leave tracking and yearly holidays now live on a dedicated Calendar route, keepi
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
-## New In v0.1.21
+## New In v0.1.26
 
-- **The founder console now includes a native Local Workspace section** for vault selection, vault validation, Paperclip launcher configuration, and Paperclip UI opening.
-- **The misleading `Devices` shell module has been replaced by a real `Issues` module** backed by active project engineering issues grouped by project.
-- **Active project issues now come from the TeamForge Worker-owned control plane first**, with local SQLite used as the desktop cache/offline projection.
-- **Release metadata is now at `0.1.21`** across the frontend package, sidecar package, Tauri config, and Rust crate.
+- **Agents is now the daily Paperclip route inside TeamForge** with runtime telemetry, roster, rooms, personal context, escalation actions, and crew presence in one shell.
+- **Overview now shows live Paperclip runtime health** so you can jump from the founder dashboard into agent operations without opening a second dashboard.
+- **Desktop Workspace now owns Paperclip API readiness and startup behavior** including local auto-launch and the bundled companion launcher.
+- **Release metadata is now at `0.1.26`** across the frontend package, Tauri config, and Rust crate.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
@@ -128,7 +128,7 @@ On first launch:
 4. Enter your **Huly JWT token**
 5. Paste the **Slack Bot User OAuth Token** (`xoxb-...`) if you want Slack-backed chat activity in **Comms**
 6. Hit **Sync Now** — data populates across all views
-7. Open **Projects** for execution summaries or the TeamForge control plane, **Team** for org mapping and employee summaries, then **Calendar** for leave and holiday operations
+7. Open **Projects** for delivery summaries and project setup, **Team** for org mapping and employee summaries, then **Calendar** for leave and holiday operations
 
 ## Tauri Agent Skills
 
@@ -147,8 +147,8 @@ The repo-pinned 39-skill manifest lives at
 
 ## Releases
 
-- **Current app version in repo:** `0.1.25`
-- **Latest published tag:** `v0.1.24`
+- **Current app version in repo:** `0.1.26`
+- **Latest published tag:** `v0.1.25`
 - **Release trigger:** pushing a tag that matches `v*`
 - **Canonical OTA signing/publish path:** [`.github/workflows/release.yml`](.github/workflows/release.yml)
 - **Artifacts:** macOS `.app` and `.dmg` bundles built by GitHub Actions for Apple Silicon and Intel targets
@@ -223,7 +223,7 @@ The rollout is now documented in-repo instead of living only in chat and GitHub 
 - [Cloudflare Project Sync Architecture](docs/plans/2026-04-17-cloudflare-project-sync-design.md)
 - [Cloudflare Project Backend Implementation Plan](docs/plans/2026-04-17-cloudflare-project-backend-implementation.md)
 
-The first Cloudflare control-plane tranche tracked in GitHub is now implemented on the current `0.1.21` line:
+The first Cloudflare project-registry tranche tracked in GitHub is now implemented on the current `0.1.26` line:
 
 - milestone propagation from GitHub into Huly with drift-review conflict records
 - Huly-owned execution/admin issue propagation
@@ -237,15 +237,15 @@ The first Cloudflare control-plane tranche tracked in GitHub is now implemented 
 |:-----|:--------:|:------:|:--------------|
 | **Overview** | `Cmd+1` | Clockify | Quota compliance, team hours, utilization rate, metric cards |
 | **Timesheet** | `Cmd+2` | Clockify | Time entries with employee/date filtering, CSV export |
-| **Projects** | `Cmd+3` | Clockify + Worker | Per-project execution breakdown, utilization export, and TeamForge control-plane editing |
+| **Projects** | `Cmd+3` | Clockify + Worker | Per-project delivery breakdown, utilization export, and TeamForge project setup |
 | **Sprints** | `Cmd+4` | Huly | Milestone tracking, progress bars, on-track/delayed status |
 | **Insights** | `Cmd+5` | Both | Time discrepancies, estimation accuracy, priority queue health |
 | **Team** | `Cmd+6` | Huly + SQLite | Drag-and-drop org chart mapping, department structure, and employee operations summaries |
 | **Calendar** | `Cmd+7` | Huly + SQLite | Local leave tracking, yearly holiday management, and cache-first schedule ops |
 | **Comms** | `Cmd+8` | Huly + Slack | Chat activity volume, meeting load with ratio analysis |
-| **Boards** | `Cmd+9` | Huly | Kanban cards, days-in-status tracking, stuck card filtering |
 | **Activity** | `Cmd+0` | Both | Weekly timeline, combined feed, engagement heatmap |
-| **Live** | `Cmd+-` | Both | Real-time presence cards with auto-refresh |
+| **Agents** | `Cmd+-` | Paperclip + local ops | Runtime health, telemetry, personal context, rooms, escalations, and crew presence |
+| **Settings** | `Cmd+=` | Local + Worker | Integrations, desktop workspace, updater, and sync controls |
 
 ## Project Structure
 
@@ -259,7 +259,7 @@ team-forge-ts/
     hooks/                     # Typed Tauri invoke layer + viewport helpers
     stores/appStore.ts         # Zustand state
     lib/                       # Types, formatting, CSV export, shared LCARS page styles
-  cloudflare/worker/           # Canonical TeamForge Worker + D1 control plane
+  cloudflare/worker/           # Shared TeamForge Worker + D1 project registry
   src-tauri/                   # Rust backend
     src/clockify/              # HTTP client, sync, rate limiter
     src/huly/                  # REST client, types, sync
@@ -303,11 +303,11 @@ TeamForge connects to Huly via **direct REST API calls** (no SDK required). We r
 | Huly presence | Huly | 60s |
 | TeamForge project graph | Cloudflare Worker | On demand |
 
-Cloudflare Worker + D1 are now the canonical source of truth for TeamForge project graph and sync policy state. Frontend reads still go through Tauri IPC, and local SQLite remains the desktop cache/offline projection for operational reads.
+Cloudflare Worker + D1 are now the shared source of truth for TeamForge project graph and sync policy state. Frontend reads still go through Tauri IPC, and local SQLite remains the desktop cache/offline projection for operational reads.
 
 Menu bar quick actions:
 - **Show TeamForge** brings the app to the front
-- **Live Crew Check** jumps straight to the real-time presence view
+- **Live Crew Check** jumps straight to the Agents runtime view
 - **Weekly Timeline** jumps to the last-7-days activity view
 - **Sync Now** runs a manual sync sweep
 

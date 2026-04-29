@@ -430,14 +430,24 @@ function Overview() {
         <h1 style={styles.pageTitle}>OVERVIEW</h1>
         <div style={styles.pageTitleBar} />
         <div style={styles.errorFrame}>
-          FOUNDER COMMAND CENTER UNAVAILABLE.
+          OVERVIEW UNAVAILABLE.
           {loadError ? ` ${loadError.toUpperCase()}` : ""}
         </div>
       </div>
     );
   }
 
-  const { summary, activeStreams, portfolio, whiteLabelable, needsReview, researchHub, vaultError } =
+  const {
+    summary,
+    activeStreams,
+    portfolio,
+    whiteLabelable,
+    needsReview,
+    researchHub,
+    paperclipRuntime,
+    paperclipError,
+    vaultError,
+  } =
     commandCenter;
 
   return (
@@ -449,11 +459,11 @@ function Overview() {
         <MetricRail
           label="ACTIVE DELIVERY"
           value={String(summary.activeDeliveryStreams)}
-          subtext={`${summary.canonicalClients} CANONICAL CLIENTS · ${summary.atRiskClients} AT RISK`}
+          subtext={`${summary.canonicalClients} LINKED CLIENTS · ${summary.atRiskClients} AT RISK`}
           color="var(--lcars-orange)"
         />
         <MetricRail
-          label="FOUNDER REVIEW"
+          label="NEEDS REVIEW"
           value={String(summary.unresolvedReviewItems)}
           subtext={`${needsReview.orphanedIdentityCount} ORPHANED · ${summary.onboardingAtRisk} ONBOARDING RISK`}
           color="var(--lcars-red)"
@@ -474,8 +484,8 @@ function Overview() {
 
       <div style={styles.heroGrid}>
         <SectionFrame
-          title="FOUNDER COMMAND CENTER"
-          subtitle="CROSS-SYSTEM OPERATING SURFACE"
+          title="MISSION SNAPSHOT"
+          subtitle="LIVE OPERATIONS VIEW"
           accent="var(--lcars-orange)"
           actions={
             <div style={styles.actionGroup}>
@@ -509,13 +519,12 @@ function Overview() {
             </div>
           </div>
           <div style={styles.commandNarrative}>
-            TEAMFORGE NOW READS THE FOUNDER DASHBOARD AS A CONTROL PLANE:
-            DELIVERY STREAMS, PORTFOLIO LIFECYCLE, REVIEW QUEUES, AND RESEARCH
-            INTAKE ALL SURFACE TOGETHER.
+            Delivery, portfolio health, review queues, and research intake stay
+            together here so the next decision is visible at a glance.
           </div>
           {vaultError ? (
             <div style={styles.warningText}>
-              VAULT SIGNALS DEGRADED: {vaultError.toUpperCase()}
+              SOME WORKSPACE NOTES COULD NOT BE READ: {vaultError.toUpperCase()}
             </div>
           ) : null}
           {actionMessage ? <div style={styles.warningText}>{actionMessage}</div> : null}
@@ -523,12 +532,12 @@ function Overview() {
 
         <SectionFrame
           title="PORTFOLIO LIFECYCLE"
-          subtitle="VAULT-SOURCED STATUS DISTRIBUTION"
+          subtitle="PROJECT STATUS"
           accent="var(--lcars-cyan)"
           actions={
             <div style={styles.actionGroup}>
               <ActionButton
-                label="OPEN CANONICAL CLIENTS"
+                label="OPEN CLIENTS"
                 onClick={() => openClientDrillDown(undefined, { registry: "canonical" })}
               />
               <ActionButton
@@ -566,16 +575,79 @@ function Overview() {
             </div>
           </div>
           <div style={styles.lifecycleSubtext}>
-            {portfolio.totalSurfaces} SURFACES TRACKED ACROSS PRODUCTS AND CLIENT
-            DELIVERY. WHITE-LABELABLE INVENTORY STAYS SEPARATE FROM RAW LIFECYCLE.
+            {portfolio.totalSurfaces} surfaces tracked across products and client
+            work, with reusable work called out separately.
           </div>
+        </SectionFrame>
+
+        <SectionFrame
+          title="AGENT RUNTIME"
+          subtitle="PAPERCLIP DAILY SIGNALS"
+          accent="var(--lcars-lavender)"
+          actions={
+            <div style={styles.actionGroup}>
+              <ActionButton label="OPEN AGENTS" onClick={() => navigate("/agents")} />
+              <ActionButton label="OPEN SETTINGS" onClick={() => navigate("/settings")} />
+            </div>
+          }
+        >
+          {paperclipRuntime ? (
+            <>
+              <div style={styles.commandBand}>
+                <div style={styles.commandCell}>
+                  <div style={styles.commandLabel}>HEALTHY</div>
+                  <div style={{ ...styles.commandValue, color: "var(--lcars-green)" }}>
+                    {paperclipRuntime.healthyCount}
+                  </div>
+                </div>
+                <div style={styles.commandCell}>
+                  <div style={styles.commandLabel}>STALE</div>
+                  <div style={{ ...styles.commandValue, color: "var(--lcars-yellow)" }}>
+                    {paperclipRuntime.staleCount}
+                  </div>
+                </div>
+                <div style={styles.commandCell}>
+                  <div style={styles.commandLabel}>UNINITIALIZED</div>
+                  <div style={{ ...styles.commandValue, color: "var(--lcars-red)" }}>
+                    {paperclipRuntime.uninitializedCount}
+                  </div>
+                </div>
+                <div style={styles.commandCell}>
+                  <div style={styles.commandLabel}>ESCALATIONS</div>
+                  <div style={{ ...styles.commandValue, color: "var(--lcars-cyan)" }}>
+                    {paperclipRuntime.escalationBacklogCount}
+                  </div>
+                </div>
+              </div>
+              <div style={styles.commandNarrative}>
+                {paperclipRuntime.latestActivityLabel
+                  ? `LATEST CYCLE · ${paperclipRuntime.latestActivityLabel} · ${formatDate(
+                      paperclipRuntime.latestActivityAt
+                    )}`
+                  : "LATEST CYCLE SIGNAL NOT AVAILABLE YET."}
+              </div>
+              <div style={styles.lifecycleSubtext}>
+                {paperclipRuntime.latestEscalationTitle
+                  ? `LATEST ESCALATION · ${paperclipRuntime.latestEscalationTitle.toUpperCase()} · ${formatDate(
+                      paperclipRuntime.latestEscalationAt
+                    )}`
+                  : `${paperclipRuntime.activeTaskCount} LIVE TASKS ACROSS THE FOUNDER LENS.`}
+              </div>
+            </>
+          ) : (
+            <div style={styles.warningText}>
+              {paperclipError
+                ? paperclipError.toUpperCase()
+                : "PAPERCLIP RUNTIME IS NOT READY ON THIS MACHINE."}
+            </div>
+          )}
         </SectionFrame>
       </div>
 
       <div style={styles.mainGrid}>
         <SectionFrame
           title="ACTIVE DELIVERY STREAMS"
-          subtitle="TEAMFORGE EXECUTION BRIDGE"
+          subtitle="LIVE PROJECT TRACKING"
           accent="var(--lcars-orange)"
           actions={
             <div style={styles.actionGroup}>
@@ -609,12 +681,12 @@ function Overview() {
 
         <SectionFrame
           title="WHITE-LABELABLE OPPORTUNITIES"
-          subtitle="REUSABLE DELIVERY IP"
+          subtitle="REUSABLE DELIVERY WORK"
           accent="var(--lcars-cyan)"
           actions={
             <div style={styles.actionGroup}>
               <ActionButton
-                label="OPEN CANONICAL CLIENTS"
+                label="OPEN CLIENTS"
                 onClick={() => openClientDrillDown(undefined, { registry: "canonical" })}
               />
               <ActionButton
@@ -654,7 +726,7 @@ function Overview() {
           actions={
             <div style={styles.actionGroup}>
               <ActionButton
-                label="OPEN OPERATIONAL CLIENTS"
+                label="OPEN UNLINKED CLIENTS"
                 onClick={() => openClientDrillDown(undefined, { registry: "operational" })}
               />
               <ActionButton
@@ -670,7 +742,7 @@ function Overview() {
           }
         >
           {needsReview.items.length === 0 ? (
-            <p style={styles.emptyText}>NO FOUNDER REVIEW QUEUE ITEMS RIGHT NOW.</p>
+            <p style={styles.emptyText}>NO REVIEW ITEMS RIGHT NOW.</p>
           ) : (
             <div style={styles.columnList}>
               {needsReview.items.slice(0, 8).map((item) => (
@@ -687,7 +759,7 @@ function Overview() {
 
         <SectionFrame
           title="RESEARCH INTAKE"
-          subtitle="REAL VAULT RESEARCH HUB CONTROL SURFACES"
+          subtitle="RESEARCH NOTES AND CAPTURES"
           accent="var(--lcars-lavender)"
           actions={
             <div style={styles.actionGroup}>
@@ -725,8 +797,7 @@ function Overview() {
           </div>
           {researchHub.captures.length === 0 ? (
             <div style={styles.warningText}>
-              CAPTURE REGISTRY IS STILL EMPTY. THE RAIL IS REAL, BUT THE INTAKE
-              BACKLOG HAS NOT BEEN SEEDED YET.
+              THE RESEARCH INBOX IS STILL EMPTY.
             </div>
           ) : (
             <div style={styles.columnList}>

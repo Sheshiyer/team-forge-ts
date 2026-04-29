@@ -20,6 +20,7 @@ import type {
   IdentityMapEntry,
   LocalWorkspaceStatus,
   LocalVaultSyncReport,
+  PaperclipApiProbeResult,
   VaultDirectoryValidation,
   SyncState,
 } from "../lib/types";
@@ -127,6 +128,10 @@ function Settings() {
   const [paperclipScriptPath, setPaperclipScriptPath] = useState("");
   const [paperclipWorkingDir, setPaperclipWorkingDir] = useState("");
   const [paperclipUiUrl, setPaperclipUiUrl] = useState("");
+  const [paperclipApiUrl, setPaperclipApiUrl] = useState("");
+  const [paperclipApiToken, setPaperclipApiToken] = useState("");
+  const [showPaperclipApiToken, setShowPaperclipApiToken] = useState(false);
+  const [paperclipAutoLaunchEnabled, setPaperclipAutoLaunchEnabled] = useState(true);
   const [teamforgeWorkspaceId, setTeamforgeWorkspaceId] = useState("");
   const [localWorkspaceMessage, setLocalWorkspaceMessage] = useState<string | null>(null);
   const [localWorkspaceStatus, setLocalWorkspaceStatus] =
@@ -140,6 +145,9 @@ function Settings() {
   const [paperclipLaunchMessage, setPaperclipLaunchMessage] = useState<string | null>(null);
   const [paperclipOpening, setPaperclipOpening] = useState(false);
   const [paperclipOpenMessage, setPaperclipOpenMessage] = useState<string | null>(null);
+  const [paperclipApiChecking, setPaperclipApiChecking] = useState(false);
+  const [paperclipApiProbe, setPaperclipApiProbe] = useState<PaperclipApiProbeResult | null>(null);
+  const [paperclipApiMessage, setPaperclipApiMessage] = useState<string | null>(null);
 
   const [currentAppVersion, setCurrentAppVersion] = useState("--");
   const [availableUpdate, setAvailableUpdate] = useState<TauriUpdateHandle | null>(null);
@@ -182,6 +190,12 @@ function Settings() {
   const vaultConfigured = localVaultRoot.trim().length > 0;
   const paperclipScriptConfigured = paperclipScriptPath.trim().length > 0;
   const paperclipUiConfigured = paperclipUiUrl.trim().length > 0;
+  const paperclipApiUrlConfigured = paperclipApiUrl.trim().length > 0;
+  const paperclipApiTokenConfigured =
+    paperclipApiToken.trim().length > 0 ||
+    localWorkspaceStatus?.paperclipApiTokenConfigured === true;
+  const paperclipApiConfigured =
+    paperclipApiUrlConfigured && paperclipApiTokenConfigured;
   const workspaceIdConfigured = teamforgeWorkspaceId.trim().length > 0;
   const founderSyncReady = localWorkspaceStatus?.founderSyncReady ?? false;
   const founderSyncStatusColor = founderSyncReady
@@ -264,6 +278,13 @@ function Settings() {
       setPaperclipScriptPath(settings.paperclip_script_path || "");
       setPaperclipWorkingDir(settings.paperclip_working_dir || "");
       setPaperclipUiUrl(settings.paperclip_ui_url || "http://127.0.0.1:3100");
+      setPaperclipApiUrl(settings.paperclip_api_url || "http://127.0.0.1:3101/api");
+      setPaperclipApiToken(settings.paperclip_api_token || "");
+      setPaperclipAutoLaunchEnabled(
+        settings.paperclip_auto_launch_enabled
+          ? settings.paperclip_auto_launch_enabled !== "false"
+          : Boolean(settings.paperclip_script_path || settings.paperclip_api_url)
+      );
     } catch { /* Settings may not exist yet */ }
   }, []);
 
@@ -671,6 +692,12 @@ function Settings() {
       await api.saveSetting("paperclip_script_path", paperclipScriptPath.trim());
       await api.saveSetting("paperclip_working_dir", paperclipWorkingDir.trim());
       await api.saveSetting("paperclip_ui_url", paperclipUiUrl.trim());
+      await api.saveSetting("paperclip_api_url", paperclipApiUrl.trim());
+      await api.saveSetting("paperclip_api_token", paperclipApiToken.trim());
+      await api.saveSetting(
+        "paperclip_auto_launch_enabled",
+        paperclipAutoLaunchEnabled ? "true" : "false"
+      );
       await loadSettings();
       await loadLocalWorkspaceStatus();
       if (showSuccessMessage) {
@@ -684,6 +711,9 @@ function Settings() {
       loadSettings,
       localVaultRoot,
       paperclipScriptPath,
+      paperclipApiToken,
+      paperclipApiUrl,
+      paperclipAutoLaunchEnabled,
       paperclipUiUrl,
       paperclipWorkingDir,
       teamforgeWorkspaceId,
@@ -774,6 +804,24 @@ function Settings() {
       setPaperclipOpenMessage(`Error: ${String(err)}`);
     } finally {
       setPaperclipOpening(false);
+    }
+  };
+
+  const handleProbePaperclipApi = async () => {
+    setPaperclipApiChecking(true);
+    setPaperclipApiMessage(null);
+    setPaperclipApiProbe(null);
+    try {
+      await persistLocalWorkspaceSettings(false);
+      const probe = await api.probePaperclipApi();
+      setPaperclipApiProbe(probe);
+      setPaperclipApiMessage(
+        `Paperclip API ready (${probe.userCount} users, ${probe.telemetryCount} telemetry records)`
+      );
+    } catch (err) {
+      setPaperclipApiMessage(`Error: ${String(err)}`);
+    } finally {
+      setPaperclipApiChecking(false);
     }
   };
 
@@ -1556,12 +1604,12 @@ function Settings() {
 
       {/* Local Workspace */}
       <div style={{ ...styles.card, borderLeftColor: "var(--lcars-orange)" }}>
-        <h2 style={styles.sectionTitle}>LOCAL WORKSPACE</h2>
+        <h2 style={styles.sectionTitle}>DESKTOP WORKSPACE</h2>
         <div style={styles.sectionDivider} />
 
         <div style={styles.summaryGrid}>
           <div style={styles.summaryItem}>
-            <span style={styles.summaryLabel}>VAULT MAP</span>
+            <span style={styles.summaryLabel}>NOTES FOLDER</span>
             <span
               style={{
                 ...styles.summaryValue,
@@ -1598,7 +1646,35 @@ function Settings() {
             </span>
           </div>
           <div style={styles.summaryItem}>
-            <span style={styles.summaryLabel}>TEAMFORGE WORKSPACE</span>
+            <span style={styles.summaryLabel}>PAPERCLIP API</span>
+            <span
+              style={{
+                ...styles.summaryValue,
+                color: paperclipApiConfigured
+                  ? "var(--lcars-green)"
+                  : "var(--lcars-orange)",
+              }}
+            >
+              {paperclipApiConfigured ? "READY" : "MISSING"}
+            </span>
+          </div>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>PAPERCLIP STARTUP</span>
+            <span
+              style={{
+                ...styles.summaryValue,
+                color: (localWorkspaceStatus?.paperclipAutoLaunchEnabled ?? paperclipAutoLaunchEnabled)
+                  ? "var(--lcars-green)"
+                  : "var(--lcars-lavender)",
+              }}
+            >
+              {(localWorkspaceStatus?.paperclipAutoLaunchEnabled ?? paperclipAutoLaunchEnabled)
+                ? "AUTO"
+                : "MANUAL"}
+            </span>
+          </div>
+          <div style={styles.summaryItem}>
+            <span style={styles.summaryLabel}>WORKSPACE ID</span>
             <span
               style={{
                 ...styles.summaryValue,
@@ -1613,7 +1689,7 @@ function Settings() {
             </span>
           </div>
           <div style={styles.summaryItem}>
-            <span style={styles.summaryLabel}>FOUNDER SYNC</span>
+            <span style={styles.summaryLabel}>TEAMFORGE LINK</span>
             <span
               style={{
                 ...styles.summaryValue,
@@ -1626,7 +1702,7 @@ function Settings() {
         </div>
 
         <div style={styles.field}>
-          <label style={styles.label}>VAULT DIRECTORY</label>
+          <label style={styles.label}>NOTES FOLDER</label>
           <div style={styles.inputRow}>
             <input
               value={localVaultRoot}
@@ -1634,7 +1710,7 @@ function Settings() {
                 setLocalVaultRoot(event.target.value);
                 setVaultValidation(null);
               }}
-              placeholder="SELECT THE LOCAL OBSIDIAN / THOUGHTSEED VAULT ROOT"
+              placeholder="Choose the local Thoughtseed notes folder"
               style={{ ...styles.input, flex: 1 }}
             />
             <button
@@ -1652,26 +1728,26 @@ function Settings() {
                 opacity: vaultValidating || !vaultConfigured ? 0.5 : 1,
               }}
             >
-              {vaultValidating ? "VALIDATING..." : "VALIDATE VAULT"}
+              {vaultValidating ? "CHECKING..." : "CHECK FOLDER"}
             </button>
           </div>
           <div style={styles.helperText}>
-            THIS PATH IS STORED LOCALLY ON THIS MACHINE AND USED AS THE FIRST
-            CHOICE BEFORE THE OLD ENV-VAR OR OBSIDIAN FALLBACKS.
+            TeamForge uses this folder for project, client, onboarding, and
+            research notes on this machine.
           </div>
         </div>
 
         {vaultValidation && (
           <div style={styles.statusBox}>
             <div style={{ ...styles.statusTitle, color: vaultValidationColor }}>
-              VAULT STATUS • {vaultValidation.status.toUpperCase()}
+              FOLDER CHECK • {vaultValidation.status.toUpperCase()}
             </div>
             <div style={styles.statusBody}>{vaultValidation.message}</div>
             <div style={styles.helperText}>
-              MARKERS:{" "}
+              Checked for:{" "}
               {vaultValidation.markers.length > 0
                 ? vaultValidation.markers.join(", ")
-                : "NONE DETECTED"}
+                : "No expected markers"}
             </div>
           </div>
         )}
@@ -1686,10 +1762,8 @@ function Settings() {
               style={styles.input}
             />
             <div style={styles.helperText}>
-              RECOMMENDED FOR THIS MACHINE: THE INCLUDED
-              `scripts/launch-thoughtseed-paperclip.sh` WRAPPER. IT TARGETS THE
-              SIBLING `thougghtseed-paperclip` REPO AND MAPS TEAMFORGE LAUNCHES
-              TO PAPERCLIP'S EXISTING `babysitter.sh start` ENTRYPOINT.
+              Recommended: use the bundled
+              `scripts/launch-thoughtseed-paperclip.sh` wrapper.
             </div>
           </div>
           <div>
@@ -1701,7 +1775,7 @@ function Settings() {
               style={styles.input}
             />
             <div style={styles.helperText}>
-              OPTIONAL. IF BLANK, TEAMFORGE USES THE SCRIPT PARENT DIRECTORY.
+              Optional. Leave blank to use the script's parent directory.
             </div>
           </div>
         </div>
@@ -1715,9 +1789,64 @@ function Settings() {
             style={styles.input}
           />
           <div style={styles.helperText}>
-            LOCAL OR REMOTE HTTP URL TO THE PAPERCLIP UI INSTANCE THIS FOUNDER
-            MACHINE SHOULD OPEN. THE LOCAL THOUGHTSEED PAPERCLIP DEFAULT IS
+            Local or remote Paperclip UI address. The default local address is
             `http://127.0.0.1:3100`.
+          </div>
+        </div>
+
+        <div style={styles.inlineFieldGrid}>
+          <div>
+            <label style={styles.label}>PAPERCLIP API URL</label>
+            <input
+              value={paperclipApiUrl}
+              onChange={(event) => setPaperclipApiUrl(event.target.value)}
+              placeholder="http://127.0.0.1:3101/api"
+              style={styles.input}
+            />
+            <div style={styles.helperText}>
+              Typed Paperclip runtime endpoint. Use the adapter base such as
+              `http://127.0.0.1:3101/api`.
+            </div>
+          </div>
+          <div>
+            <label style={styles.label}>PAPERCLIP API TOKEN</label>
+            <div style={styles.inputRow}>
+              <input
+                value={paperclipApiToken}
+                onChange={(event) => setPaperclipApiToken(event.target.value)}
+                type={showPaperclipApiToken ? "text" : "password"}
+                placeholder="PAPERCLIP_API_TOKEN"
+                style={{ ...styles.input, flex: 1 }}
+              />
+              <button
+                onClick={() => setShowPaperclipApiToken(!showPaperclipApiToken)}
+                style={styles.ghostButton}
+              >
+                {showPaperclipApiToken ? "HIDE" : "SHOW"}
+              </button>
+            </div>
+            <div style={styles.helperText}>
+              Bearer token TeamForge uses for telemetry, roster, rooms, work
+              context, and escalations.
+            </div>
+          </div>
+        </div>
+
+        <div style={styles.field}>
+          <label style={styles.label}>STARTUP MODE</label>
+          <label style={styles.checkboxRow}>
+            <input
+              type="checkbox"
+              checked={paperclipAutoLaunchEnabled}
+              onChange={(event) =>
+                setPaperclipAutoLaunchEnabled(event.target.checked)
+              }
+            />
+            <span>START PAPERCLIP RUNTIME WHEN TEAMFORGE OPENS</span>
+          </label>
+          <div style={styles.helperText}>
+            Uses the saved Paperclip script path plus the local adapter API
+            configuration on this machine. Remote API URLs stay manual.
           </div>
         </div>
 
@@ -1730,13 +1859,13 @@ function Settings() {
             style={styles.input}
           />
           <div style={styles.helperText}>
-            SAVE THE CANONICAL WORKSPACE ID HERE IF THIS MACHINE SHOULD NOT RELY
-            ON INFERENCE FROM THE CURRENT REMOTE PROJECT GRAPH.
+            Set this when the machine should use a fixed workspace instead of
+            inferring one from the remote graph.
           </div>
           {localWorkspaceStatus?.teamforgeWorkspaceSource ? (
             <div style={styles.helperText}>
               WORKSPACE SOURCE:{" "}
-              {localWorkspaceStatus.teamforgeWorkspaceSource.toUpperCase()}
+            {localWorkspaceStatus.teamforgeWorkspaceSource.toUpperCase()}
               {localWorkspaceStatus.teamforgeWorkspaceError
                 ? ` • ${localWorkspaceStatus.teamforgeWorkspaceError}`
                 : ""}
@@ -1746,7 +1875,7 @@ function Settings() {
 
         <div style={styles.buttonRow}>
           <button onClick={handleSaveLocalWorkspace} style={styles.primaryButton}>
-            SAVE LOCAL WORKSPACE
+            SAVE DESKTOP WORKSPACE
           </button>
           <button
             onClick={handleLaunchPaperclip}
@@ -1769,6 +1898,16 @@ function Settings() {
             {paperclipOpening ? "OPENING..." : "OPEN PAPERCLIP UI"}
           </button>
           <button
+            onClick={handleProbePaperclipApi}
+            disabled={paperclipApiChecking || !paperclipApiConfigured}
+            style={{
+              ...styles.ghostButton,
+              opacity: paperclipApiChecking || !paperclipApiConfigured ? 0.5 : 1,
+            }}
+          >
+            {paperclipApiChecking ? "CHECKING..." : "CHECK PAPERCLIP API"}
+          </button>
+          <button
             onClick={handleSyncLocalVault}
             disabled={localVaultSyncing || !founderSyncReady}
             style={{
@@ -1783,13 +1922,26 @@ function Settings() {
         {localWorkspaceStatus && (
           <div style={styles.statusBox}>
             <div style={{ ...styles.statusTitle, color: founderSyncStatusColor }}>
-              FOUNDER SYNC • {founderSyncReady ? "READY" : "BLOCKED"}
+              TEAMFORGE LINK • {founderSyncReady ? "READY" : "BLOCKED"}
             </div>
             <div style={styles.statusBody}>
               {localWorkspaceStatus.founderSyncMessage.toUpperCase()}
             </div>
             <div style={styles.helperText}>
-              WORKER: {localWorkspaceStatus.workerBaseUrl}
+              Sync endpoint: {localWorkspaceStatus.workerBaseUrl}
+            </div>
+            <div style={styles.helperText}>
+              Paperclip API:{" "}
+              {localWorkspaceStatus.paperclipApiUrl || "UNCONFIGURED"} •{" "}
+              {localWorkspaceStatus.paperclipApiTokenConfigured
+                ? "TOKEN READY"
+                : "TOKEN MISSING"}
+            </div>
+            <div style={styles.helperText}>
+              Paperclip startup:{" "}
+              {localWorkspaceStatus.paperclipAutoLaunchEnabled
+                ? "STARTS WITH APP"
+                : "START MANUALLY"}
             </div>
             <div style={styles.helperText}>
               NODE:{" "}
@@ -1798,7 +1950,7 @@ function Settings() {
                 "UNAVAILABLE"}
             </div>
             <div style={styles.helperText}>
-              PARITY SCRIPT:{" "}
+              Sync script:{" "}
               {localWorkspaceStatus.parityScriptSource
                 ? `${localWorkspaceStatus.parityScriptSource.toUpperCase()} • ${localWorkspaceStatus.parityScriptPath}`
                 : localWorkspaceStatus.parityScriptError || "UNAVAILABLE"}
@@ -1809,7 +1961,8 @@ function Settings() {
         {(localWorkspaceMessage ||
           localVaultSyncMessage ||
           paperclipLaunchMessage ||
-          paperclipOpenMessage) && (
+          paperclipOpenMessage ||
+          paperclipApiMessage) && (
           <div style={styles.statusBox}>
             {localWorkspaceMessage && (
               <div
@@ -1859,6 +2012,36 @@ function Settings() {
                 {paperclipOpenMessage.toUpperCase()}
               </div>
             )}
+            {paperclipApiMessage && (
+              <div
+                style={{
+                  ...styles.statusBody,
+                  color: paperclipApiMessage.startsWith("Error")
+                    ? "var(--lcars-red)"
+                    : "var(--lcars-green)",
+                }}
+              >
+                {paperclipApiMessage.toUpperCase()}
+              </div>
+            )}
+          </div>
+        )}
+
+        {paperclipApiProbe && (
+          <div style={styles.statusBox}>
+            <div style={{ ...styles.statusTitle, color: "var(--lcars-green)" }}>
+              PAPERCLIP API • READY
+            </div>
+            <div style={styles.statusBody}>
+              {paperclipApiProbe.message.toUpperCase()}
+            </div>
+            <div style={styles.helperText}>
+              Endpoint: {paperclipApiProbe.baseUrl}
+            </div>
+            <div style={styles.helperText}>
+              USERS: {paperclipApiProbe.userCount} • TELEMETRY:{" "}
+              {paperclipApiProbe.telemetryCount}
+            </div>
           </div>
         )}
       </div>
