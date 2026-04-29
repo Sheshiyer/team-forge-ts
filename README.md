@@ -148,7 +148,7 @@ The repo-pinned 39-skill manifest lives at
 ## Releases
 
 - **Current app version in repo:** `0.1.26`
-- **Latest published tag:** `v0.1.25`
+- **Latest published tag:** `v0.1.26`
 - **Release trigger:** pushing a tag that matches `v*`
 - **Canonical OTA signing/publish path:** [`.github/workflows/release.yml`](.github/workflows/release.yml)
 - **Artifacts:** macOS `.app` and `.dmg` bundles built by GitHub Actions for Apple Silicon and Intel targets

@@ -23,9 +23,9 @@ Actions release workflow.
       `thoughtseed-paperclip` typo.
 - [x] Bump release metadata for the next OTA line.
 - [x] Re-run build/test hygiene and `git diff --check`.
-- [ ] Commit the current TeamForge tree, create the next tag, and push `main`
+- [x] Commit the current TeamForge tree, create the next tag, and push `main`
       plus the release tag.
-- [ ] Watch the GitHub Actions OTA workflow and record the result.
+- [x] Watch the GitHub Actions OTA workflow and record the result.
 
 ## 20-Item Final Checklist
 
@@ -57,8 +57,8 @@ Actions release workflow.
 - [x] Build passes on the release candidate tree.
 - [x] Rust check passes on the release candidate tree.
 - [x] Focused Paperclip Rust tests pass on the release candidate tree.
-- [ ] Release commit and `v0.1.26` tag are pushed to trigger OTA CI.
-- [ ] The GitHub Actions OTA workflow finishes successfully for the new tag.
+- [x] Release commit and `v0.1.26` tag are pushed to trigger OTA CI.
+- [x] The GitHub Actions OTA workflow finishes successfully for the new tag.
 
 ## Review
 
@@ -83,6 +83,12 @@ Actions release workflow.
   - `cargo check --manifest-path src-tauri/Cargo.toml`
   - `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
   - `git diff --check`
+- Release execution:
+  - commit: `883b32a` — `release(0.1.26): ship paperclip daily shell`
+  - tag: `v0.1.26`
+  - GitHub Actions OTA run:
+    - `Build & Release #25138822791`
+    - both Apple Silicon and Intel publish steps completed successfully
 - Remaining follow-on backlog after this release:
   - `#45` remove the external Node dependency from founder sync
   - `#46` finish vault metadata and external-ref backfill
