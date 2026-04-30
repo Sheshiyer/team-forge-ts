@@ -2,6 +2,415 @@
 
 ## Goal
 
+Ship the current Paperclip phase-3 work as the next OTA release so the
+installed TeamForge app can pull the new runtime ops and approvals shell from
+the GitHub Actions release pipeline.
+
+## Plan
+
+- [ ] Bump TeamForge release metadata from `0.1.27` to the next version across
+      the frontend package, Tauri config, Rust crate, changelog, and README.
+- [ ] Commit the current Paperclip phase-3 work plus release metadata updates.
+- [ ] Create and push the next `v*` tag so the existing GitHub Actions release
+      workflow publishes the OTA artifacts.
+- [ ] Confirm the release workflow starts successfully and record the run here
+      for OTA testing.
+
+## Review
+
+- In progress.
+
+# Task Plan
+
+## Goal
+
+Implement TeamForge Paperclip phase 3 so founders can run the remaining
+runtime maintenance actions and handle approval-style decisions from the
+TeamForge `/agents` shell without opening the separate Paperclip dashboard.
+
+## Plan
+
+- [x] Extend the sibling Paperclip adapter with backend-first runtime ops:
+      `GET /api/runtime/status`, `POST /api/runtime/warm-start`,
+      `POST /api/runtime/refresh-stale`, and
+      `POST /api/runtime/maintain-heartbeat`, reusing the existing repo-owned
+      scripts instead of inventing new runtime semantics.
+- [x] Add a first-pass Paperclip approvals surface in the adapter with
+      `GET /api/approvals` and `POST /api/approvals/:id/resolve`, deriving the
+      queue from founder/CEO task-routing and escalation signals already in the
+      task registry.
+- [x] Add TeamForge-native runtime-ops and approvals DTOs plus Tauri commands
+      so the Rust layer remains the app-owned integration boundary for the new
+      Paperclip functionality.
+- [x] Expand `/agents/runtime` with runtime controls and add `/agents/approvals`
+      as a founder decision queue inside the existing nested Paperclip shell.
+- [x] Verify the adapter contract, TeamForge compile/test behavior, and record
+      the shipped results and remaining caveats in this file.
+
+## Review
+
+- Tauri skills used:
+  - `understanding-tauri-ipc`
+    - kept the new runtime-ops and approvals surfaces behind app-owned native
+      commands instead of pushing direct HTTP + control logic into React
+  - `calling-rust-from-tauri-frontend`
+    - carried the new adapter contract through Rust DTOs/commands and then into
+      the `/agents` shell as typed invoke calls
+  - `testing-tauri-apps`
+    - used to verify the new shell path through contract checks, compile, and
+      focused Rust tests instead of stopping at source inspection
+- Sibling Paperclip adapter shipped new phase-3 routes in
+  `scripts/forge-aura-adapter/server.mjs`:
+  - runtime ops:
+    - `GET /api/runtime/status`
+    - `POST /api/runtime/warm-start`
+    - `POST /api/runtime/refresh-stale`
+    - `POST /api/runtime/maintain-heartbeat`
+  - approvals:
+    - `GET /api/approvals`
+    - `POST /api/approvals/:id/resolve`
+- Runtime ops deliberately reuse the existing repo-owned scripts instead of
+  inventing new semantics:
+  - `scripts/health-check.sh`
+  - `scripts/warm-start.sh`
+  - `scripts/refresh-stale.sh`
+- The approvals queue is first-pass and derived from the existing task
+  registry:
+  - explicit approval state/resolution metadata is now written on resolve
+  - unresolved queue membership is inferred from CEO/founder ownership, blocked
+    state, escalation-like tags, and approval/decision/routing keywords
+  - this keeps phase 3 on one store instead of introducing a parallel
+    governance registry
+- TeamForge native Paperclip layer widened in `src-tauri/src/paperclip.rs`,
+  `src-tauri/src/commands/mod.rs`, and `src-tauri/src/lib.rs`:
+  - added runtime DTOs/commands:
+    - `get_paperclip_runtime_status`
+    - `run_paperclip_warm_start`
+    - `run_paperclip_refresh_stale`
+    - `run_paperclip_maintain_heartbeat`
+  - added approvals DTOs/commands:
+    - `get_paperclip_approvals`
+    - `resolve_paperclip_approval`
+- TeamForge frontend changes:
+  - `src/lib/types.ts` and `src/hooks/useInvoke.ts` now carry the new runtime
+    and approvals contracts
+  - `src/pages/Agents.tsx` now adds:
+    - runtime ops controls inside `/agents/runtime`
+    - `/agents/approvals`
+    - approvals tab in the existing `/agents/*` shell
+    - approve / block / defer actions without opening Paperclip UI
+- Verification passed:
+  - `node --check ../thoughtseed-paperclip/scripts/forge-aura-adapter/server.mjs`
+  - `bash -n ../thoughtseed-paperclip/scripts/forge-aura-adapter/test-contract.sh`
+  - `../thoughtseed-paperclip/scripts/forge-aura-adapter/test-contract.sh`
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `pnpm build`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+  - `git diff --check`
+- Residual caveats:
+  - `warm-start` has no native dry-run mode in the sibling repo, so the
+    adapter simulates dry-run success for that specific action when
+    `PAPERCLIP_ADAPTER_DRY_RUN=1`
+  - the approvals queue is still heuristic until the sibling repo grows a more
+    explicit approvals/governance contract
+  - goals, budgets, and richer runtime admin actions remain the next backend
+    Paperclip phase after this slice
+
+# Task Plan
+
+## Goal
+
+Define the next concrete TeamForge Paperclip phase after the daily-shell
+routes: add backend-backed runtime ops and approvals so founders can perform
+the last normal Paperclip maintenance and decision workflows from TeamForge
+without opening the separate Paperclip dashboard.
+
+## Plan
+
+- [ ] Keep phase 3 backend-first: extend the Paperclip adapter and TeamForge
+      native Tauri command surface before adding more shell UI.
+- [ ] Start with runtime ops that already exist as tested Paperclip scripts:
+      health/status, warm-start, refresh-stale, and maintain-heartbeat.
+- [ ] Model approvals as a first-class adapter surface, beginning with a
+      founder decision queue derived from existing Paperclip task-routing and
+      escalation signals instead of inventing a second project registry.
+- [ ] Add TeamForge-native Paperclip runtime-ops and approvals view contracts,
+      commands, and `/agents` subviews after the adapter contract is defined.
+- [ ] Defer goals and budgets to the following Paperclip phase once runtime
+      ops and approvals are stable and routable inside TeamForge.
+
+## Review
+
+- Tauri skills used for the planning boundary:
+  - `understanding-tauri-ipc`
+    - used to keep the next slice command-driven at the Rust boundary instead
+      of pushing shell/process orchestration directly into the frontend
+  - `calling-rust-from-tauri-frontend`
+    - used to plan the next TeamForge layer as typed invoke commands over new
+      Paperclip adapter endpoints
+- Confirmed Paperclip runtime ops already exist as repo-owned, tested commands
+  in the sibling `thoughtseed-paperclip` repo:
+  - `npm run status:json`
+  - `npm run warm-start`
+  - `npm run refresh:stale:json`
+  - `npm run maintain:heartbeat:json`
+  - supporting scripts:
+    - `scripts/health-check.sh`
+    - `scripts/warm-start.sh`
+    - `scripts/refresh-stale.sh`
+- This means phase 3 should not invent new runtime semantics. It should expose
+  these existing script-backed ops through the adapter first.
+- Approvals are not yet a clean backend surface in the current Paperclip
+  contract:
+  - `ARCHITECTURE.md` treats approvals as part of the founder boundary
+  - current adapter only exposes users, telemetry, personal context, rooms,
+    email lookup, and escalations
+  - current task-routing data contains approval/escalation semantics only
+    implicitly through tags, CEO ownership, and escalation records
+- Recommended phase-3 route/API split:
+  1. Runtime ops first
+     - adapter endpoints like:
+       - `GET /api/runtime/status`
+       - `POST /api/runtime/warm-start`
+       - `POST /api/runtime/refresh-stale`
+       - `POST /api/runtime/maintain-heartbeat`
+     - TeamForge `/agents/runtime` gains actionable controls and result states
+  2. Approvals second
+     - adapter endpoints like:
+       - `GET /api/approvals`
+       - `POST /api/approvals/:id/resolve`
+     - initial approval queue should derive from existing CEO/founder tasks
+       plus escalation-tagged work, not a brand-new governance store
+  3. Goals and budgets after that
+     - they remain phase 4 because the current sibling repo does not yet show a
+       stable adapter or script-backed contract for them
+- Concrete TeamForge implementation shape once phase 3 starts:
+  - new Tauri commands:
+    - `get_paperclip_runtime_status`
+    - `run_paperclip_warm_start`
+    - `run_paperclip_refresh_stale`
+    - `run_paperclip_maintain_heartbeat`
+    - `get_paperclip_approvals`
+    - `resolve_paperclip_approval`
+  - `/agents/runtime` becomes the ops console
+  - `/agents/queue` stays founder work inbox
+  - likely add `/agents/approvals` as the decision queue
+- Next execution order:
+  1. extend `scripts/forge-aura-adapter/server.mjs` with runtime-ops endpoints
+     backed by the existing scripts and their JSON outputs
+  2. add approval-queue derivation and resolution rules in the adapter
+  3. add TeamForge native commands + frontend types
+  4. add runtime controls and approvals view under `/agents/*`
+
+# Task Plan
+
+## Goal
+
+Implement TeamForge Paperclip daily-shell phase 2 so `/agents` becomes the
+main in-app Paperclip operating shell with runtime, org, founder queue, and
+dedicated agent detail views, without requiring the separate Paperclip
+dashboard for normal founder work.
+
+## Plan
+
+- [x] Add TeamForge-native Paperclip aggregate view contracts and Tauri
+      commands for org view, founder queue, and agent detail on top of the
+      existing six-endpoint adapter.
+- [x] Refactor the `Agents` route into a nested `/agents/*` shell with default
+      runtime, `/agents/org`, `/agents/queue`, and `/agents/:agentId`.
+- [x] Expand the runtime UI with richer identity, telemetry, task, and room
+      signals, and reuse the same detail state in the dedicated agent page.
+- [x] Build the Paperclip org route from `reportsTo` plus telemetry and queue
+      summaries, keeping it clearly separate from the human `/team` route.
+- [x] Build the founder queue route from CEO task context with deterministic
+      sections and drilldowns into agents, issues, and clients.
+- [x] Verify routing, Rust aggregation, and frontend compile/test behavior for
+      the new daily-shell surfaces.
+
+## Review
+
+- Tauri skills used:
+  - `calling-rust-from-tauri-frontend`
+    - kept the new Paperclip org/queue/detail surfaces behind app-owned native
+      commands instead of pushing more raw HTTP joins into React
+  - `understanding-tauri-ipc`
+    - used to preserve the existing six-endpoint Paperclip adapter contract
+      while widening TeamForge’s local command/view boundary
+  - `testing-tauri-apps`
+    - used to verify the route shell through compile/test checks instead of
+      stopping at source inspection
+- Native Paperclip view layer added in `src-tauri/src/paperclip.rs`:
+  - new aggregate contracts:
+    - `PaperclipOrgView`
+    - `PaperclipOrgNodeView`
+    - `PaperclipFounderQueueView`
+    - `PaperclipFounderQueueSectionView`
+    - `PaperclipFounderQueueItemView`
+    - `PaperclipAgentDetailView`
+  - new aggregate fetch paths:
+    - `fetch_org_view`
+    - `fetch_founder_queue`
+    - `fetch_agent_detail`
+  - `PaperclipRuntimeOverview` now carries `focus_user_id`, using
+    `/api/user/:email` when an operator email hint exists and otherwise
+    falling back to CEO/first-user focus
+  - telemetry now preserves the adapter’s `degraded` flag instead of silently
+    dropping it
+- Tauri commands and invoke surface added:
+  - `get_paperclip_org_view`
+  - `get_paperclip_founder_queue`
+  - `get_paperclip_agent_detail`
+- Frontend route shell shipped:
+  - `src/App.tsx` now mounts `/agents/*`
+  - `src/pages/Agents.tsx` is now a nested shell with:
+    - `/agents/runtime`
+    - `/agents/org`
+    - `/agents/queue`
+    - `/agents/:agentId`
+    - index and wildcard redirects back to `runtime`
+- Runtime route changes:
+  - richer telemetry rows with degraded/stale/uninitialized/missing-file signal
+  - selected-agent focus panel now uses the native detail aggregate
+  - escalation composer and human crew-status subsection remain in runtime
+- Org route changes:
+  - AI org view is now routable and separate from `/team`
+  - reporting lines come from `reportsTo`
+  - nodes show status, queue summary, heartbeat, escalation count, and project
+    room ownership
+- Founder queue changes:
+  - queue is CEO-centric for phase 1
+  - deterministic sections:
+    - Awaiting Routing
+    - Blocked
+    - Escalations
+    - In Progress
+    - Recent Completed
+  - queue items now expose direct drilldowns to agent detail and, when IDs
+    exist, project issues or canonical client detail
+- Dedicated agent detail route:
+  - reuses the same work-context renderer as runtime focus
+  - keeps direct escalation submission on the dedicated page
+- Verification passed:
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `pnpm build`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+  - `git diff --check`
+- Residual caveats:
+  - the current adapter still does not expose goals, budgets, approvals, or
+    runtime ops; those remain phase-2 backend work
+  - queue/project/client deep links only appear when the adapter payload
+    already carries stable IDs, so some current task rows remain informational
+    until the Paperclip runtime emits richer canonical links
+
+# Task Plan
+
+## Goal
+
+Create the next concrete TeamForge integration plan that absorbs more of the
+native Paperclip daily UI into the app: an agent org view, a founder queue,
+and a richer Agents surface, so daily work no longer requires a separate
+Paperclip dashboard.
+
+## Plan
+
+- [ ] Keep human org and agent org separate: leave `/team` as the human org
+      surface and expand `/agents` into the Paperclip shell with subviews.
+- [ ] Use the existing six-endpoint Paperclip adapter contract for phase 1 so
+      the first pass does not depend on a new backend API surface.
+- [ ] Define the concrete phase-1 UI and data changes for:
+      richer Agents runtime, Paperclip org view, and founder queue.
+- [ ] Define the follow-on phase-2 API gaps for goals, budgets, governance,
+      and runtime ops after the daily shell slice lands.
+
+## Review
+
+- In progress.
+
+# Task Plan
+
+## Goal
+
+Inventory the native Thoughtseed Paperclip UI surfaces that still require a
+separate dashboard today, then decide which daily-use views should be absorbed
+into TeamForge so founders do not need two dashboards open for normal work.
+
+## Plan
+
+- [ ] Inspect the current native Paperclip UI routes, pages, and org/dashboard
+      components to identify what exists beyond the six HTTP adapter endpoints.
+- [ ] Compare those native UI surfaces against TeamForge coverage to separate
+      already-imported capabilities from missing daily-use views.
+- [ ] Recommend the highest-value Paperclip UI surfaces to port next, while
+      keeping deep runtime/admin tooling in Paperclip.
+
+## Review
+
+- In progress.
+
+# Task Plan
+
+## Goal
+
+Audit the Thoughtseed Paperclip dashboard and API surfaces beyond config/admin
+settings, then identify which daily-use capabilities should be ported into
+TeamForge next so the desktop app covers more of the Paperclip operating path
+without duplicating its deep runtime admin UI.
+
+## Plan
+
+- [x] Inspect the current Thoughtseed Paperclip routes, dashboard components,
+      and API adapter contract to inventory daily-use surfaces beyond config
+      and admin settings.
+- [x] Compare those Paperclip surfaces with what TeamForge already ships in
+      `Overview`, `Agents`, `Activity`, and `Settings`.
+- [x] Identify the highest-value gaps to port next, with a phased recommendation
+      that preserves TeamForge as the daily shell and Paperclip as the deeper
+      admin/runtime fallback.
+
+## Review
+
+- Paperclip daily-use surfaces already documented in-repo:
+  - `ARCHITECTURE.md` confirms the current HTTP adapter contract is still the
+    founder-facing runtime surface: `/api/users`, `/api/telemetry`,
+    `/api/personal/:userId`, `/api/rooms/:userId`, `/api/user/:email`,
+    `/api/escalations`
+  - `docs/operational-install-client-template-plan.md` adds the broader runtime
+    picture around standups, TeamForge feed consumption, closeouts, and
+    upstream vault push cadence
+- TeamForge already covers these Paperclip surfaces today:
+  - API readiness, startup, and UI launch in `Settings`
+  - runtime summary band in `Overview`
+  - telemetry, roster, personal context, rooms, escalation submission, and
+    crew presence in `Agents`
+- Highest-value Paperclip capabilities still available now but underused in
+  TeamForge from the existing adapter contract:
+  - richer roster identity: `title`, `reportsTo`, `icon`
+  - richer telemetry state: `degraded`, `stale`, `uninitialized`,
+    `missingFiles`, `blocked`, `steps`, `outcome`
+  - richer personal queue context: `priority`, `tags`, `source`, `sourceRef`,
+    `updatedAt`
+  - per-user room topology: personal vs orchestrator vs project rooms
+  - email-to-agent identity resolution through `/api/user/:email`
+- High-value Paperclip capabilities not yet exposed through the adapter, so
+  they would need new endpoints or TeamForge-owned local script wrappers:
+  - `status --json`, `warm-start`, `refresh-stale`, `maintain-heartbeat`
+  - standup digest / rolling standup issue status
+  - TeamForge feed sync freshness and unresolved conflict surfacing
+  - upstream vault push report visibility
+  - project scaffold / active-project sync / closeout progress
+- Recommended next porting order:
+  1. deepen the existing six-endpoint import before inventing new API
+  2. add a small runtime-ops/status surface for warm-start, stale refresh, and
+     health summary
+  3. then add standup/feed/closeout/scaffold surfaces where they reinforce the
+     founder dashboard instead of turning TeamForge into a second admin shell
+
+# Task Plan
+
+## Goal
+
 Ship an OTA-safe TeamForge release that bundles the Paperclip runtime adapter
 fallback, so installed apps can render the newer Overview and Agents Paperclip
 surfaces even when the sibling `thoughtseed-paperclip` repo cleanup removed the

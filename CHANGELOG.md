@@ -2,6 +2,46 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.28 - 2026-05-01
+
+This release closes the remaining normal Paperclip founder loop inside
+TeamForge: the Agents shell can now run core Paperclip runtime maintenance and
+resolve founder approvals directly, without bouncing out to the separate
+Paperclip dashboard for the common daily path.
+
+### Changed
+
+- Added backend-first Paperclip runtime ops through the local adapter and
+  TeamForge native command layer:
+  - `GET /api/runtime/status`
+  - `POST /api/runtime/warm-start`
+  - `POST /api/runtime/refresh-stale`
+  - `POST /api/runtime/maintain-heartbeat`
+- Added first-pass Paperclip approvals support:
+  - `GET /api/approvals`
+  - `POST /api/approvals/:id/resolve`
+  - TeamForge now derives a founder approvals queue from CEO/founder
+    task-routing and escalation signals already present in the Paperclip task
+    registry, then allows approve / block / defer actions from the app shell
+- Expanded the TeamForge `Agents` route:
+  - `/agents/runtime` now includes runtime maintenance controls and result
+    feedback
+  - `/agents/approvals` is now a first-class founder decision queue alongside
+    runtime, org, and queue
+- Bumped release metadata to `0.1.28` across the frontend package, Tauri
+  config, and Rust crate.
+
+### Verification
+
+- `node --check /Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-paperclip/scripts/forge-aura-adapter/server.mjs`
+- `bash -n /Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-paperclip/scripts/forge-aura-adapter/test-contract.sh`
+- `/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-paperclip/scripts/forge-aura-adapter/test-contract.sh`
+- `cargo fmt --manifest-path src-tauri/Cargo.toml`
+- `pnpm build`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+- `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+- `git diff --check`
+
 ## v0.1.27 - 2026-05-01
 
 This release makes the Paperclip daily-shell integration OTA-safe by bundling

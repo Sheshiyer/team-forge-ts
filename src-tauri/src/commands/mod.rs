@@ -2523,6 +2523,78 @@ pub async fn create_paperclip_escalation(
 }
 
 #[tauri::command]
+pub async fn get_paperclip_org_view(
+    db: State<'_, DbPool>,
+) -> Result<paperclip::PaperclipOrgView, String> {
+    paperclip::fetch_org_view(&db.0).await
+}
+
+#[tauri::command]
+pub async fn get_paperclip_founder_queue(
+    db: State<'_, DbPool>,
+) -> Result<paperclip::PaperclipFounderQueueView, String> {
+    paperclip::fetch_founder_queue(&db.0).await
+}
+
+#[tauri::command]
+pub async fn get_paperclip_agent_detail(
+    db: State<'_, DbPool>,
+    user_id: String,
+) -> Result<paperclip::PaperclipAgentDetailView, String> {
+    paperclip::fetch_agent_detail(&db.0, &user_id).await
+}
+
+#[tauri::command]
+pub async fn get_paperclip_runtime_status(
+    db: State<'_, DbPool>,
+) -> Result<paperclip::PaperclipRuntimeStatusView, String> {
+    paperclip::fetch_runtime_status(&db.0).await
+}
+
+#[tauri::command]
+pub async fn run_paperclip_warm_start(
+    db: State<'_, DbPool>,
+    input: Option<paperclip::PaperclipRuntimeOperationRequest>,
+) -> Result<paperclip::PaperclipRuntimeOperationResult, String> {
+    let request = input.unwrap_or_default();
+    paperclip::run_warm_start(&db.0, &request).await
+}
+
+#[tauri::command]
+pub async fn run_paperclip_refresh_stale(
+    db: State<'_, DbPool>,
+    input: Option<paperclip::PaperclipRuntimeOperationRequest>,
+) -> Result<paperclip::PaperclipRuntimeOperationResult, String> {
+    let request = input.unwrap_or_default();
+    paperclip::run_refresh_stale(&db.0, &request).await
+}
+
+#[tauri::command]
+pub async fn run_paperclip_maintain_heartbeat(
+    db: State<'_, DbPool>,
+    input: Option<paperclip::PaperclipRuntimeOperationRequest>,
+) -> Result<paperclip::PaperclipRuntimeOperationResult, String> {
+    let request = input.unwrap_or_default();
+    paperclip::run_maintain_heartbeat(&db.0, &request).await
+}
+
+#[tauri::command]
+pub async fn get_paperclip_approvals(
+    db: State<'_, DbPool>,
+) -> Result<paperclip::PaperclipApprovalQueueView, String> {
+    paperclip::fetch_approvals(&db.0).await
+}
+
+#[tauri::command]
+pub async fn resolve_paperclip_approval(
+    db: State<'_, DbPool>,
+    task_id: String,
+    input: paperclip::PaperclipApprovalResolveInput,
+) -> Result<paperclip::PaperclipApprovalResolveResult, String> {
+    paperclip::resolve_approval(&db.0, &task_id, &input).await
+}
+
+#[tauri::command]
 pub async fn open_vault_relative_path(
     db: State<'_, DbPool>,
     app_handle: tauri::AppHandle,

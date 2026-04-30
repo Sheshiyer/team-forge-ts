@@ -19,11 +19,20 @@ import type {
   LocalWorkspaceStatus,
   LocalVaultSyncReport,
   PaperclipApiProbeResult,
+  PaperclipAgentDetailView,
   PaperclipEscalationInput,
   PaperclipEscalationResponse,
+  PaperclipFounderQueueView,
   PaperclipLaunchResult,
+  PaperclipApprovalQueueView,
+  PaperclipApprovalResolveInput,
+  PaperclipApprovalResolveResult,
+  PaperclipOrgView,
   PaperclipPersonalContext,
   PaperclipRoomDefinition,
+  PaperclipRuntimeOperationRequest,
+  PaperclipRuntimeOperationResult,
+  PaperclipRuntimeStatusView,
   PaperclipRuntimeOverview,
   PaperclipStartupResult,
   PaperclipTelemetryItem,
@@ -93,6 +102,20 @@ const invokeApi = {
     invoke<PaperclipApiProbeResult>("probe_paperclip_api"),
   getPaperclipRuntimeSummary: () =>
     invoke<PaperclipRuntimeOverview>("get_paperclip_runtime_summary"),
+  getPaperclipRuntimeStatus: () =>
+    invoke<PaperclipRuntimeStatusView>("get_paperclip_runtime_status"),
+  runPaperclipWarmStart: (input: PaperclipRuntimeOperationRequest = {}) =>
+    invoke<PaperclipRuntimeOperationResult>("run_paperclip_warm_start", {
+      input,
+    }),
+  runPaperclipRefreshStale: (input: PaperclipRuntimeOperationRequest = {}) =>
+    invoke<PaperclipRuntimeOperationResult>("run_paperclip_refresh_stale", {
+      input,
+    }),
+  runPaperclipMaintainHeartbeat: (input: PaperclipRuntimeOperationRequest = {}) =>
+    invoke<PaperclipRuntimeOperationResult>("run_paperclip_maintain_heartbeat", {
+      input,
+    }),
   getPaperclipUsers: () =>
     invoke<PaperclipUser[]>("get_paperclip_users"),
   getPaperclipTelemetry: () =>
@@ -105,6 +128,19 @@ const invokeApi = {
     invoke<PaperclipRoomDefinition[]>("get_paperclip_rooms", { userId }),
   createPaperclipEscalation: (input: PaperclipEscalationInput) =>
     invoke<PaperclipEscalationResponse>("create_paperclip_escalation", {
+      input,
+    }),
+  getPaperclipOrgView: () =>
+    invoke<PaperclipOrgView>("get_paperclip_org_view"),
+  getPaperclipFounderQueue: () =>
+    invoke<PaperclipFounderQueueView>("get_paperclip_founder_queue"),
+  getPaperclipAgentDetail: (userId: string) =>
+    invoke<PaperclipAgentDetailView>("get_paperclip_agent_detail", { userId }),
+  getPaperclipApprovals: () =>
+    invoke<PaperclipApprovalQueueView>("get_paperclip_approvals"),
+  resolvePaperclipApproval: (taskId: string, input: PaperclipApprovalResolveInput) =>
+    invoke<PaperclipApprovalResolveResult>("resolve_paperclip_approval", {
+      taskId,
       input,
     }),
   openVaultRelativePath: (relativePath: string) =>

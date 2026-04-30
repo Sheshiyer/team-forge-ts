@@ -421,6 +421,7 @@ export interface PaperclipTelemetryItem {
   outcome: string | null;
   steps: number;
   blocked: number;
+  degraded: boolean;
   stale: boolean;
   uninitialized: boolean;
   missingFiles: number;
@@ -493,6 +494,53 @@ export interface PaperclipRuntimeOverview {
   latestActivityLabel: string | null;
   latestEscalationTitle: string | null;
   latestEscalationAt: string | null;
+  focusUserId: string | null;
+}
+
+export interface PaperclipRuntimeStatusSummary {
+  healthy: number;
+  degraded: number;
+  uninitialized: number;
+  stale: number;
+  missingFileAgents: number;
+  total: number;
+}
+
+export interface PaperclipRuntimeRefreshTargets {
+  stale: number;
+  uninitialized: number;
+  refreshCandidates: number;
+}
+
+export interface PaperclipRuntimeStatusView {
+  checkedAt: string;
+  summary: PaperclipRuntimeStatusSummary;
+  agents: PaperclipTelemetryItem[];
+}
+
+export interface PaperclipRuntimeOperationRequest {
+  agents?: string[];
+  includeNoCycle?: boolean | null;
+  converge?: boolean | null;
+  strictFinalCheck?: boolean | null;
+  dryRun?: boolean | null;
+}
+
+export interface PaperclipRuntimeOperationResult {
+  operation: string;
+  status: string;
+  message: string;
+  dryRun: boolean;
+  output: string | null;
+  targetedAgents: string[];
+  refreshedAgents: string[];
+  refreshedCount: number;
+  failures: number;
+  initialSummary: PaperclipRuntimeStatusSummary | null;
+  finalSummary: PaperclipRuntimeStatusSummary | null;
+  initialRefreshTargets: PaperclipRuntimeRefreshTargets | null;
+  finalRefreshTargets: PaperclipRuntimeRefreshTargets | null;
+  runtimeStatus: PaperclipRuntimeStatusView;
 }
 
 export interface PaperclipApiProbeResult {
@@ -501,6 +549,128 @@ export interface PaperclipApiProbeResult {
   message: string;
   userCount: number;
   telemetryCount: number;
+}
+
+export interface PaperclipOrgNodeView {
+  user: PaperclipUser;
+  telemetry: PaperclipTelemetryItem | null;
+  queueSummary: PaperclipTaskSummary;
+  activeTaskCount: number;
+  escalationCount: number;
+  roomCount: number;
+  projectRoomCount: number;
+  projectRoomNames: string[];
+  latestHeartbeatAt: string | null;
+  directReportIds: string[];
+}
+
+export interface PaperclipOrgView {
+  rootUserId: string;
+  nodes: PaperclipOrgNodeView[];
+}
+
+export interface PaperclipFounderQueueItemView {
+  id: string;
+  title: string;
+  status: string;
+  priority: string | null;
+  department: string | null;
+  tags: string[];
+  source: string | null;
+  sourceRef: string | null;
+  updatedAt: string | null;
+  projectCode: string | null;
+  projectId: string | null;
+  clientId: string | null;
+  userId: string;
+  userName: string;
+  escalationTagged: boolean;
+}
+
+export interface PaperclipFounderQueueSectionView {
+  key: string;
+  label: string;
+  count: number;
+  items: PaperclipFounderQueueItemView[];
+}
+
+export interface PaperclipFounderQueueView {
+  founderUserId: string;
+  founderUserName: string;
+  latestHeartbeatAt: string | null;
+  totalActive: number;
+  escalationBacklogCount: number;
+  sections: PaperclipFounderQueueSectionView[];
+}
+
+export interface PaperclipAgentDetailView {
+  user: PaperclipUser;
+  telemetry: PaperclipTelemetryItem | null;
+  personalContext: PaperclipPersonalContext;
+  rooms: PaperclipRoomDefinition[];
+  activeTaskCount: number;
+  escalationBacklogCount: number;
+  projectRoomCount: number;
+}
+
+export interface PaperclipApprovalItemView {
+  id: string;
+  title: string;
+  status: string;
+  priority: string | null;
+  department: string | null;
+  tags: string[];
+  source: string | null;
+  sourceRef: string | null;
+  updatedAt: string | null;
+  projectCode: string | null;
+  projectId: string | null;
+  clientId: string | null;
+  userId: string;
+  userName: string;
+  escalationTagged: boolean;
+  details: string | null;
+  approvalState: string;
+  approvalDecision: string | null;
+  approvalNote: string | null;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+}
+
+export interface PaperclipApprovalSectionView {
+  key: string;
+  label: string;
+  count: number;
+  items: PaperclipApprovalItemView[];
+}
+
+export interface PaperclipApprovalQueueView {
+  founderUserId: string;
+  founderUserName: string;
+  latestHeartbeatAt: string | null;
+  totalOpen: number;
+  pendingCount: number;
+  blockedCount: number;
+  deferredCount: number;
+  resolvedCount: number;
+  sections: PaperclipApprovalSectionView[];
+}
+
+export interface PaperclipApprovalResolveInput {
+  decision: string;
+  note?: string | null;
+  resolvedBy?: string | null;
+}
+
+export interface PaperclipApprovalResolveResult {
+  id: string;
+  decision: string;
+  status: string;
+  approvalState: string;
+  note: string | null;
+  resolvedAt: string;
+  resolvedBy: string;
+  dryRun: boolean;
 }
 
 export interface LocalWorkspaceStatus {

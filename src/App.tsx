@@ -480,7 +480,7 @@ function App() {
             <Route path="/onboarding" element={<Onboarding />} />
             <Route path="/planner" element={<Navigate to="/team/capacity" replace />} />
             <Route path="/activity" element={<Activity />} />
-            <Route path="/agents" element={<Agents />} />
+          <Route path="/agents/*" element={<Agents />} />
             <Route path="/live" element={<Navigate to="/agents" replace />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
