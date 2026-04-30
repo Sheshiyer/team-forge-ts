@@ -13,8 +13,8 @@ local adapter server file.
       updates for the next OTA version.
 - [x] Verify the bundled adapter script and packaged TeamForge runtime path with
       build checks plus a visual pass against the app surfaces.
-- [ ] Cut and push the next release tag through the GitHub OTA workflow.
-- [ ] Record the release result and any residual caveats here.
+- [x] Cut and push the next release tag through the GitHub OTA workflow.
+- [x] Record the release result and any residual caveats here.
 
 ## Review
 
@@ -57,6 +57,15 @@ local adapter server file.
 - Residual local caveat before tagging:
   - local macOS updater signing still stops without
     `TAURI_SIGNING_PRIVATE_KEY`, but the real OTA signing path remains CI-owned
+- Release state:
+  - committed as `3e11ef7`
+    `release(0.1.27): bundle paperclip runtime adapter fallback`
+  - pushed `main` and tag `v0.1.27`
+  - GitHub Actions release run started at:
+    `https://github.com/Sheshiyer/team-forge-ts/actions/runs/25186199557`
+  - live CI state at review time:
+    - setup, dependency install, and OTA secret validation succeeded
+    - `Build Tauri app (Apple Silicon)` is in progress
 
 # Task Plan
 
