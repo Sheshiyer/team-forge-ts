@@ -2,6 +2,42 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.1.27 - 2026-05-01
+
+This release makes the Paperclip daily-shell integration OTA-safe by bundling
+TeamForge's own runtime adapter fallback, so installed desktop builds can still
+render the Overview runtime band and Agents route even if the sibling
+`thoughtseed-paperclip` repo no longer carries the local adapter server file.
+
+### Changed
+
+- Bundled a TeamForge-owned Paperclip runtime adapter fallback:
+  - added `scripts/paperclip-runtime-adapter.mjs` to the TeamForge repo and the
+    Tauri app resources
+  - adapter launch now prefers the sibling Paperclip repo copy when present,
+    but falls back to the bundled app resource or TeamForge repo copy when it
+    is missing
+  - packaged builds now keep the Paperclip `/api/*` contract available without
+    requiring the repo checkout to stay structurally unchanged
+- Improved local Desktop Workspace defaults:
+  - native workspace status now resolves the Paperclip launcher path, working
+    directory, local UI/API URLs, and auto-start mode before the user saves
+    settings
+  - Settings now hydrates those native defaults directly so the page no longer
+    comes up looking partially unconfigured
+- Bumped release metadata to `0.1.27` across the frontend package, Tauri
+  config, and Rust crate.
+
+### Verification
+
+- `node --check scripts/paperclip-runtime-adapter.mjs`
+- `pnpm build`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+- `cargo tauri build --bundles app`
+- packaged app visual verification of `Overview` and `Agents` with the sibling
+  Paperclip adapter removed from the working repo
+- `git diff --check`
+
 ## v0.1.26 - 2026-04-30
 
 This release brings the Paperclip daily shell fully into TeamForge: the new

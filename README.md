@@ -85,12 +85,12 @@ Leave tracking and yearly holidays now live on a dedicated Calendar route, keepi
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
-## New In v0.1.26
+## New In v0.1.27
 
-- **Agents is now the daily Paperclip route inside TeamForge** with runtime telemetry, roster, rooms, personal context, escalation actions, and crew presence in one shell.
-- **Overview now shows live Paperclip runtime health** so you can jump from the founder dashboard into agent operations without opening a second dashboard.
-- **Desktop Workspace now owns Paperclip API readiness and startup behavior** including local auto-launch and the bundled companion launcher.
-- **Release metadata is now at `0.1.26`** across the frontend package, Tauri config, and Rust crate.
+- **Installed TeamForge builds now carry their own Paperclip runtime adapter fallback** so the Overview runtime band and Agents route still work even if the sibling Paperclip repo cleanup removed `scripts/forge-aura-adapter/server.mjs`.
+- **Desktop Workspace now resolves Paperclip launcher, working directory, local endpoints, and auto-start defaults natively** before you save settings, instead of appearing half-unconfigured on first boot.
+- **Agents remains the daily Paperclip route inside TeamForge** with runtime telemetry, roster, rooms, personal context, escalation actions, and crew presence in one shell.
+- **Release metadata is now at `0.1.27`** across the frontend package, Tauri config, and Rust crate.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
@@ -147,8 +147,8 @@ The repo-pinned 39-skill manifest lives at
 
 ## Releases
 
-- **Current app version in repo:** `0.1.26`
-- **Latest published tag:** `v0.1.26`
+- **Current app version in repo:** `0.1.27`
+- **Latest published tag:** `v0.1.27`
 - **Release trigger:** pushing a tag that matches `v*`
 - **Canonical OTA signing/publish path:** [`.github/workflows/release.yml`](.github/workflows/release.yml)
 - **Artifacts:** macOS `.app` and `.dmg` bundles built by GitHub Actions for Apple Silicon and Intel targets
@@ -223,7 +223,7 @@ The rollout is now documented in-repo instead of living only in chat and GitHub 
 - [Cloudflare Project Sync Architecture](docs/plans/2026-04-17-cloudflare-project-sync-design.md)
 - [Cloudflare Project Backend Implementation Plan](docs/plans/2026-04-17-cloudflare-project-backend-implementation.md)
 
-The first Cloudflare project-registry tranche tracked in GitHub is now implemented on the current `0.1.26` line:
+The first Cloudflare project-registry tranche tracked in GitHub is now implemented on the current `0.1.27` line:
 
 - milestone propagation from GitHub into Huly with drift-review conflict records
 - Huly-owned execution/admin issue propagation

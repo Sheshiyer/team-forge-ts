@@ -1,6 +1,6 @@
 {
   "productName": "TeamForge",
-  "version": "0.1.26",
+  "version": "0.1.27",
   "identifier": "com.thoughtseed.teamforge",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -51,7 +51,9 @@
     "publisher": "Thoughtseed",
     "homepage": "https://github.com/Sheshiyer/team-forge-ts",
     "resources": {
-      "../scripts/teamforge-vault-parity.mjs": "teamforge-vault-parity.mjs"
+      "../scripts/teamforge-vault-parity.mjs": "teamforge-vault-parity.mjs",
+      "../scripts/launch-thoughtseed-paperclip.sh": "launch-thoughtseed-paperclip.sh",
+      "../scripts/paperclip-runtime-adapter.mjs": "paperclip-runtime-adapter.mjs"
     }
   },
   "plugins": {

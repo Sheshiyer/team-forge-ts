@@ -2,6 +2,289 @@
 
 ## Goal
 
+Ship an OTA-safe TeamForge release that bundles the Paperclip runtime adapter
+fallback, so installed apps can render the newer Overview and Agents Paperclip
+surfaces even when the sibling `thoughtseed-paperclip` repo cleanup removed the
+local adapter server file.
+
+## Plan
+
+- [x] Finish the TeamForge app-owned adapter fallback and release metadata
+      updates for the next OTA version.
+- [x] Verify the bundled adapter script and packaged TeamForge runtime path with
+      build checks plus a visual pass against the app surfaces.
+- [ ] Cut and push the next release tag through the GitHub OTA workflow.
+- [ ] Record the release result and any residual caveats here.
+
+## Review
+
+- Tauri skills used:
+  - `debugging-tauri-apps`
+    - used to prove the packaged app behavior instead of trusting repo diffs
+      or source-only endpoint curls
+  - `understanding-tauri-ipc`
+    - used to keep the fix in the app-owned runtime contract rather than
+      treating the sibling Paperclip repo as the only place the adapter could
+      exist
+  - `building-tauri-with-github-actions`
+    - used to keep the local bundle/signing check aligned with the real OTA
+      pipeline and release shape
+- Release-root fix:
+  - added TeamForge-owned `scripts/paperclip-runtime-adapter.mjs`
+  - bundled that adapter into `TeamForge.app` resources
+  - updated the native adapter resolver so launch order is:
+    1. sibling Paperclip repo adapter
+    2. bundled app resource
+    3. TeamForge repo checkout copy
+- Visual/runtime verification:
+  - local bundle build produced
+    `src-tauri/target/release/bundle/macos/TeamForge.app`
+    and the updater archive before the expected missing
+    `TAURI_SIGNING_PRIVATE_KEY` stop
+  - with the sibling adapter file temporarily removed, the packaged app still
+    launched a local Paperclip runtime from:
+    `TeamForge.app/Contents/Resources/paperclip-runtime-adapter.mjs`
+  - live process proof:
+    `node .../TeamForge.app/Contents/Resources/paperclip-runtime-adapter.mjs`
+    claimed `127.0.0.1:3101`
+  - live endpoint proof:
+    `GET http://127.0.0.1:3101/api/users` returned the Paperclip roster from
+    the packaged-app-owned adapter
+  - visual proof:
+    - `Agents` showed healthy runtime telemetry, roster rows, and work context
+    - `Overview` initially exposed a startup race, then was fixed so the lower
+      `AGENT RUNTIME` rail self-recovers after the bundled adapter comes up
+- Residual local caveat before tagging:
+  - local macOS updater signing still stops without
+    `TAURI_SIGNING_PRIVATE_KEY`, but the real OTA signing path remains CI-owned
+
+# Task Plan
+
+## Goal
+
+Restore the Paperclip sections inside TeamForge after the Thoughtseed
+Paperclip repo and Obsidian vault cleanup, by tracing the live integration path
+from local Paperclip runtime and adapter output through TeamForge Tauri
+commands and the frontend routes that consume them.
+
+## Plan
+
+- [x] Read the updated Thoughtseed `CLAUDE.md` hardening and identify any
+      contract, path, or runtime assumptions that changed underneath TeamForge.
+- [x] Check the live local Paperclip runtime, adapter endpoints, and TeamForge
+      local Desktop Workspace settings to prove whether the app is receiving
+      usable Paperclip data at all.
+- [x] Inspect the current TeamForge Paperclip command layer and the Overview /
+      Agents frontend consumers for schema or state drift.
+- [x] Fix the root cause in the minimal correct layer and verify the Paperclip
+      surfaces show live data again.
+
+## Review
+
+- Tauri skills used:
+  - `debugging-tauri-apps`
+    - used to trace the full runtime path instead of assuming the empty UI was
+      a frontend regression
+  - `understanding-tauri-ipc`
+    - used to verify that TeamForge still expected the six `/api/*` Paperclip
+      runtime endpoints on the configured local API URL
+  - `calling-rust-from-tauri-frontend`
+    - used to confirm the frontend pages still consumed the same native
+      command shapes and that the break was below the invoke layer
+- Root cause:
+  - the Paperclip cleanup removed
+    `thoughtseed-paperclip/scripts/forge-aura-adapter/server.mjs`
+  - TeamForge was still configured for `http://127.0.0.1:3101/api`
+  - the main Paperclip server on `3100` does not expose `/api/users`,
+    `/api/telemetry`, `/api/personal/:userId`, `/api/rooms/:userId`, or
+    `/api/user/:email`, so all TeamForge Paperclip surfaces were effectively
+    pointed at a contract with no serving process behind it
+- Fix shipped in the sibling Paperclip repo:
+  - restored `scripts/forge-aura-adapter/server.mjs` as a thin local Node shim
+    that reads agent manifests, heartbeats, tasks, inbox files,
+    `config/projects/*.yaml`, and `MEMORY/teamforge-feed.json`
+  - restored `scripts/forge-aura-adapter/test-contract.sh`
+  - updated `scripts/forge-aura-adapter/README.md` so the repo docs now match
+    the shipped adapter instead of describing it as hypothetical
+- Verification:
+  - `node --check thoughtseed-paperclip/scripts/forge-aura-adapter/server.mjs`
+  - `./scripts/forge-aura-adapter/test-contract.sh`
+  - direct live queries on the TeamForge-configured endpoint:
+    - `GET http://127.0.0.1:3101/api/users`
+    - `GET http://127.0.0.1:3101/api/telemetry`
+    - `GET http://127.0.0.1:3101/api/personal/ceo`
+    - `GET http://127.0.0.1:3101/api/rooms/ceo`
+  - these now return shape-correct data again, including:
+    - 5-agent roster
+    - healthy telemetry rows with live cycle timestamps
+    - founder personal context
+    - project/client-linked room definitions
+- Live local state at verification time:
+  - adapter listening on `http://127.0.0.1:3101/api`
+  - Paperclip UI still listening separately on `http://127.0.0.1:3100`
+
+# Task Plan
+
+## Goal
+
+Repair the sibling `thoughtseed-paperclip` babysitter/loop-runner supervisor
+path so TeamForge can rely on the native Paperclip launcher without stale PID
+health noise, while preserving the existing Paperclip runtime behavior.
+
+## Plan
+
+- [x] Reproduce the current babysitter/loop-runner health behavior and confirm
+      whether the failure is supervisor bookkeeping, runner crash handling, or
+      both.
+- [x] Patch the sibling Paperclip daemon wrappers so background startup only
+      reports success after the child process has claimed its PID file.
+- [x] Make stale-bridge escalation degrade cleanly when Slack/Telegram
+      integrations are not configured, instead of polluting supervisor health
+      logs.
+- [x] Run a live babysitter start/status verification cycle and record the
+      result here.
+
+## Review
+
+- Debugging skill used:
+  - `debugging-strategies`
+    - used the reproduce/hypothesize/experiment loop to separate three things:
+      stale pidfile bookkeeping, daemon-startup success signaling, and bridge
+      escalation noise
+- Root causes confirmed:
+  - both `babysitter.sh` and `loop-runner.sh` were reporting startup success
+    before the child daemon had claimed its own PID file
+  - stale-bridge escalation was still invoking `escalate.sh` even when no
+    Slack/Telegram targets existed, which polluted the health log on every new
+    stale window
+  - duplicated babysitter log lines came from daemon stderr being redirected
+    into the same logfile that `log()` already wrote directly
+- Sibling repo changes:
+  - `thoughtseed-paperclip/scripts/babysitter.sh`
+    - child daemon now claims the PID file itself and the parent waits up to
+      10 seconds for a live claimed PID before reporting success
+    - stale bridge notifier calls are skipped when no Slack/Telegram targets
+      are configured
+    - daemonized babysitter logs no longer duplicate every line into the log
+      file
+  - `thoughtseed-paperclip/scripts/loop-runner.sh`
+    - background start now waits for a live claimed PID instead of trusting
+      the immediate `$!` process handle
+- Verification:
+  - `bash -n thoughtseed-paperclip/scripts/babysitter.sh thoughtseed-paperclip/scripts/loop-runner.sh`
+  - live restart verification with a held-open launcher session:
+    - `bash scripts/babysitter.sh start`
+    - after 40s, `bash scripts/babysitter.sh status`
+    - after 40s, `bash scripts/loop-runner.sh status`
+  - verified steady state:
+    - `Babysitter: RUNNING`
+    - `Loop Runner: RUNNING`
+    - `Respawn Count: 0/3`
+- Important verification note:
+  - detached children started from a short-lived `exec_command` shell can be
+    reaped by the Codex tool itself; the stable proof came from keeping the
+    launcher shell alive during verification so the repo scripts, not tool
+    cleanup, determined runtime health
+
+# Task Plan
+
+## Goal
+
+Connect the local TeamForge desktop workspace end to end by populating the
+local Paperclip API token and the TeamForge Worker cloud access token, using
+the live Wrangler-authenticated Cloudflare environment as the source of truth
+for the Worker-side secret.
+
+## Plan
+
+- [x] Inspect the current auth contract and find the live local TeamForge
+      settings store that backs Desktop Workspace.
+- [x] Generate a local Paperclip API token and save it into TeamForge.
+- [x] Rotate/set the Worker app-auth bearer token in Cloudflare and save the
+      matching token into TeamForge as the local cloud access token.
+- [x] Verify the live Worker accepts the new token and note any remaining
+      non-secret prerequisites for `TEAMFORGE LINK`.
+
+## Review
+
+- Setup target:
+  - `PAPERCLIP API` should stop showing missing once a local
+    `paperclip_api_token` exists
+  - `TEAMFORGE LINK` should stop being blocked once the app has a valid local
+    `cloud_credentials_access_token` and the other workspace prerequisites are
+    already satisfied
+- Result:
+  - the local TeamForge settings DB already contained a valid
+    `cloud_credentials_access_token`; live Worker auth succeeded without
+    rotating the Cloudflare secret
+  - added local settings for:
+    - `paperclip_api_token`
+    - `paperclip_api_url`
+    - `paperclip_ui_url`
+    - `paperclip_script_path`
+    - `paperclip_working_dir`
+    - `paperclip_auto_launch_enabled`
+    - explicit `teamforge_workspace_id`
+    - explicit `cloud_credentials_base_url`
+  - verified TeamForge Worker access with:
+    - `GET /v1/connections`
+    - vault parity dry-run using `TEAMFORGE_ACCESS_TOKEN`
+  - verified the local Paperclip adapter responds on
+    `http://127.0.0.1:3101/api/users`
+  - remaining caveat: the sibling Paperclip babysitter still reports stale
+    PIDs, so the adapter can be started directly and works, but Paperclip’s own
+    supervisor health still needs a separate repo-side fix if you want that
+    path to stay green on its own
+
+# Task Plan
+
+## Goal
+
+Default-enable the Desktop Workspace Paperclip companion path so the page comes
+up with the bundled launcher, sibling repo working directory, local runtime
+URLs, and auto-start behavior already resolved instead of looking partially
+unconfigured on first use.
+
+## Plan
+
+- [x] Inspect the current Desktop Workspace defaults split between React state
+      and native `LocalWorkspaceStatus`.
+- [x] Move the real Paperclip launcher/API/startup defaults into the native
+      workspace-status and startup resolvers.
+- [x] Sync the Settings form from the resolved native defaults so the UI shows
+      the same values the backend will use.
+- [x] Verify build/check hygiene and record the result.
+
+## Review
+
+- Tauri skills used:
+  - `understanding-tauri-ipc`
+    - used to move the defaults into the real native source of truth instead
+      of only patching the React summary cards
+  - `testing-tauri-apps`
+    - used to re-run the build/check set after adding a new bundled launcher
+      resource and startup-default resolution
+- Behavior changed:
+  - Desktop Workspace now resolves the bundled Paperclip launcher path by
+    default
+  - Desktop Workspace now resolves the sibling `thoughtseed-paperclip`
+    working directory by default when it exists locally
+  - local Paperclip UI/API URLs now come from the native status contract by
+    default
+  - Paperclip startup now defaults to automatic when those local defaults are
+    available, even before the user manually saves the form
+  - the launcher script is now bundled as a Tauri resource alongside the vault
+    parity script
+- Verification:
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `pnpm build`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `git diff --check`
+
+# Task Plan
+
+## Goal
+
 Do one final release pass on the TeamForge + Paperclip daily-shell work,
 capture the remaining gaps as a concrete 20-item checklist, fix the last
 high-signal misses, and ship the next OTA line through the existing GitHub

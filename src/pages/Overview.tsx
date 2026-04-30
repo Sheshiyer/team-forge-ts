@@ -305,6 +305,7 @@ function Overview() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [openingVaultPath, setOpeningVaultPath] = useState<string | null>(null);
+  const [paperclipRetryCount, setPaperclipRetryCount] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -312,6 +313,9 @@ function Overview() {
       setCommandCenter(view);
       setLoadError(null);
       setActionMessage(null);
+      if (view.paperclipRuntime || !view.paperclipError) {
+        setPaperclipRetryCount(0);
+      }
     } catch (error) {
       setLoadError(String(error));
     } finally {
@@ -400,8 +404,36 @@ function Overview() {
   }, []);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void load();
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [load]);
+
+  useEffect(() => {
+    if (loading || !commandCenter || commandCenter.paperclipRuntime || !commandCenter.paperclipError) {
+      return;
+    }
+
+    const retryablePaperclipError = /error sending request|connection refused|tcp connect|os error|timed out/i.test(
+      commandCenter.paperclipError,
+    );
+
+    if (!retryablePaperclipError || paperclipRetryCount >= 4) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setPaperclipRetryCount((current) => current + 1);
+      void load();
+    }, 2500);
+
+    return () => clearTimeout(timer);
+  }, [commandCenter, load, loading, paperclipRetryCount]);
 
   if (loading) {
     return (

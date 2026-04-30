@@ -342,6 +342,30 @@ function Settings() {
   ]);
 
   useEffect(() => {
+    if (!localWorkspaceStatus) return;
+
+    setLocalVaultRoot((current) =>
+      current.trim() ? current : localWorkspaceStatus.localVaultRoot || ""
+    );
+    setPaperclipScriptPath((current) =>
+      current.trim() ? current : localWorkspaceStatus.paperclipScriptPath || ""
+    );
+    setPaperclipWorkingDir((current) =>
+      current.trim() ? current : localWorkspaceStatus.paperclipWorkingDir || ""
+    );
+    setPaperclipUiUrl((current) =>
+      current.trim() ? current : localWorkspaceStatus.paperclipUiUrl || "http://127.0.0.1:3100"
+    );
+    setPaperclipApiUrl((current) =>
+      current.trim() ? current : localWorkspaceStatus.paperclipApiUrl || "http://127.0.0.1:3101/api"
+    );
+    setTeamforgeWorkspaceId((current) =>
+      current.trim() ? current : localWorkspaceStatus.teamforgeWorkspaceId || ""
+    );
+    setPaperclipAutoLaunchEnabled(localWorkspaceStatus.paperclipAutoLaunchEnabled);
+  }, [localWorkspaceStatus]);
+
+  useEffect(() => {
     let cancelled = false;
 
     getVersion()

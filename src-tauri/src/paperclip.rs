@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use crate::db::queries;
 
+const DEFAULT_PAPERCLIP_UI_URL: &str = "http://127.0.0.1:3100";
 const DEFAULT_PAPERCLIP_API_URL: &str = "http://127.0.0.1:3101/api";
 
 #[derive(Debug, Clone)]
@@ -183,6 +184,10 @@ async fn load_api_config(pool: &SqlitePool) -> Result<PaperclipApiConfig, String
 
 pub fn default_api_url() -> &'static str {
     DEFAULT_PAPERCLIP_API_URL
+}
+
+pub fn default_ui_url() -> &'static str {
+    DEFAULT_PAPERCLIP_UI_URL
 }
 
 fn endpoint_url(base_url: &Url, route: &str) -> Result<Url, String> {

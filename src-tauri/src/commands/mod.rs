@@ -1662,6 +1662,18 @@ fn repo_parity_script_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/teamforge-vault-parity.mjs")
 }
 
+fn repo_paperclip_launcher_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/launch-thoughtseed-paperclip.sh")
+}
+
+fn repo_paperclip_adapter_script_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/paperclip-runtime-adapter.mjs")
+}
+
+fn repo_paperclip_working_directory() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../thoughtseed-paperclip")
+}
+
 fn resolve_parity_script_path(app_handle: &tauri::AppHandle) -> Result<(PathBuf, String), String> {
     if let Ok(resource_path) = app_handle
         .path()
@@ -1681,6 +1693,45 @@ fn resolve_parity_script_path(app_handle: &tauri::AppHandle) -> Result<(PathBuf,
         "TeamForge vault parity script was not found in the app bundle or the repo checkout."
             .to_string(),
     )
+}
+
+fn resolve_default_paperclip_launcher_path(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    if let Ok(resource_path) = app_handle
+        .path()
+        .resolve("launch-thoughtseed-paperclip.sh", BaseDirectory::Resource)
+    {
+        if resource_path.is_file() {
+            return Some(resource_path);
+        }
+    }
+
+    let repo_path = repo_paperclip_launcher_path();
+    if repo_path.is_file() {
+        return Some(repo_path);
+    }
+
+    None
+}
+
+fn resolve_default_paperclip_working_directory() -> Option<PathBuf> {
+    for key in ["THOUGHTSEED_PAPERCLIP_ROOT", "PAPERCLIP_ROOT"] {
+        if let Ok(value) = std::env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                let path = PathBuf::from(trimmed);
+                if path.is_dir() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    let repo_path = repo_paperclip_working_directory();
+    if repo_path.is_dir() {
+        return Some(repo_path);
+    }
+
+    None
 }
 
 async fn detect_node_runtime_version(app_handle: &tauri::AppHandle) -> Result<String, String> {
@@ -1808,10 +1859,24 @@ async fn read_local_workspace_status(
     app_handle: &tauri::AppHandle,
 ) -> Result<LocalWorkspaceStatus, String> {
     let local_vault_root = trimmed_setting_value(pool, "local_vault_root").await?;
-    let paperclip_script_path = trimmed_setting_value(pool, "paperclip_script_path").await?;
-    let paperclip_working_dir = trimmed_setting_value(pool, "paperclip_working_dir").await?;
-    let paperclip_ui_url = trimmed_setting_value(pool, "paperclip_ui_url").await?;
-    let paperclip_api_url = trimmed_setting_value(pool, "paperclip_api_url").await?;
+    let paperclip_script_path = trimmed_setting_value(pool, "paperclip_script_path")
+        .await?
+        .or_else(|| {
+            resolve_default_paperclip_launcher_path(app_handle)
+                .map(|path| path.to_string_lossy().to_string())
+        });
+    let paperclip_working_dir = trimmed_setting_value(pool, "paperclip_working_dir")
+        .await?
+        .or_else(|| {
+            resolve_default_paperclip_working_directory()
+                .map(|path| path.to_string_lossy().to_string())
+        });
+    let paperclip_ui_url = trimmed_setting_value(pool, "paperclip_ui_url")
+        .await?
+        .or_else(|| Some(paperclip::default_ui_url().to_string()));
+    let paperclip_api_url = trimmed_setting_value(pool, "paperclip_api_url")
+        .await?
+        .or_else(|| Some(paperclip::default_api_url().to_string()));
     let paperclip_api_token_configured = trimmed_setting_value(pool, "paperclip_api_token")
         .await?
         .is_some();
@@ -2020,21 +2085,39 @@ fn paperclip_shell_interpreter(path: &Path) -> Option<&'static str> {
     }
 }
 
-fn resolve_paperclip_adapter_script_path(working_directory: &Path) -> Result<PathBuf, String> {
+fn resolve_paperclip_adapter_script_path(
+    app_handle: &tauri::AppHandle,
+    working_directory: &Path,
+) -> Result<(PathBuf, String), String> {
     let candidate = working_directory.join("scripts/forge-aura-adapter/server.mjs");
-    if !candidate.exists() {
-        return Err(format!(
-            "Paperclip adapter script does not exist: {}",
-            candidate.display()
-        ));
+    if candidate.is_file() {
+        return Ok((candidate, "paperclip-repo".to_string()));
     }
-    if candidate.is_dir() {
+    if candidate.exists() {
         return Err(format!(
             "Paperclip adapter script path points to a directory, not a file: {}",
             candidate.display()
         ));
     }
-    Ok(candidate)
+
+    if let Ok(resource_path) = app_handle
+        .path()
+        .resolve("paperclip-runtime-adapter.mjs", BaseDirectory::Resource)
+    {
+        if resource_path.is_file() {
+            return Ok((resource_path, "bundled".to_string()));
+        }
+    }
+
+    let repo_path = repo_paperclip_adapter_script_path();
+    if repo_path.is_file() {
+        return Ok((repo_path, "teamforge-repo".to_string()));
+    }
+
+    Err(
+        "Paperclip adapter script was not found in the sibling Paperclip repo, the TeamForge app bundle, or the TeamForge repo checkout."
+            .to_string(),
+    )
 }
 
 async fn launch_paperclip_script_internal(
@@ -2125,7 +2208,8 @@ async fn launch_paperclip_adapter_internal(
 
     let working_directory = resolve_paperclip_working_directory(Some(working_dir.as_str()))?
         .ok_or_else(|| "Paperclip working directory is required for adapter launch.".to_string())?;
-    let script_path = resolve_paperclip_adapter_script_path(&working_directory)?;
+    let (script_path, adapter_source) =
+        resolve_paperclip_adapter_script_path(app_handle, &working_directory)?;
     let port = parsed_url
         .port_or_known_default()
         .ok_or_else(|| "Paperclip API URL must include a reachable port.".to_string())?;
@@ -2148,7 +2232,7 @@ async fn launch_paperclip_adapter_internal(
         script_path: script_string,
         command_path: "node".to_string(),
         working_directory: Some(working_directory.to_string_lossy().to_string()),
-        launch_mode: "node-script".to_string(),
+        launch_mode: format!("node-script:{adapter_source}"),
     })
 }
 
@@ -2255,8 +2339,18 @@ pub async fn ensure_paperclip_runtime_started(
     app_handle: tauri::AppHandle,
 ) -> Result<PaperclipStartupResult, String> {
     let pool = &db.0;
-    let script_path = trimmed_setting_value(pool, "paperclip_script_path").await?;
-    let working_dir = trimmed_setting_value(pool, "paperclip_working_dir").await?;
+    let script_path = trimmed_setting_value(pool, "paperclip_script_path")
+        .await?
+        .or_else(|| {
+            resolve_default_paperclip_launcher_path(&app_handle)
+                .map(|path| path.to_string_lossy().to_string())
+        });
+    let working_dir = trimmed_setting_value(pool, "paperclip_working_dir")
+        .await?
+        .or_else(|| {
+            resolve_default_paperclip_working_directory()
+                .map(|path| path.to_string_lossy().to_string())
+        });
     let api_url = trimmed_setting_value(pool, "paperclip_api_url")
         .await?
         .unwrap_or_else(|| paperclip::default_api_url().to_string());
