@@ -18,7 +18,6 @@ use std::path::Path;
 ///
 /// Implementation lands in Plan 01-02. This skeleton exists so Plan 01-01 can
 /// wire the dual-path setting at the Tauri call site against a stable signature.
-#[allow(dead_code)]
 pub async fn run_apply(
     _pool: &SqlitePool,
     _vault_root: &str,

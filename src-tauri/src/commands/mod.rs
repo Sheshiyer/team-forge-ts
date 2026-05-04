@@ -1927,12 +1927,22 @@ async fn read_local_workspace_status(
             Err(error) => (None, Some(error)),
         };
 
+    // Read the runtime choice. Default "rust" per CONTEXT.md D-02.
+    let runtime_choice = crate::db::queries::get_setting(pool, "vault_sync_runtime")
+        .await
+        .ok()
+        .flatten()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "rust".to_string());
+    let node_required = runtime_choice == "node";
+
     let founder_sync_ready = local_vault_root.is_some()
         && vault_validation.status == "ready"
         && teamforge_workspace_id.is_some()
         && cloud_access_token_configured
-        && parity_script_error.is_none()
-        && node_runtime_error.is_none();
+        && (!node_required || parity_script_error.is_none())
+        && (!node_required || node_runtime_error.is_none());
 
     let founder_sync_message = if founder_sync_ready {
         "Ready to sync local Thoughtseed notes into TeamForge.".to_string()
@@ -1949,11 +1959,13 @@ async fn read_local_workspace_status(
         if !cloud_access_token_configured {
             blockers.push("Configure the TeamForge cloud access token.");
         }
-        if let Some(error) = parity_script_error.as_ref() {
-            blockers.push(error.as_str());
-        }
-        if let Some(error) = node_runtime_error.as_ref() {
-            blockers.push(error.as_str());
+        if node_required {
+            if let Some(error) = parity_script_error.as_ref() {
+                blockers.push(error.as_str());
+            }
+            if let Some(error) = node_runtime_error.as_ref() {
+                blockers.push(error.as_str());
+            }
         }
 
         if blockers.is_empty() {
@@ -2653,21 +2665,51 @@ pub async fn sync_local_vault_to_teamforge(
         .teamforge_workspace_id
         .clone()
         .ok_or_else(|| "TeamForge workspace id is required before syncing.".to_string())?;
-    let node_runtime_version = status
-        .node_runtime_version
-        .clone()
-        .ok_or_else(|| "Node.js runtime is required before syncing.".to_string())?;
-    let script_path = status
-        .parity_script_path
-        .clone()
-        .ok_or_else(|| "TeamForge vault parity script is unavailable.".to_string())?;
-    let script_source = status
-        .parity_script_source
-        .clone()
-        .unwrap_or_else(|| "unknown".to_string());
     let access_token = trimmed_setting_value(pool, "cloud_credentials_access_token")
         .await?
         .ok_or_else(|| "cloud credential access token is not configured".to_string())?;
+
+    // Read runtime choice. Default "rust" per CONTEXT.md D-02.
+    let runtime_choice = crate::db::queries::get_setting(pool, "vault_sync_runtime")
+        .await
+        .ok()
+        .flatten()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "rust".to_string());
+    eprintln!("[vault-parity] runtime_choice={}", runtime_choice);
+
+    // Producer-identifying tuple landed on LocalVaultSyncReport per RESEARCH.md
+    // §"Dual-Path Mechanics". For "rust" we stamp sentinel strings; for "node"
+    // we surface the existing detected values, falling back to defaults when
+    // status fields are missing (the founder_sync_ready gate already required
+    // them when node_required, so this is a safe shape preservation).
+    let (node_runtime_version, script_source, script_path) = match runtime_choice.as_str() {
+        "rust" => (
+            "rust-native".to_string(),
+            "rust-native".to_string(),
+            "(native rust)".to_string(),
+        ),
+        "node" => (
+            status
+                .node_runtime_version
+                .clone()
+                .ok_or_else(|| "Node.js runtime is required before syncing.".to_string())?,
+            status
+                .parity_script_source
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+            status
+                .parity_script_path
+                .clone()
+                .ok_or_else(|| "TeamForge vault parity script is unavailable.".to_string())?,
+        ),
+        other => {
+            return Err(format!(
+                "Unknown vault_sync_runtime setting '{other}'. Expected 'rust' or 'node'."
+            ));
+        }
+    };
 
     let report_path = std::env::temp_dir().join(format!(
         "teamforge-vault-sync-{}.json",
@@ -2678,31 +2720,50 @@ pub async fn sync_local_vault_to_teamforge(
     ));
     let report_path_string = report_path.to_string_lossy().to_string();
 
-    let output = app_handle
-        .shell()
-        .command("node")
-        .args([
-            script_path.as_str(),
-            "--apply",
-            "--vault-root",
-            vault_root.as_str(),
-            "--worker-base-url",
-            status.worker_base_url.as_str(),
-            "--workspace-id",
-            workspace_id.as_str(),
-            "--report",
-            report_path_string.as_str(),
-        ])
-        .env("TEAMFORGE_ACCESS_TOKEN", access_token)
-        .env("TEAMFORGE_WORKSPACE_ID", workspace_id.clone())
-        .env("TEAMFORGE_API_BASE_URL", status.worker_base_url.clone())
-        .env("TF_API_BASE_URL", status.worker_base_url.clone())
-        .output()
-        .await
-        .map_err(|error| format!("run TeamForge vault parity sync: {error}"))?;
+    let (stdout, stderr, runtime_succeeded) = match runtime_choice.as_str() {
+        "rust" => {
+            crate::vault::parity::run_apply(
+                pool,
+                vault_root.as_str(),
+                workspace_id.as_str(),
+                status.worker_base_url.as_str(),
+                access_token.as_str(),
+                &report_path,
+            )
+            .await?;
+            (String::new(), String::new(), true)
+        }
+        "node" => {
+            let output = app_handle
+                .shell()
+                .command("node")
+                .args([
+                    script_path.as_str(),
+                    "--apply",
+                    "--vault-root",
+                    vault_root.as_str(),
+                    "--worker-base-url",
+                    status.worker_base_url.as_str(),
+                    "--workspace-id",
+                    workspace_id.as_str(),
+                    "--report",
+                    report_path_string.as_str(),
+                ])
+                .env("TEAMFORGE_ACCESS_TOKEN", access_token.clone())
+                .env("TEAMFORGE_WORKSPACE_ID", workspace_id.clone())
+                .env("TEAMFORGE_API_BASE_URL", status.worker_base_url.clone())
+                .env("TF_API_BASE_URL", status.worker_base_url.clone())
+                .output()
+                .await
+                .map_err(|error| format!("run TeamForge vault parity sync: {error}"))?;
+            let stdout = decode_shell_output(&output.stdout);
+            let stderr = decode_shell_output(&output.stderr);
+            let succeeded = output.status.success();
+            (stdout, stderr, succeeded)
+        }
+        _ => unreachable!("vault_sync_runtime validated above"),
+    };
 
-    let stdout = decode_shell_output(&output.stdout);
-    let stderr = decode_shell_output(&output.stderr);
     let stdout_tail = tail_lines(&stdout, 12);
 
     let report_raw = std::fs::read_to_string(&report_path)
@@ -2723,7 +2784,7 @@ pub async fn sync_local_vault_to_teamforge(
         .unwrap_or_default();
     let mut failures = summarize_sync_failures(&report);
 
-    if !output.status.success() {
+    if !runtime_succeeded {
         let mut detail_parts = Vec::new();
         if !stderr.is_empty() {
             detail_parts.push(stderr);
