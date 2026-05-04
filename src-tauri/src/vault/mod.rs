@@ -1,3 +1,5 @@
+pub mod parity;
+
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
