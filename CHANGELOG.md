@@ -2,7 +2,7 @@
 
 All notable changes to TeamForge are documented in this file.
 
-## v0.2.0 - 2026-05-04
+## v0.2.0 - 2026-05-05
 
 Closes Phase 1 of v0.2 Foundation Closeout (issue #45). Productizes the
 Settings-based founder vault sync so TeamForge.app runs end-to-end on a
@@ -14,6 +14,10 @@ setting fallback and goes out at v0.2.1 alongside Phase 2 (#46) closing.
 
 ### Added
 
+- **Slack Sync Now button** in Settings — trigger on-demand Slack message
+  sync without waiting for the 3-minute background scheduler. Shows
+  channels synced and messages scanned/persisted count.
+- `trigger_slack_sync` Tauri command (mirrors `trigger_huly_sync` pattern)
 - Native Rust founder-sync importer at `src-tauri/src/vault/parity.rs`
   (~2963 LOC including tests; ~835 LOC implementation) covering all four
   note families: project briefs, client profiles, onboarding flows,
