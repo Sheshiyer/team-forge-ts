@@ -56,6 +56,7 @@ const navSections = [
       { path: "/clients", label: "Clients" },
       { path: "/issues", label: "Issues" },
       { path: "/onboarding", label: "Onboarding" },
+      { path: "/knowledge", label: "Skills" },
     ],
   },
   {

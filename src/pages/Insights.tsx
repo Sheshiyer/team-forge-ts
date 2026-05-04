@@ -8,6 +8,7 @@ import type {
   EstimationAccuracy,
   PriorityDistribution,
   NamingComplianceStats,
+  QuotaRow,
   StandupReport,
 } from "../lib/types";
 
@@ -37,6 +38,7 @@ type InsightLoadErrors = {
   priorities: string | null;
   naming: string | null;
   standup: string | null;
+  quota: string | null;
 };
 
 const EMPTY_LOAD_ERRORS: InsightLoadErrors = {
@@ -45,6 +47,7 @@ const EMPTY_LOAD_ERRORS: InsightLoadErrors = {
   priorities: null,
   naming: null,
   standup: null,
+  quota: null,
 };
 
 function Insights() {
@@ -54,16 +57,18 @@ function Insights() {
   const [priorities, setPriorities] = useState<PriorityDistribution[]>([]);
   const [naming, setNaming] = useState<NamingComplianceStats | null>(null);
   const [standup, setStandup] = useState<StandupReport | null>(null);
+  const [quotaRows, setQuotaRows] = useState<QuotaRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadErrors, setLoadErrors] = useState<InsightLoadErrors>(EMPTY_LOAD_ERRORS);
 
   const load = useCallback(async () => {
-    const [d, a, p, n, s] = await Promise.allSettled([
+    const [d, a, p, n, s, q] = await Promise.allSettled([
       api.getTimeDiscrepancies(),
       api.getEstimationAccuracy(),
       api.getPriorityDistribution(),
       api.getNamingCompliance(),
       api.getStandupReport(),
+      api.getQuotaCompliance(),
     ]);
 
     const nextErrors: InsightLoadErrors = { ...EMPTY_LOAD_ERRORS };
@@ -101,6 +106,13 @@ function Insights() {
     } else {
       setStandup(null);
       nextErrors.standup = "STANDUP VIEW UNAVAILABLE.";
+    }
+
+    if (q.status === "fulfilled") {
+      setQuotaRows(q.value);
+    } else {
+      setQuotaRows([]);
+      nextErrors.quota = "KPI FULFILLMENT UNAVAILABLE.";
     }
 
     setLoadErrors(nextErrors);
@@ -408,6 +420,129 @@ function Insights() {
           </>
         ) : (
           <p style={styles.emptyText}>NO TASK NAMING DATA</p>
+        )}
+      </div>
+
+      {/* KPI Fulfillment (#61) */}
+      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-green)" }}>
+        <h2 style={styles.sectionTitle}>KPI FULFILLMENT</h2>
+        <div style={styles.sectionDivider} />
+        {loadErrors.quota ? (
+          <p style={styles.emptyText}>{loadErrors.quota}</p>
+        ) : quotaRows.length === 0 ? (
+          <p style={styles.emptyText}>NO KPI DATA AVAILABLE</p>
+        ) : (
+          <>
+            <div style={{ display: "flex", gap: 24, marginBottom: 16, flexWrap: "wrap" as const }}>
+              <div style={styles.metricBox}>
+                <div style={{
+                  ...styles.metricValue,
+                  color: quotaRows.filter(r => r.status === "onTrack").length === quotaRows.length
+                    ? "var(--lcars-green)"
+                    : "var(--lcars-orange)",
+                }}>
+                  {quotaRows.filter(r => r.status === "onTrack").length}/{quotaRows.length}
+                </div>
+                <div style={styles.metricLabel}>ON TRACK</div>
+              </div>
+              <div style={styles.metricBox}>
+                <div style={{ ...styles.metricValue, color: "var(--lcars-yellow)" }}>
+                  {quotaRows.filter(r => r.status === "behind").length}
+                </div>
+                <div style={styles.metricLabel}>BEHIND</div>
+              </div>
+              <div style={styles.metricBox}>
+                <div style={{ ...styles.metricValue, color: "var(--lcars-red)" }}>
+                  {quotaRows.filter(r => r.status === "critical").length}
+                </div>
+                <div style={styles.metricLabel}>CRITICAL</div>
+              </div>
+              <div style={styles.metricBox}>
+                <div style={styles.metricValue}>
+                  {quotaRows.reduce((s, r) => s + r.thisMonthHours, 0).toFixed(0)}h
+                </div>
+                <div style={styles.metricLabel}>TOTAL MONTH</div>
+              </div>
+            </div>
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.th}>CREW MEMBER</th>
+                  <th style={styles.th}>THIS WEEK</th>
+                  <th style={styles.th}>THIS MONTH</th>
+                  <th style={styles.th}>QUOTA</th>
+                  <th style={styles.th}>FULFILLMENT</th>
+                  <th style={styles.th}>STATUS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {quotaRows.map((row) => {
+                  const pct = row.quota > 0 ? (row.thisMonthHours / row.quota) * 100 : 0;
+                  const statusColor = row.status === "onTrack"
+                    ? "var(--lcars-green)"
+                    : row.status === "behind"
+                      ? "var(--lcars-yellow)"
+                      : "var(--lcars-red)";
+                  return (
+                    <tr key={row.employeeName}>
+                      <td style={styles.td}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <Avatar name={row.employeeName} size={24} />
+                          <span style={{ color: "var(--lcars-orange)" }}>{row.employeeName}</span>
+                        </div>
+                      </td>
+                      <td style={styles.tdMono}>{row.thisWeekHours.toFixed(1)}h</td>
+                      <td style={styles.tdMono}>{row.thisMonthHours.toFixed(1)}h</td>
+                      <td style={styles.tdMono}>{row.quota.toFixed(0)}h</td>
+                      <td style={styles.td}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <div style={{
+                            flex: 1,
+                            height: 6,
+                            backgroundColor: "rgba(255,255,255,0.08)",
+                            borderRadius: 3,
+                            overflow: "hidden",
+                          }}>
+                            <div style={{
+                              width: `${Math.min(100, pct)}%`,
+                              height: "100%",
+                              backgroundColor: statusColor,
+                              borderRadius: 3,
+                              transition: "width 0.3s ease",
+                            }} />
+                          </div>
+                          <span style={{ ...styles.tdMono, fontSize: 11, color: statusColor, minWidth: 38 }}>
+                            {pct.toFixed(0)}%
+                          </span>
+                        </div>
+                      </td>
+                      <td style={styles.td}>
+                        <span style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 5,
+                          padding: "2px 8px",
+                          border: `1px solid ${statusColor}`,
+                          borderRadius: 3,
+                          color: statusColor,
+                          fontSize: 9,
+                          letterSpacing: "1px",
+                          fontFamily: "'Orbitron', sans-serif",
+                          textTransform: "uppercase" as const,
+                        }}>
+                          <span style={{
+                            width: 6, height: 6, borderRadius: "50%",
+                            backgroundColor: statusColor,
+                          }} />
+                          {row.status === "onTrack" ? "ON TRACK" : row.status.toUpperCase()}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </>
         )}
       </div>
 
