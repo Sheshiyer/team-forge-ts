@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Routes, Route, NavLink, Navigate, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
@@ -22,6 +22,8 @@ import Knowledge from "./pages/Knowledge";
 import Onboarding from "./pages/Onboarding";
 import Avatar from "./components/ui/Avatar";
 import DateRangePicker from "./components/ui/DateRangePicker";
+import CommandPalette from "./components/ui/CommandPalette";
+import type { CommandItem } from "./components/ui/CommandPalette";
 import { useViewportWidth } from "./hooks/useViewportWidth";
 import { useAppStore } from "./stores/appStore";
 import type { PaperclipStartupResult, PresenceStatus } from "./lib/types";
@@ -89,6 +91,7 @@ function App() {
   const setDateRange = useAppStore((s) => s.setDateRange);
   const [syncActive, setSyncActive] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const isTightShell = viewportWidth < 1240;
   const isCompactShell = viewportWidth < 1080;
   const sidebarWidth = isCompactShell ? 208 : isTightShell ? 224 : 240;
@@ -173,10 +176,90 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Command palette items
+  const commandItems: CommandItem[] = useMemo(() => {
+    const nav: CommandItem[] = navSections.flatMap((section) =>
+      section.items.map((item) => ({
+        id: `nav:${item.path}`,
+        label: item.label,
+        section: section.label,
+        icon: "→",
+        action: () => navigate(item.path),
+      })),
+    );
+
+    const actions: CommandItem[] = [
+      {
+        id: "action:sync-all",
+        label: "Sync All Sources",
+        section: "ACTIONS",
+        icon: "⟳",
+        shortcut: "⌘R",
+        action: () => { invoke("trigger_sync").catch(() => {}); },
+      },
+      {
+        id: "action:sync-slack",
+        label: "Sync Slack Now",
+        section: "ACTIONS",
+        icon: "💬",
+        action: () => { invoke("trigger_slack_sync").catch(() => {}); },
+      },
+      {
+        id: "action:sync-huly",
+        label: "Sync Huly Now",
+        section: "ACTIONS",
+        icon: "📋",
+        action: () => { invoke("trigger_huly_sync").catch(() => {}); },
+      },
+      {
+        id: "action:sync-github",
+        label: "Sync GitHub Plans",
+        section: "ACTIONS",
+        icon: "🐙",
+        action: () => { invoke("sync_github_plans").catch(() => {}); },
+      },
+      {
+        id: "action:launch-paperclip",
+        label: "Launch Paperclip",
+        section: "ACTIONS",
+        icon: "📎",
+        action: () => { invoke("ensure_paperclip_runtime_started").catch(() => {}); },
+      },
+      {
+        id: "action:open-paperclip-ui",
+        label: "Open Paperclip UI",
+        section: "ACTIONS",
+        icon: "🖥",
+        action: () => { invoke("open_paperclip_ui", { url: "http://127.0.0.1:3100" }).catch(() => {}); },
+      },
+      {
+        id: "action:vault-sync",
+        label: "Sync Vault to TeamForge",
+        section: "ACTIONS",
+        icon: "📂",
+        action: () => { invoke("sync_local_vault_to_teamforge").catch(() => {}); },
+      },
+      {
+        id: "action:check-update",
+        label: "Check for Updates",
+        section: "SYSTEM",
+        icon: "↑",
+        action: () => navigate("/settings"),
+      },
+    ];
+
+    return [...nav, ...actions];
+  }, [navigate]);
+
   // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey) {
+        if (e.key === "k") {
+          e.preventDefault();
+          setPaletteOpen((prev) => !prev);
+          return;
+        }
         const routes = [
           "/", "/timesheet", "/projects", "/sprints", "/insights",
           "/team", "/calendar", "/comms", "/activity", "/agents",
@@ -511,6 +594,11 @@ function App() {
           </Routes>
         </div>
       </main>
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        items={commandItems}
+      />
     </div>
   );
 }

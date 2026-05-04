@@ -6,6 +6,7 @@ import type {
   FounderActiveStreamView,
   FounderCommandCenterView,
   FounderNeedsReviewItemView,
+  StandupReport,
   VaultPortfolioSurface,
 } from "../lib/types";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
@@ -306,6 +307,7 @@ function Overview() {
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [openingVaultPath, setOpeningVaultPath] = useState<string | null>(null);
   const [paperclipRetryCount, setPaperclipRetryCount] = useState(0);
+  const [standup, setStandup] = useState<StandupReport | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -406,6 +408,22 @@ function Overview() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Fetch standup report
+  useEffect(() => {
+    let cancelled = false;
+    const fetchStandup = async () => {
+      try {
+        const report = await api.getStandupReport();
+        if (!cancelled) setStandup(report);
+      } catch {
+        // Standup view is best-effort on Overview
+      }
+    };
+    fetchStandup();
+    const interval = setInterval(fetchStandup, 60000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -848,6 +866,81 @@ function Overview() {
             </div>
           )}
         </SectionFrame>
+
+        {/* Standup Digest Widget */}
+        <SectionFrame
+          title="STANDUP DIGEST"
+          subtitle={standup ? `${standup.date} · ${standup.compliancePercent.toFixed(0)}% COMPLIANCE` : "TODAY"}
+          accent="var(--lcars-peach, var(--lcars-orange))"
+          actions={
+            <div style={styles.actionGroup}>
+              <ActionButton label="OPEN INSIGHTS" onClick={() => navigate("/insights")} />
+            </div>
+          }
+        >
+          {!standup ? (
+            <p style={styles.emptyText}>STANDUP DATA LOADING...</p>
+          ) : (
+            <>
+              <div style={styles.standupMetrics}>
+                <div style={styles.standupMetric}>
+                  <div style={styles.commandLabel}>POSTED</div>
+                  <div style={{ ...styles.standupMetricValue, color: "var(--lcars-green)" }}>
+                    {standup.postedCount}
+                  </div>
+                </div>
+                <div style={styles.standupMetric}>
+                  <div style={styles.commandLabel}>MISSING</div>
+                  <div style={{
+                    ...styles.standupMetricValue,
+                    color: standup.missingCount > 0 ? "var(--lcars-red)" : "var(--lcars-green)",
+                  }}>
+                    {standup.missingCount}
+                  </div>
+                </div>
+                <div style={styles.standupMetric}>
+                  <div style={styles.commandLabel}>TEAM SIZE</div>
+                  <div style={styles.standupMetricValue}>{standup.totalTeam}</div>
+                </div>
+                <div style={styles.standupMetric}>
+                  <div style={styles.commandLabel}>COMPLIANCE</div>
+                  <div style={{
+                    ...styles.standupMetricValue,
+                    color: standup.compliancePercent >= 80
+                      ? "var(--lcars-green)"
+                      : standup.compliancePercent >= 50
+                        ? "var(--lcars-orange)"
+                        : "var(--lcars-red)",
+                  }}>
+                    {standup.compliancePercent.toFixed(0)}%
+                  </div>
+                </div>
+              </div>
+              {standup.entries.length > 0 && (
+                <div style={styles.standupEntries}>
+                  {standup.entries.slice(0, 6).map((entry) => (
+                    <div key={entry.employeeName} style={styles.standupRow}>
+                      <span style={{
+                        ...styles.standupDot,
+                        backgroundColor: entry.status === "posted"
+                          ? "var(--lcars-green)"
+                          : "var(--lcars-red)",
+                      }} />
+                      <span style={styles.standupName}>{entry.employeeName.toUpperCase()}</span>
+                      <span style={styles.standupSource}>{entry.source.toUpperCase()}</span>
+                      {entry.contentPreview && (
+                        <span style={styles.standupPreview}>
+                          {entry.contentPreview.slice(0, 60)}
+                          {entry.contentPreview.length > 60 ? "…" : ""}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </SectionFrame>
       </div>
     </div>
   );
@@ -1140,6 +1233,61 @@ const styles: Record<string, React.CSSProperties> = {
     borderLeft: "8px solid var(--lcars-red)",
     color: "var(--lcars-red)",
     fontFamily: "'JetBrains Mono', monospace",
+  },
+  standupMetrics: {
+    display: "grid",
+    gridTemplateColumns: "repeat(4, 1fr)",
+    gap: 12,
+    marginBottom: 14,
+  },
+  standupMetric: {
+    textAlign: "center" as const,
+  },
+  standupMetricValue: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 22,
+    fontWeight: 700,
+    color: "var(--lcars-text, #f0e0c0)",
+    marginTop: 4,
+  },
+  standupEntries: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 6,
+  },
+  standupRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "4px 0",
+  },
+  standupDot: {
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    flexShrink: 0,
+  },
+  standupName: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 11,
+    letterSpacing: "0.5px",
+    color: "var(--lcars-lavender)",
+    minWidth: 100,
+  },
+  standupSource: {
+    fontSize: 9,
+    letterSpacing: "1px",
+    color: "var(--lcars-tan)",
+    minWidth: 50,
+  },
+  standupPreview: {
+    fontSize: 11,
+    color: "var(--lcars-text, #f0e0c0)",
+    opacity: 0.7,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap" as const,
+    flex: 1,
   },
 };
 
