@@ -2960,4 +2960,95 @@ external_refs:\n  - { system: clockify, id: 12345 }\n\
         pool.close().await;
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // -----------------------------------------------------------------------
+    // 01-real-vault-diff: Tier 3 of `01-RESEARCH.md` §9 — parity verification
+    // against the real, private `thoughtseed-labs` vault. The human releaser
+    // runs this with the env vars set; `cargo test --lib` does NOT exercise
+    // it (the `#[ignore]` gate keeps the default suite hermetic).
+    //
+    // Invocation (per `01-VALIDATION.md` row `01-real-vault-diff`):
+    //
+    //   TEAMFORGE_VAULT_ROOT=/path/to/thoughtseed-labs \
+    //   TEAMFORGE_WORKSPACE_ID=ws-xxxxxxxx \
+    //   TEAMFORGE_RUST_PARITY_REPORT_PATH=/tmp/rust-report.json \
+    //   cargo test --manifest-path src-tauri/Cargo.toml \
+    //     vault::parity::tests::rust_parity_diff_against_real_vault \
+    //     -- --ignored --nocapture
+    //
+    // Then the releaser runs the Node script against the same vault +
+    // workspace_id (writing /tmp/node-report.json), normalizes both with
+    // `jq` per RESEARCH.md §9 Tier 3, and `diff`s them. The Rust side just
+    // produces the report file; the diff itself is recorded in
+    // `01-VERIFICATION.md`.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    #[ignore = "live test — requires TEAMFORGE_VAULT_ROOT + TEAMFORGE_WORKSPACE_ID env vars; not run by `cargo test --lib`"]
+    async fn rust_parity_diff_against_real_vault() {
+        let vault_root = std::env::var("TEAMFORGE_VAULT_ROOT")
+            .expect("TEAMFORGE_VAULT_ROOT env var required for this --ignored test");
+        let workspace_id = std::env::var("TEAMFORGE_WORKSPACE_ID")
+            .expect("TEAMFORGE_WORKSPACE_ID env var required for this --ignored test");
+        let report_path = std::env::var("TEAMFORGE_RUST_PARITY_REPORT_PATH")
+            .unwrap_or_else(|_| "/tmp/rust-report.json".to_string());
+
+        eprintln!("[vault-parity] real-vault diff: vault_root={vault_root}");
+        eprintln!("[vault-parity] real-vault diff: workspace_id={workspace_id}");
+        eprintln!("[vault-parity] real-vault diff: report_path={report_path}");
+
+        // Use the same test-DB pattern as `rust_parity_run_against_fixture_vault`.
+        let dir = unique_test_dir();
+        let pool = crate::db::queries::init_db(&dir).await.expect("init db");
+
+        // Run dry-run against the real vault. No Worker calls. No SQLite writes.
+        let report_path_buf = std::path::PathBuf::from(&report_path);
+        crate::vault::parity::run_dry_run(
+            &pool,
+            vault_root.as_str(),
+            workspace_id.as_str(),
+            "https://teamforge-api.invalid", // dry-run does not hit the worker
+            "fake-token",
+            &report_path_buf,
+        )
+        .await
+        .expect("run_dry_run against real vault");
+
+        // Sanity: the report file exists and is valid JSON with expected
+        // top-level keys. Catches parity drift early, before the human runs
+        // the `jq` diff. (Defense in depth around Risk #1 in RESEARCH.md
+        // §"Risk Register".)
+        let report_text = std::fs::read_to_string(&report_path_buf).expect("read rust report");
+        let report: serde_json::Value =
+            serde_json::from_str(&report_text).expect("parse rust report as JSON");
+
+        assert_eq!(report["mode"], "dry-run", "report mode must be dry-run");
+        assert!(report["counts"].is_object(), "counts must be present");
+        assert!(report["warnings"].is_array(), "warnings must be present");
+        // The four-family counts the existing parser at commands/mod.rs:2708-2805
+        // reads. Any missing key here is parity drift; fail fast.
+        for key in [
+            "projectBriefsFound",
+            "clientProfilesFound",
+            "onboardingFlowsFound",
+            "employeeKpiNotesFound",
+        ] {
+            assert!(
+                report["counts"][key].is_number(),
+                "counts.{} must be a number; report did not produce a Node-compatible shape",
+                key
+            );
+        }
+
+        eprintln!(
+            "[vault-parity] real-vault diff: rust report written to {} ({} bytes); now run the Node script and `jq`-diff per RESEARCH.md §9 Tier 3.",
+            report_path,
+            report_text.len()
+        );
+
+        // Cleanup the test DB; KEEP the report file at the env-specified
+        // path so the human releaser can diff it.
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
