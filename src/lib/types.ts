@@ -808,6 +808,13 @@ export interface GitHubSyncReport {
   closedIssues: number;
 }
 
+export interface HermesDispatchResult {
+  command: string;
+  success: boolean;
+  output: string;
+  exitCode: number | null;
+}
+
 export interface TimeEntry {
   id: string;
   employeeId: string;

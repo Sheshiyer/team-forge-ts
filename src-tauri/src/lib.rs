@@ -161,6 +161,7 @@ pub fn run() {
             commands::test_slack_connection,
             commands::trigger_huly_sync,
             commands::trigger_slack_sync,
+            commands::dispatch_hermes_command,
             commands::sync_github_plans,
             commands::preview_huly_workspace_normalization,
             commands::apply_huly_workspace_normalization,

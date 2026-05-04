@@ -1599,6 +1599,198 @@ function AgentDetailRoute() {
   );
 }
 
+// ─── Hermes TG Dispatch ────────────────────────────────────────
+
+const HERMES_COMMANDS = [
+  { id: "status", label: "STATUS", description: "Check Hermes agent health and TG connection" },
+  { id: "skills", label: "SKILLS", description: "List available agent skills" },
+  { id: "standup", label: "STANDUP", description: "Trigger standup collection from Slack" },
+  { id: "digest", label: "DIGEST", description: "Generate and send KPI-linked standup digest" },
+] as const;
+
+function AgentsHermesRoute() {
+  const api = useInvoke();
+  const [dispatching, setDispatching] = useState<string | null>(null);
+  const [results, setResults] = useState<Array<{ command: string; output: string; success: boolean; timestamp: Date }>>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const dispatch = useCallback(async (command: string) => {
+    setDispatching(command);
+    setError(null);
+    try {
+      const result = await api.dispatchHermesCommand(command);
+      setResults(prev => [
+        { command: result.command, output: result.output, success: result.success, timestamp: new Date() },
+        ...prev,
+      ].slice(0, 20));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDispatching(null);
+    }
+  }, [api]);
+
+  return (
+    <div style={{ padding: "16px 0" }}>
+      <div style={hermesStyles.header}>
+        <div style={hermesStyles.statusDot} />
+        <span style={hermesStyles.headerLabel}>HERMES AGENT • TELEGRAM BRIDGE</span>
+      </div>
+
+      <div style={hermesStyles.commandGrid}>
+        {HERMES_COMMANDS.map(cmd => (
+          <button
+            key={cmd.id}
+            type="button"
+            style={{
+              ...hermesStyles.commandButton,
+              opacity: dispatching && dispatching !== cmd.id ? 0.5 : 1,
+            }}
+            disabled={dispatching !== null}
+            onClick={() => dispatch(cmd.id)}
+          >
+            <div style={hermesStyles.commandLabel}>
+              {dispatching === cmd.id ? "⏳" : "▸"} /{cmd.label}
+            </div>
+            <div style={hermesStyles.commandDesc}>{cmd.description}</div>
+          </button>
+        ))}
+      </div>
+
+      {error && (
+        <div style={hermesStyles.errorBox}>
+          {error}
+        </div>
+      )}
+
+      <div style={hermesStyles.outputSection}>
+        <div style={hermesStyles.outputHeader}>DISPATCH LOG</div>
+        {results.length === 0 && (
+          <div style={hermesStyles.emptyState}>
+            No commands dispatched yet. Click a command above to send it to Hermes via Telegram.
+          </div>
+        )}
+        {results.map((r, i) => (
+          <div key={`${r.command}-${i}`} style={hermesStyles.outputEntry}>
+            <div style={hermesStyles.outputMeta}>
+              <span style={{ color: r.success ? "var(--lcars-green)" : "var(--lcars-red)" }}>
+                {r.success ? "✓" : "✗"} /{r.command.toUpperCase()}
+              </span>
+              <span style={hermesStyles.outputTime}>
+                {r.timestamp.toLocaleTimeString()}
+              </span>
+            </div>
+            <pre style={hermesStyles.outputPre}>{r.output || "(no output)"}</pre>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const hermesStyles: Record<string, CSSProperties> = {
+  header: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 16,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    background: "var(--lcars-green)",
+  },
+  headerLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+    color: "var(--lcars-tan)",
+    letterSpacing: 1,
+  },
+  commandGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+    gap: 10,
+    marginBottom: 20,
+  },
+  commandButton: {
+    background: "rgba(255, 153, 0, 0.08)",
+    border: "1px solid var(--lcars-orange)",
+    borderRadius: 6,
+    padding: "12px 14px",
+    cursor: "pointer",
+    textAlign: "left" as const,
+    transition: "background 0.15s",
+  },
+  commandLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 13,
+    fontWeight: 700,
+    color: "var(--lcars-orange)",
+    marginBottom: 4,
+  },
+  commandDesc: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: "var(--lcars-lavender)",
+  },
+  errorBox: {
+    background: "rgba(204, 0, 0, 0.1)",
+    border: "1px solid var(--lcars-red)",
+    borderRadius: 4,
+    padding: "10px 12px",
+    marginBottom: 16,
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-red)",
+  },
+  outputSection: {
+    borderTop: "1px solid rgba(255,153,0,0.2)",
+    paddingTop: 12,
+  },
+  outputHeader: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-cyan)",
+    letterSpacing: 1.5,
+    marginBottom: 10,
+  },
+  emptyState: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-lavender)",
+    opacity: 0.6,
+    padding: "20px 0",
+  },
+  outputEntry: {
+    marginBottom: 12,
+    background: "rgba(0,0,0,0.15)",
+    borderRadius: 4,
+    padding: "10px 12px",
+    border: "1px solid rgba(255,153,0,0.1)",
+  },
+  outputMeta: {
+    display: "flex",
+    justifyContent: "space-between",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    marginBottom: 6,
+  },
+  outputTime: {
+    color: "var(--lcars-lavender)",
+    fontSize: 10,
+  },
+  outputPre: {
+    margin: 0,
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-tan)",
+    whiteSpace: "pre-wrap" as const,
+    wordBreak: "break-word" as const,
+    lineHeight: 1.5,
+  },
+};
+
 function Agents() {
   return (
     <div>
@@ -1651,6 +1843,16 @@ function Agents() {
         >
           APPROVALS
         </NavLink>
+        <NavLink
+          to="/agents/hermes"
+          end
+          style={({ isActive }) => ({
+            ...styles.subrouteLink,
+            ...(isActive ? styles.subrouteLinkActive : null),
+          })}
+        >
+          HERMES
+        </NavLink>
       </div>
 
       <Routes>
@@ -1659,6 +1861,7 @@ function Agents() {
         <Route path="org" element={<AgentsOrgRoute />} />
         <Route path="queue" element={<AgentsQueueRoute />} />
         <Route path="approvals" element={<AgentsApprovalsRoute />} />
+        <Route path="hermes" element={<AgentsHermesRoute />} />
         <Route path=":agentId" element={<AgentDetailRoute />} />
         <Route path="*" element={<Navigate to="runtime" replace />} />
       </Routes>

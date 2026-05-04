@@ -70,6 +70,7 @@ import type {
   CredentialSyncResult,
   CloudIntegrationSyncResult,
   GitHubSyncReport,
+  HermesDispatchResult,
   IdentityMapEntry,
   IdentityOverrideInput,
 } from "../lib/types";
@@ -251,6 +252,8 @@ const invokeApi = {
     invoke<CloudIntegrationSyncResult>("sync_cloud_integrations"),
   syncGitHubPlans: () =>
     invoke<GitHubSyncReport[]>("sync_github_plans"),
+  dispatchHermesCommand: (command: string, args?: string[]) =>
+    invoke<HermesDispatchResult>("dispatch_hermes_command", { command, args: args ?? [] }),
 };
 
 export function useInvoke() {

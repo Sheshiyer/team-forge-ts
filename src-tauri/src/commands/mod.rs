@@ -4503,6 +4503,93 @@ pub async fn trigger_slack_sync(db: State<'_, DbPool>) -> Result<String, String>
     ))
 }
 
+// ─── Hermes TG dispatch ────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HermesDispatchResult {
+    pub command: String,
+    pub success: bool,
+    pub output: String,
+    pub exit_code: Option<i32>,
+}
+
+#[tauri::command]
+pub async fn dispatch_hermes_command(
+    app_handle: tauri::AppHandle,
+    db: State<'_, DbPool>,
+    command: String,
+    args: Option<Vec<String>>,
+) -> Result<HermesDispatchResult, String> {
+    let pool = &db.0;
+
+    // Resolve Paperclip working directory to find the dispatcher script
+    let paperclip_working_dir = queries::get_setting(pool, "paperclip_working_dir")
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    let script_path = if let Some(ref dir) = paperclip_working_dir {
+        let dir = dir.trim();
+        if !dir.is_empty() {
+            PathBuf::from(dir).join("scripts/hermes-tg-dispatcher.sh")
+        } else {
+            return Err("Paperclip working directory not configured. Set it in Settings → Desktop Workspace.".to_string());
+        }
+    } else {
+        return Err("Paperclip working directory not configured. Set it in Settings → Desktop Workspace.".to_string());
+    };
+
+    if !script_path.exists() {
+        return Err(format!(
+            "Hermes dispatcher not found at: {}",
+            script_path.display()
+        ));
+    }
+
+    let cmd_trimmed = command.trim().to_string();
+    if cmd_trimmed.is_empty() {
+        return Err("Command is required".to_string());
+    }
+
+    let mut shell_args = vec![script_path.to_string_lossy().to_string(), cmd_trimmed.clone()];
+    if let Some(extra) = &args {
+        shell_args.extend(extra.iter().map(|a| a.to_string()));
+    }
+
+    let working_dir = paperclip_working_dir
+        .as_ref()
+        .map(|d| PathBuf::from(d.trim()))
+        .filter(|p| p.exists());
+
+    let mut cmd = app_handle.shell().command("bash");
+    cmd = cmd.args(&shell_args);
+    if let Some(dir) = working_dir {
+        cmd = cmd.current_dir(dir);
+    }
+
+    let output = cmd
+        .output()
+        .await
+        .map_err(|error| format!("dispatch hermes command: {error}"))?;
+
+    let stdout = decode_shell_output(&output.stdout);
+    let stderr = decode_shell_output(&output.stderr);
+    let combined = if stderr.is_empty() {
+        stdout.clone()
+    } else if stdout.is_empty() {
+        stderr.clone()
+    } else {
+        format!("{stdout}\n{stderr}")
+    };
+
+    Ok(HermesDispatchResult {
+        command: cmd_trimmed,
+        success: output.status.success(),
+        output: combined.trim().to_string(),
+        exit_code: output.status.code(),
+    })
+}
+
 // ─── Background sync ───────────────────────────────────────────
 
 #[tauri::command]
