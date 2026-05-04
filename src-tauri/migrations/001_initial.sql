@@ -547,3 +547,27 @@ CREATE TABLE IF NOT EXISTS manual_holidays (
 
 CREATE INDEX IF NOT EXISTS idx_manual_holidays_date
     ON manual_holidays(date);
+
+-- ─── Entity Relations (knowledge graph edges) ──────────────────
+
+CREATE TABLE IF NOT EXISTS entity_relations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    relation_type TEXT NOT NULL,       -- blocks, relates_to, duplicates, creates_resource, documents_in, involves_device, part_of_sprint, client_assignment
+    source_type TEXT NOT NULL,         -- issue, project, sprint, client, device, knowledge_article
+    source_id TEXT NOT NULL,           -- identifier within source system
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    source_system TEXT NOT NULL DEFAULT 'teamforge',  -- huly, github, vault, teamforge
+    metadata TEXT,                     -- JSON blob for extra context
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_relations_source
+    ON entity_relations(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_entity_relations_target
+    ON entity_relations(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_entity_relations_type
+    ON entity_relations(relation_type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_relations_unique_edge
+    ON entity_relations(relation_type, source_type, source_id, target_type, target_id);

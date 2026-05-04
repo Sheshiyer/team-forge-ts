@@ -4508,6 +4508,53 @@ pub async fn trigger_slack_sync(db: State<'_, DbPool>) -> Result<String, String>
     ))
 }
 
+// ─── Entity Relations ──────────────────────────────────────────
+
+#[tauri::command]
+pub async fn upsert_relation(
+    db: State<'_, DbPool>,
+    input: EntityRelationInput,
+) -> Result<EntityRelation, String> {
+    let pool = &db.0;
+    queries::upsert_entity_relation(pool, &input)
+        .await
+        .map_err(|e| format!("upsert relation: {e}"))
+}
+
+#[tauri::command]
+pub async fn get_entity_relations(
+    db: State<'_, DbPool>,
+    entity_type: String,
+    entity_id: String,
+) -> Result<Vec<EntityRelation>, String> {
+    let pool = &db.0;
+    queries::get_relations_for_entity(pool, &entity_type, &entity_id)
+        .await
+        .map_err(|e| format!("get relations: {e}"))
+}
+
+#[tauri::command]
+pub async fn get_relations_by_type(
+    db: State<'_, DbPool>,
+    relation_type: String,
+) -> Result<Vec<EntityRelation>, String> {
+    let pool = &db.0;
+    queries::get_relations_by_type(pool, &relation_type)
+        .await
+        .map_err(|e| format!("get relations by type: {e}"))
+}
+
+#[tauri::command]
+pub async fn delete_relation(
+    db: State<'_, DbPool>,
+    id: i64,
+) -> Result<bool, String> {
+    let pool = &db.0;
+    queries::delete_entity_relation(pool, id)
+        .await
+        .map_err(|e| format!("delete relation: {e}"))
+}
+
 // ─── Hermes TG dispatch ────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

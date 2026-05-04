@@ -815,6 +815,29 @@ export interface HermesDispatchResult {
   exitCode: number | null;
 }
 
+export interface EntityRelation {
+  id: number;
+  relationType: string;
+  sourceType: string;
+  sourceId: string;
+  targetType: string;
+  targetId: string;
+  sourceSystem: string;
+  metadata: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EntityRelationInput {
+  relationType: string;
+  sourceType: string;
+  sourceId: string;
+  targetType: string;
+  targetId: string;
+  sourceSystem?: string;
+  metadata?: string;
+}
+
 export interface TimeEntry {
   id: string;
   employeeId: string;

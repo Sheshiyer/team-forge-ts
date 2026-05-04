@@ -181,98 +181,6 @@ pub async fn get_employee_by_id(
         .await
 }
 
-pub async fn upsert_employee_kpi_snapshot(
-    pool: &SqlitePool,
-    snapshot: &EmployeeKpiSnapshotRow,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO employee_kpi_snapshots (
-            id,
-            employee_id,
-            member_id,
-            title,
-            role_template,
-            role_template_file,
-            kpi_version,
-            last_reviewed,
-            reports_to,
-            tags_json,
-            source_file_path,
-            source_relative_path,
-            source_last_modified_at,
-            role_scope_markdown,
-            monthly_kpis_json,
-            quarterly_milestones_json,
-            yearly_milestones_json,
-            cross_role_dependencies_json,
-            evidence_sources_json,
-            compensation_milestones_json,
-            gap_flags_json,
-            synthesis_review_markdown,
-            body_markdown,
-            imported_at,
-            updated_at
-        )
-        VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-            ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-            ?21, ?22, ?23, ?24, ?25
-        )
-        ON CONFLICT(employee_id, kpi_version) DO UPDATE SET
-            id = excluded.id,
-            member_id = excluded.member_id,
-            title = excluded.title,
-            role_template = excluded.role_template,
-            role_template_file = excluded.role_template_file,
-            last_reviewed = excluded.last_reviewed,
-            reports_to = excluded.reports_to,
-            tags_json = excluded.tags_json,
-            source_file_path = excluded.source_file_path,
-            source_relative_path = excluded.source_relative_path,
-            source_last_modified_at = excluded.source_last_modified_at,
-            role_scope_markdown = excluded.role_scope_markdown,
-            monthly_kpis_json = excluded.monthly_kpis_json,
-            quarterly_milestones_json = excluded.quarterly_milestones_json,
-            yearly_milestones_json = excluded.yearly_milestones_json,
-            cross_role_dependencies_json = excluded.cross_role_dependencies_json,
-            evidence_sources_json = excluded.evidence_sources_json,
-            compensation_milestones_json = excluded.compensation_milestones_json,
-            gap_flags_json = excluded.gap_flags_json,
-            synthesis_review_markdown = excluded.synthesis_review_markdown,
-            body_markdown = excluded.body_markdown,
-            imported_at = excluded.imported_at,
-            updated_at = datetime('now')",
-    )
-    .bind(&snapshot.id)
-    .bind(&snapshot.employee_id)
-    .bind(&snapshot.member_id)
-    .bind(&snapshot.title)
-    .bind(&snapshot.role_template)
-    .bind(&snapshot.role_template_file)
-    .bind(&snapshot.kpi_version)
-    .bind(&snapshot.last_reviewed)
-    .bind(&snapshot.reports_to)
-    .bind(&snapshot.tags_json)
-    .bind(&snapshot.source_file_path)
-    .bind(&snapshot.source_relative_path)
-    .bind(&snapshot.source_last_modified_at)
-    .bind(&snapshot.role_scope_markdown)
-    .bind(&snapshot.monthly_kpis_json)
-    .bind(&snapshot.quarterly_milestones_json)
-    .bind(&snapshot.yearly_milestones_json)
-    .bind(&snapshot.cross_role_dependencies_json)
-    .bind(&snapshot.evidence_sources_json)
-    .bind(&snapshot.compensation_milestones_json)
-    .bind(&snapshot.gap_flags_json)
-    .bind(&snapshot.synthesis_review_markdown)
-    .bind(&snapshot.body_markdown)
-    .bind(&snapshot.imported_at)
-    .bind(&snapshot.updated_at)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 pub async fn get_latest_employee_kpi_snapshot(
     pool: &SqlitePool,
     employee_id: &str,
@@ -476,23 +384,6 @@ pub async fn clear_competing_identity_links(
     .execute(pool)
     .await?;
     Ok(())
-}
-
-pub async fn get_identity_external_ids_for_employee(
-    pool: &SqlitePool,
-    source: &str,
-    employee_id: &str,
-) -> Result<Vec<String>, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT external_id
-         FROM identity_map
-         WHERE source = ?1 AND employee_id = ?2 AND resolution_status = 'linked'
-         ORDER BY external_id ASC",
-    )
-    .bind(source)
-    .bind(employee_id)
-    .fetch_all(pool)
-    .await
 }
 
 pub async fn seed_identity_map_from_employees(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -1652,41 +1543,6 @@ pub async fn upsert_github_check_run(
     Ok(())
 }
 
-pub async fn get_github_issues_for_project(
-    pool: &SqlitePool,
-    repo: &str,
-    milestone_number: Option<i64>,
-) -> Result<Vec<GithubIssueCache>, sqlx::Error> {
-    if let Some(number) = milestone_number {
-        sqlx::query_as::<_, GithubIssueCache>(
-            "SELECT * FROM github_issues
-             WHERE repo = ?1 AND milestone_number = ?2
-             ORDER BY updated_at DESC, number DESC",
-        )
-        .bind(repo)
-        .bind(number)
-        .fetch_all(pool)
-        .await
-    } else {
-        sqlx::query_as::<_, GithubIssueCache>(
-            "SELECT * FROM github_issues
-             WHERE repo = ?1 AND milestone_number IS NULL
-             ORDER BY updated_at DESC, number DESC",
-        )
-        .bind(repo)
-        .fetch_all(pool)
-        .await
-    }
-}
-
-// ─── Presence ────────────────────────────────────────────────────
-
-pub async fn get_presence(pool: &SqlitePool) -> Result<Vec<Presence>, sqlx::Error> {
-    sqlx::query_as::<_, Presence>("SELECT * FROM presence")
-        .fetch_all(pool)
-        .await
-}
-
 pub async fn update_presence(pool: &SqlitePool, p: &Presence) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO presence (employee_id, clockify_timer_active, clockify_timer_project, clockify_timer_start, huly_last_seen, updated_at)
@@ -2118,20 +1974,6 @@ pub async fn insert_huly_issue_activity(
     Ok(())
 }
 
-pub async fn get_huly_issue_activities(
-    pool: &SqlitePool,
-    employee_id: &str,
-    since: &str,
-) -> Result<Vec<HulyIssueActivity>, sqlx::Error> {
-    sqlx::query_as::<_, HulyIssueActivity>(
-        "SELECT * FROM huly_issue_activity WHERE employee_id = ?1 AND occurred_at >= ?2 ORDER BY occurred_at DESC"
-    )
-    .bind(employee_id)
-    .bind(since)
-    .fetch_all(pool)
-    .await
-}
-
 // ─── Canonical Ops Events ───────────────────────────────────────
 
 pub async fn upsert_ops_event(pool: &SqlitePool, event: &OpsEvent) -> Result<(), sqlx::Error> {
@@ -2444,6 +2286,78 @@ fn parse_sync_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
                 .ok()
                 .map(|value| value.and_utc())
         })
+}
+
+// ─── Entity Relations ──────────────────────────────────────────
+
+pub async fn upsert_entity_relation(
+    pool: &SqlitePool,
+    input: &EntityRelationInput,
+) -> Result<EntityRelation, sqlx::Error> {
+    let source_system = input.source_system.as_deref().unwrap_or("teamforge");
+
+    sqlx::query_as::<_, EntityRelation>(
+        r#"
+        INSERT INTO entity_relations (relation_type, source_type, source_id, target_type, target_id, source_system, metadata)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        ON CONFLICT (relation_type, source_type, source_id, target_type, target_id)
+        DO UPDATE SET metadata = COALESCE(excluded.metadata, entity_relations.metadata),
+                      source_system = excluded.source_system,
+                      updated_at = datetime('now')
+        RETURNING *
+        "#,
+    )
+    .bind(&input.relation_type)
+    .bind(&input.source_type)
+    .bind(&input.source_id)
+    .bind(&input.target_type)
+    .bind(&input.target_id)
+    .bind(source_system)
+    .bind(&input.metadata)
+    .fetch_one(pool)
+    .await
+}
+
+pub async fn get_relations_for_entity(
+    pool: &SqlitePool,
+    entity_type: &str,
+    entity_id: &str,
+) -> Result<Vec<EntityRelation>, sqlx::Error> {
+    sqlx::query_as::<_, EntityRelation>(
+        r#"
+        SELECT * FROM entity_relations
+        WHERE (source_type = ?1 AND source_id = ?2)
+           OR (target_type = ?1 AND target_id = ?2)
+        ORDER BY created_at DESC
+        "#,
+    )
+    .bind(entity_type)
+    .bind(entity_id)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_relations_by_type(
+    pool: &SqlitePool,
+    relation_type: &str,
+) -> Result<Vec<EntityRelation>, sqlx::Error> {
+    sqlx::query_as::<_, EntityRelation>(
+        "SELECT * FROM entity_relations WHERE relation_type = ?1 ORDER BY created_at DESC",
+    )
+    .bind(relation_type)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn delete_entity_relation(
+    pool: &SqlitePool,
+    id: i64,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM entity_relations WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 #[cfg(test)]

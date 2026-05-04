@@ -71,6 +71,8 @@ import type {
   CloudIntegrationSyncResult,
   GitHubSyncReport,
   HermesDispatchResult,
+  EntityRelation,
+  EntityRelationInput,
   IdentityMapEntry,
   IdentityOverrideInput,
 } from "../lib/types";
@@ -254,6 +256,14 @@ const invokeApi = {
     invoke<GitHubSyncReport[]>("sync_github_plans"),
   dispatchHermesCommand: (command: string, args?: string[]) =>
     invoke<HermesDispatchResult>("dispatch_hermes_command", { command, args: args ?? [] }),
+  upsertRelation: (input: EntityRelationInput) =>
+    invoke<EntityRelation>("upsert_relation", { input }),
+  getEntityRelations: (entityType: string, entityId: string) =>
+    invoke<EntityRelation[]>("get_entity_relations", { entityType, entityId }),
+  getRelationsByType: (relationType: string) =>
+    invoke<EntityRelation[]>("get_relations_by_type", { relationType }),
+  deleteRelation: (id: number) =>
+    invoke<boolean>("delete_relation", { id }),
 };
 
 export function useInvoke() {

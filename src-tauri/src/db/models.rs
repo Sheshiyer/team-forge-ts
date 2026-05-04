@@ -408,18 +408,6 @@ pub struct HulyIssueActivity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
-pub struct HulyDocumentActivity {
-    pub id: Option<i64>,
-    pub employee_id: String,
-    pub huly_doc_id: String,
-    pub doc_title: Option<String>,
-    pub action: String,
-    pub occurred_at: String,
-    pub synced_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-#[serde(rename_all = "camelCase")]
 pub struct SlackMessageActivity {
     pub id: Option<i64>,
     pub message_key: String,
@@ -1093,4 +1081,33 @@ pub struct EmployeeSummaryView {
     pub vault_profile: Option<VaultTeamProfileView>,
     pub kpi_status: EmployeeKpiStatusView,
     pub kpi_snapshot: Option<EmployeeKpiSnapshotView>,
+}
+
+// ─── Entity Relations (knowledge graph) ───────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityRelation {
+    pub id: i64,
+    pub relation_type: String,
+    pub source_type: String,
+    pub source_id: String,
+    pub target_type: String,
+    pub target_id: String,
+    pub source_system: String,
+    pub metadata: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityRelationInput {
+    pub relation_type: String,
+    pub source_type: String,
+    pub source_id: String,
+    pub target_type: String,
+    pub target_id: String,
+    pub source_system: Option<String>,
+    pub metadata: Option<String>,
 }
