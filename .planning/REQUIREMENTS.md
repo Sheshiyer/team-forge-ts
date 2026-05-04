@@ -9,7 +9,7 @@ The 8 open GitHub issues, grouped by category. Each requirement maps to one road
 
 ### Founder Sync (the local-vault → Cloudflare-Worker → app data path)
 
-- [ ] **SYNC-01**: TeamForge.app runs founder vault sync end-to-end on a clean Mac without any user-installed Node on PATH. ([#45](https://github.com/Sheshiyer/team-forge-ts/issues/45))
+- [x] **SYNC-01**: TeamForge.app runs founder vault sync end-to-end on a clean Mac without any user-installed Node on PATH. ([#45](https://github.com/Sheshiyer/team-forge-ts/issues/45))
   - Either a native Rust importer or a packaged Node sidecar; Settings-based UX preserved.
   - Canonical parity behavior preserved for: project briefs, client profiles, onboarding flows, employee KPI notes.
   - Local Workspace status model preserved.

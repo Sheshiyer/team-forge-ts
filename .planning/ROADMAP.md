@@ -42,7 +42,7 @@ v0.2 is a **closeout milestone** — it does not add new core integrations. It (
 
 Plans:
 - [x] 01-01-PLAN.md — Wave 1: vault module rename, gray_matter dep, vault_sync_runtime dual-path setting, parity.rs skeleton, fixture vault skeleton
-- [ ] 01-02-PLAN.md — Wave 2: native importer implementation (parsers, Worker writes, KPI SQLite, ParityReport, 10 inline tests)
+- [x] 01-02-PLAN.md — Wave 2: native importer implementation (parsers, Worker writes, KPI SQLite, ParityReport, 10 inline tests)
 - [ ] 01-03-PLAN.md — Wave 3: verification + release (Tier 2 clean-PATH .app run, Tier 3 Node-vs-Rust diff, CHANGELOG v0.2.0, version bumps to 0.2.0)
 
 ### Phase 2: Vault Parity Data Completion
