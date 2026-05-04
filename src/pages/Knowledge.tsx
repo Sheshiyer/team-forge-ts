@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useInvoke } from "../hooks/useInvoke";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
+import type { VaultEntry } from "../lib/types";
 
 interface SkillEntry {
   id: string;
@@ -59,10 +60,117 @@ function rendererColor(renderer: string): string {
   }
 }
 
+function VaultBrowser() {
+  const api = useInvoke();
+  const [entries, setEntries] = useState<VaultEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fileContent, setFileContent] = useState<string | null>(null);
+  const [viewingFile, setViewingFile] = useState<string | null>(null);
+  const [breadcrumbs, setBreadcrumbs] = useState<string[]>([]);
+
+  const loadDir = useCallback(async (dirPath: string) => {
+    setLoading(true);
+    setError(null);
+    setFileContent(null);
+    setViewingFile(null);
+    try {
+      const result = await api.listVaultEntries(dirPath || undefined);
+      setEntries(result);
+      setBreadcrumbs(dirPath ? dirPath.split("/") : []);
+    } catch (e: unknown) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [api]);
+
+  useEffect(() => { loadDir(""); }, [loadDir]);
+
+  const openFile = async (entry: VaultEntry) => {
+    if (entry.isDir) {
+      loadDir(entry.relativePath);
+    } else if (entry.name.endsWith(".md") || entry.name.endsWith(".yaml") || entry.name.endsWith(".yml") || entry.name.endsWith(".txt") || entry.name.endsWith(".json")) {
+      setViewingFile(entry.relativePath);
+      try {
+        const content = await api.readVaultFile(entry.relativePath);
+        setFileContent(content);
+      } catch (e: unknown) {
+        setFileContent(`Error reading file: ${e}`);
+      }
+    } else {
+      api.openVaultRelativePath(entry.relativePath);
+    }
+  };
+
+  const navigateBreadcrumb = (index: number) => {
+    if (index < 0) {
+      loadDir("");
+    } else {
+      const target = breadcrumbs.slice(0, index + 1).join("/");
+      loadDir(target);
+    }
+  };
+
+  return (
+    <div>
+      {/* Breadcrumb */}
+      <div style={vaultStyles.breadcrumbRow}>
+        <button type="button" style={vaultStyles.breadcrumbBtn} onClick={() => navigateBreadcrumb(-1)}>
+          VAULT ROOT
+        </button>
+        {breadcrumbs.map((seg, i) => (
+          <span key={`${seg}-${i}`}>
+            <span style={vaultStyles.breadcrumbSep}>/</span>
+            <button type="button" style={vaultStyles.breadcrumbBtn} onClick={() => navigateBreadcrumb(i)}>
+              {seg.toUpperCase()}
+            </button>
+          </span>
+        ))}
+      </div>
+
+      {error && <div style={vaultStyles.errorText}>{error}</div>}
+      {loading && <div style={vaultStyles.loadingText}>SCANNING…</div>}
+
+      {viewingFile ? (
+        <div style={vaultStyles.fileViewer}>
+          <div style={vaultStyles.fileViewerHeader}>
+            <span style={vaultStyles.fileViewerPath}>{viewingFile}</span>
+            <button type="button" style={vaultStyles.closeBtn} onClick={() => { setFileContent(null); setViewingFile(null); }}>
+              ✕ CLOSE
+            </button>
+          </div>
+          <pre style={vaultStyles.fileContent}>{fileContent || "Loading..."}</pre>
+        </div>
+      ) : (
+        <div style={vaultStyles.entryGrid}>
+          {entries.map((entry) => (
+            <button
+              key={entry.relativePath}
+              type="button"
+              style={entry.isDir ? vaultStyles.dirEntry : vaultStyles.fileEntry}
+              onClick={() => openFile(entry)}
+            >
+              <span style={vaultStyles.entryIcon}>{entry.isDir ? "📁" : "📄"}</span>
+              <span style={vaultStyles.entryName}>{entry.name}</span>
+              {!entry.isDir && entry.sizeBytes > 0 && (
+                <span style={vaultStyles.entrySize}>
+                  {entry.sizeBytes < 1024 ? `${entry.sizeBytes}B` : `${Math.round(entry.sizeBytes / 1024)}KB`}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Knowledge() {
   const api = useInvoke();
   const [filter, setFilter] = useState<string>("all");
   const [openingPath, setOpeningPath] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"skills" | "vault">("skills");
 
   const filtered = filter === "all"
     ? SKILL_REGISTRY
@@ -84,9 +192,31 @@ function Knowledge() {
 
   return (
     <div>
-      <h1 style={styles.pageTitle}>SKILL REGISTRY</h1>
+      <h1 style={styles.pageTitle}>KNOWLEDGE</h1>
       <div style={styles.pageTitleBar} />
 
+      {/* Tab bar */}
+      <div style={styles.filterRow}>
+        <button
+          type="button"
+          onClick={() => setActiveTab("skills")}
+          style={{ ...styles.filterBtn, ...(activeTab === "skills" ? styles.filterBtnActive : {}) }}
+        >
+          SKILL REGISTRY
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("vault")}
+          style={{ ...styles.filterBtn, ...(activeTab === "vault" ? styles.filterBtnActive : {}) }}
+        >
+          VAULT BROWSER
+        </button>
+      </div>
+
+      {activeTab === "vault" ? (
+        <VaultBrowser />
+      ) : (
+      <>
       {/* Summary metrics */}
       <div style={styles.metricsRow}>
         <div style={styles.metricPill}>
@@ -162,6 +292,8 @@ function Knowledge() {
           </div>
         ))}
       </div>
+      </>
+      )}
     </div>
   );
 }
@@ -287,6 +419,129 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     alignSelf: "flex-start",
     transition: "background-color 0.15s",
+  },
+};
+
+const vaultStyles: Record<string, React.CSSProperties> = {
+  breadcrumbRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 2,
+    marginBottom: 16,
+    flexWrap: "wrap" as const,
+  },
+  breadcrumbBtn: {
+    background: "transparent",
+    border: "none",
+    color: "var(--lcars-orange)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    letterSpacing: "0.5px",
+    cursor: "pointer",
+    padding: "4px 6px",
+  },
+  breadcrumbSep: {
+    color: "var(--lcars-lavender)",
+    fontSize: 11,
+    margin: "0 2px",
+  },
+  errorText: {
+    color: "var(--lcars-red)",
+    fontSize: 12,
+    padding: "8px 0",
+  },
+  loadingText: {
+    color: "var(--lcars-yellow)",
+    fontSize: 11,
+    fontFamily: "'Orbitron', sans-serif",
+    letterSpacing: "1px",
+  },
+  entryGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+    gap: 8,
+  },
+  dirEntry: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "10px 14px",
+    background: "linear-gradient(180deg, rgba(23,24,44,0.92), rgba(11,12,24,0.96))",
+    border: "1px solid rgba(153,153,204,0.2)",
+    borderLeft: "4px solid var(--lcars-cyan)",
+    borderRadius: "0 6px 6px 0",
+    cursor: "pointer",
+    textAlign: "left" as const,
+  },
+  fileEntry: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "8px 14px",
+    background: "linear-gradient(180deg, rgba(23,24,44,0.85), rgba(11,12,24,0.9))",
+    border: "1px solid rgba(153,153,204,0.1)",
+    borderLeft: "3px solid var(--lcars-tan)",
+    borderRadius: "0 4px 4px 0",
+    cursor: "pointer",
+    textAlign: "left" as const,
+  },
+  entryIcon: { fontSize: 14, flexShrink: 0 },
+  entryName: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-text, #f0e0c0)",
+    flex: 1,
+    overflow: "hidden" as const,
+    textOverflow: "ellipsis" as const,
+    whiteSpace: "nowrap" as const,
+  },
+  entrySize: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9,
+    color: "var(--lcars-lavender)",
+    flexShrink: 0,
+  },
+  fileViewer: {
+    border: "1px solid rgba(153,153,204,0.2)",
+    borderRadius: 6,
+    overflow: "hidden",
+  },
+  fileViewerHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: "8px 14px",
+    background: "rgba(23,24,44,0.95)",
+    borderBottom: "1px solid rgba(153,153,204,0.15)",
+  },
+  fileViewerPath: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: "var(--lcars-tan)",
+  },
+  closeBtn: {
+    background: "transparent",
+    border: "1px solid var(--lcars-red)",
+    color: "var(--lcars-red)",
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    letterSpacing: "0.5px",
+    padding: "3px 8px",
+    borderRadius: 3,
+    cursor: "pointer",
+  },
+  fileContent: {
+    padding: "12px 16px",
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-text, #f0e0c0)",
+    lineHeight: 1.5,
+    maxHeight: 500,
+    overflow: "auto",
+    whiteSpace: "pre-wrap" as const,
+    wordBreak: "break-word" as const,
+    background: "rgba(5,5,15,0.9)",
+    margin: 0,
   },
 };
 

@@ -129,6 +129,8 @@ pub fn run() {
             commands::get_paperclip_approvals,
             commands::resolve_paperclip_approval,
             commands::open_vault_relative_path,
+            commands::list_vault_entries,
+            commands::read_vault_file,
             commands::get_local_workspace_status,
             commands::sync_local_vault_to_teamforge,
             commands::get_teamforge_projects,

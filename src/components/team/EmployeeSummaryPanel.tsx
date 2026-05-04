@@ -671,6 +671,33 @@ export default function EmployeeSummaryPanel({
           </div>
         </>
       ) : null}
+
+      {/* Cross-system activity timeline */}
+      {summary?.recentActivity && summary.recentActivity.length > 0 && (
+        <>
+          <div style={styles.sectionDivider} />
+          <h2 style={styles.sectionTitle}>ACTIVITY TIMELINE</h2>
+          <div style={styles.sectionCaption}>CROSS-SYSTEM · LAST 14 DAYS</div>
+          <div style={styles.timelineWrap}>
+            {summary.recentActivity.map((item, i) => (
+              <div key={`${item.occurredAt}-${i}`} style={styles.timelineRow}>
+                <span style={{
+                  ...styles.timelineBadge,
+                  background: item.source === "clockify" ? "var(--lcars-green)"
+                    : item.source === "slack" ? "var(--lcars-cyan)"
+                    : item.source === "huly" ? "var(--lcars-orange)"
+                    : "var(--lcars-lavender)",
+                }}>
+                  {item.source.toUpperCase()}
+                </span>
+                <span style={styles.timelineAction}>{item.action}</span>
+                <span style={styles.timelineDetail}>{item.detail || "--"}</span>
+                <span style={styles.timelineTime}>{formatDateTime(item.occurredAt)}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -958,5 +985,51 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11,
     lineHeight: 1.5,
     marginTop: 4,
+  },
+  timelineWrap: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 6,
+    marginTop: 8,
+  },
+  timelineRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "4px 0",
+    borderBottom: "1px solid var(--border-subtle)",
+  },
+  timelineBadge: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 8,
+    fontWeight: 700,
+    color: "#000",
+    padding: "2px 6px",
+    borderRadius: 3,
+    letterSpacing: "0.5px",
+    flexShrink: 0,
+    minWidth: 52,
+    textAlign: "center" as const,
+  },
+  timelineAction: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-tan)",
+    flexShrink: 0,
+    minWidth: 72,
+  },
+  timelineDetail: {
+    fontSize: 11,
+    color: "var(--text-secondary)",
+    flex: 1,
+    overflow: "hidden" as const,
+    textOverflow: "ellipsis" as const,
+    whiteSpace: "nowrap" as const,
+  },
+  timelineTime: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: "var(--lcars-lavender)",
+    flexShrink: 0,
   },
 };

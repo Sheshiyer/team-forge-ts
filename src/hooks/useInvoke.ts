@@ -75,6 +75,7 @@ import type {
   EntityRelationInput,
   IdentityMapEntry,
   IdentityOverrideInput,
+  VaultEntry,
 } from "../lib/types";
 
 const invokeApi = {
@@ -148,6 +149,10 @@ const invokeApi = {
     }),
   openVaultRelativePath: (relativePath: string) =>
     invoke<string>("open_vault_relative_path", { relativePath }),
+  listVaultEntries: (relativePath?: string) =>
+    invoke<VaultEntry[]>("list_vault_entries", { relativePath: relativePath || null }),
+  readVaultFile: (relativePath: string) =>
+    invoke<string>("read_vault_file", { relativePath }),
   triggerSync: () => invoke<string>("trigger_sync"),
   getOverview: () => invoke<OverviewData>("get_overview"),
   getFounderCommandCenter: () =>

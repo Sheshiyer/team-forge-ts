@@ -1081,6 +1081,7 @@ pub struct EmployeeSummaryView {
     pub vault_profile: Option<VaultTeamProfileView>,
     pub kpi_status: EmployeeKpiStatusView,
     pub kpi_snapshot: Option<EmployeeKpiSnapshotView>,
+    pub recent_activity: Vec<ActivityItem>,
 }
 
 // ─── Entity Relations (knowledge graph) ───────────────────────────

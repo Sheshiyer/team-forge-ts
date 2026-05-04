@@ -838,6 +838,13 @@ export interface EntityRelationInput {
   metadata?: string;
 }
 
+export interface VaultEntry {
+  name: string;
+  relativePath: string;
+  isDir: boolean;
+  sizeBytes: number;
+}
+
 export interface TimeEntry {
   id: string;
   employeeId: string;
@@ -1142,6 +1149,7 @@ export interface EmployeeSummaryView {
   vaultProfile: VaultTeamProfileView | null;
   kpiStatus: EmployeeKpiStatusView;
   kpiSnapshot: EmployeeKpiSnapshotView | null;
+  recentActivity: ActivityItem[];
 }
 
 // ── Naming convention (#13) ──────────────────────────────────────

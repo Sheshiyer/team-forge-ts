@@ -93,10 +93,26 @@ function App() {
   const [syncActive, setSyncActive] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paperclipAlive, setPaperclipAlive] = useState<boolean | null>(null);
   const isTightShell = viewportWidth < 1240;
   const isCompactShell = viewportWidth < 1080;
   const sidebarWidth = isCompactShell ? 208 : isTightShell ? 224 : 240;
   const visiblePresence = teamPresence.slice(0, isCompactShell ? 6 : 8);
+
+  // Paperclip heartbeat polling every 15s
+  useEffect(() => {
+    const checkHeartbeat = async () => {
+      try {
+        await invoke<unknown>("probe_paperclip_api");
+        setPaperclipAlive(true);
+      } catch {
+        setPaperclipAlive(false);
+      }
+    };
+    const timer = setTimeout(checkHeartbeat, 3000);
+    const interval = setInterval(checkHeartbeat, 15000);
+    return () => { clearTimeout(timer); clearInterval(interval); };
+  }, []);
 
   // Cloud credential sync on launch (enabled by default, opt-out via settings)
   useEffect(() => {
@@ -488,6 +504,10 @@ function App() {
             </span>
           )}
         </div>
+        <div style={styles.sidebarHeartbeat} title={paperclipAlive === null ? "Checking Paperclip..." : paperclipAlive ? "Paperclip connected" : "Paperclip offline"}>
+          <span style={{ ...styles.heartbeatDot, background: paperclipAlive === null ? "var(--lcars-yellow)" : paperclipAlive ? "var(--lcars-green)" : "var(--lcars-red)" }} />
+          <span style={styles.heartbeatLabel}>PAPERCLIP</span>
+        </div>
 
         {/* Bottom bar */}
         <div style={styles.sidebarBottomBar} />
@@ -732,6 +752,25 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid var(--lcars-green)",
     borderRadius: "0 6px 6px 0",
     animation: "lcars-pulse 2s ease-in-out infinite",
+  },
+  sidebarHeartbeat: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "4px 16px",
+    marginTop: 2,
+  },
+  heartbeatDot: {
+    width: 6,
+    height: 6,
+    borderRadius: "50%",
+    flexShrink: 0,
+  },
+  heartbeatLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 9,
+    color: "var(--lcars-lavender)",
+    letterSpacing: "0.5px",
   },
   sidebarBottomBar: {
     height: 32,

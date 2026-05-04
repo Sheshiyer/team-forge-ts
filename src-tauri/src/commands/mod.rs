@@ -2643,6 +2643,91 @@ pub async fn open_vault_relative_path(
     Ok(canonical_string)
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultEntry {
+    pub name: String,
+    pub relative_path: String,
+    pub is_dir: bool,
+    pub size_bytes: u64,
+}
+
+#[tauri::command]
+pub async fn list_vault_entries(
+    db: State<'_, DbPool>,
+    relative_path: Option<String>,
+) -> Result<Vec<VaultEntry>, String> {
+    let vault_root = vault::resolve_local_vault_root(&db.0).await?;
+    let base = match relative_path.as_deref() {
+        Some(p) if !p.is_empty() => {
+            let sanitized = sanitize_vault_relative_path(p)?;
+            vault_root.join(sanitized)
+        }
+        _ => vault_root.clone(),
+    };
+    if !base.is_dir() {
+        return Err(format!("Not a directory: {}", base.display()));
+    }
+    let canonical_root = std::fs::canonicalize(&vault_root)
+        .map_err(|e| format!("resolve vault root: {e}"))?;
+    let canonical_base = std::fs::canonicalize(&base)
+        .map_err(|e| format!("resolve path: {e}"))?;
+    if !canonical_base.starts_with(&canonical_root) {
+        return Err("Path must stay inside vault root.".to_string());
+    }
+
+    let mut entries: Vec<VaultEntry> = Vec::new();
+    let dir = std::fs::read_dir(&canonical_base)
+        .map_err(|e| format!("read directory: {e}"))?;
+    for entry in dir.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name == "node_modules" || name == "dist" {
+            continue;
+        }
+        let meta = entry.metadata().unwrap_or_else(|_| std::fs::metadata(entry.path()).unwrap());
+        let rel = entry
+            .path()
+            .strip_prefix(&canonical_root)
+            .unwrap_or(entry.path().as_path())
+            .to_string_lossy()
+            .to_string();
+        entries.push(VaultEntry {
+            name,
+            relative_path: rel,
+            is_dir: meta.is_dir(),
+            size_bytes: meta.len(),
+        });
+    }
+    entries.sort_by(|a, b| {
+        b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(entries)
+}
+
+#[tauri::command]
+pub async fn read_vault_file(
+    db: State<'_, DbPool>,
+    relative_path: String,
+) -> Result<String, String> {
+    let vault_root = vault::resolve_local_vault_root(&db.0).await?;
+    let sanitized = sanitize_vault_relative_path(&relative_path)?;
+    let target = vault_root.join(&sanitized);
+    let canonical_root = std::fs::canonicalize(&vault_root)
+        .map_err(|e| format!("resolve vault root: {e}"))?;
+    let canonical_target = std::fs::canonicalize(&target)
+        .map_err(|e| format!("resolve file: {e}"))?;
+    if !canonical_target.starts_with(&canonical_root) {
+        return Err("Path must stay inside vault root.".to_string());
+    }
+    if canonical_target.is_dir() {
+        return Err("Path is a directory, not a file.".to_string());
+    }
+    let content = std::fs::read_to_string(&canonical_target)
+        .map_err(|e| format!("read file: {e}"))?;
+    // Truncate to 64KB for safety
+    Ok(content.chars().take(65536).collect())
+}
+
 #[tauri::command]
 pub async fn get_local_workspace_status(
     db: State<'_, DbPool>,
@@ -7711,6 +7796,91 @@ pub async fn get_employee_summary(
         today,
     );
 
+    // Cross-system activity timeline (last 14 days)
+    let fourteen_days_ago = (today - chrono::Duration::days(14)).format("%Y-%m-%d").to_string();
+
+    let mut recent_activity: Vec<ActivityItem> = sqlx::query_as::<_, ActivityItem>(
+        "SELECT
+            'clockify' AS source,
+            ?2 AS employee_name,
+            'logged time' AS action,
+            COALESCE(te.description, p.name) AS detail,
+            te.start_time AS occurred_at,
+            te.project_id AS project_id,
+            NULL AS source_url,
+            'clockify_time_entry' AS entity_type,
+            NULL AS status
+         FROM time_entries te
+         LEFT JOIN projects p ON p.id = te.project_id
+         WHERE te.employee_id = ?1
+           AND te.start_time >= ?3
+         ORDER BY te.start_time DESC
+         LIMIT 10",
+    )
+    .bind(&employee.id)
+    .bind(&employee.name)
+    .bind(&fourteen_days_ago)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let slack_activity: Vec<ActivityItem> = sqlx::query_as::<_, ActivityItem>(
+        "SELECT
+            'slack' AS source,
+            ?2 AS employee_name,
+            'posted' AS action,
+            SUBSTR(sm.text, 1, 120) AS detail,
+            sm.ts AS occurred_at,
+            NULL AS project_id,
+            NULL AS source_url,
+            'slack_message' AS entity_type,
+            sm.channel_id AS status
+         FROM slack_messages sm
+         WHERE sm.user_id IN (
+            SELECT slack_id FROM employees WHERE id = ?1
+            UNION
+            SELECT id FROM employees WHERE id = ?1
+         )
+           AND sm.ts >= ?3
+         ORDER BY sm.ts DESC
+         LIMIT 8",
+    )
+    .bind(&employee.id)
+    .bind(&employee.name)
+    .bind(&fourteen_days_ago)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let huly_activity: Vec<ActivityItem> = sqlx::query_as::<_, ActivityItem>(
+        "SELECT
+            'huly' AS source,
+            ?2 AS employee_name,
+            h.action AS action,
+            COALESCE(h.issue_identifier || ': ' || h.issue_title, h.issue_title) AS detail,
+            h.occurred_at AS occurred_at,
+            NULL AS project_id,
+            NULL AS source_url,
+            'huly_issue' AS entity_type,
+            h.new_status AS status
+         FROM huly_issue_activity h
+         WHERE h.employee_id = ?1
+           AND h.occurred_at >= ?3
+         ORDER BY h.occurred_at DESC
+         LIMIT 8",
+    )
+    .bind(&employee.id)
+    .bind(&employee.name)
+    .bind(&fourteen_days_ago)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    recent_activity.extend(slack_activity);
+    recent_activity.extend(huly_activity);
+    recent_activity.sort_by(|a, b| b.occurred_at.cmp(&a.occurred_at));
+    recent_activity.truncate(20);
+
     Ok(EmployeeSummaryView {
         employee,
         department_names,
@@ -7729,6 +7899,7 @@ pub async fn get_employee_summary(
         vault_profile,
         kpi_status,
         kpi_snapshot,
+        recent_activity,
     })
 }
 
