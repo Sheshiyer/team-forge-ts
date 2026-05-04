@@ -1921,12 +1921,6 @@ async fn read_local_workspace_status(
             Err(error) => (None, None, Some(error)),
         };
 
-    let (node_runtime_version, node_runtime_error) =
-        match detect_node_runtime_version(app_handle).await {
-            Ok(version) => (Some(version), None),
-            Err(error) => (None, Some(error)),
-        };
-
     // Read the runtime choice. Default "rust" per CONTEXT.md D-02.
     let runtime_choice = crate::db::queries::get_setting(pool, "vault_sync_runtime")
         .await
@@ -1936,6 +1930,17 @@ async fn read_local_workspace_status(
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "rust".to_string());
     let node_required = runtime_choice == "node";
+
+    // Only detect Node runtime when the legacy node path is explicitly chosen.
+    // The default rust-native path never needs an external Node process.
+    let (node_runtime_version, node_runtime_error) = if node_required {
+        match detect_node_runtime_version(app_handle).await {
+            Ok(version) => (Some(version), None),
+            Err(error) => (None, Some(error)),
+        }
+    } else {
+        (None, None)
+    };
 
     let founder_sync_ready = local_vault_root.is_some()
         && vault_validation.status == "ready"

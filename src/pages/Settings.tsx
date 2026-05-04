@@ -2104,16 +2104,7 @@ function Settings() {
                 : "START MANUALLY"}
             </div>
             <div style={styles.helperText}>
-              NODE:{" "}
-              {localWorkspaceStatus.nodeRuntimeVersion ||
-                localWorkspaceStatus.nodeRuntimeError ||
-                "UNAVAILABLE"}
-            </div>
-            <div style={styles.helperText}>
-              Sync script:{" "}
-              {localWorkspaceStatus.parityScriptSource
-                ? `${localWorkspaceStatus.parityScriptSource.toUpperCase()} • ${localWorkspaceStatus.parityScriptPath}`
-                : localWorkspaceStatus.parityScriptError || "UNAVAILABLE"}
+              Sync engine: RUST-NATIVE
             </div>
           </div>
         )}
