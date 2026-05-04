@@ -2856,4 +2856,108 @@ external_refs:\n  - { system: clockify, id: 12345 }\n\
         pool.close().await;
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // -----------------------------------------------------------------------
+    // 01-fixture-vault-parity: end-to-end dry-run against the Plan 01-01
+    // fixture vault. The canonical regression lock for the full pipeline.
+    // 7 markdown files in -> 1 ParityReport JSON out -> counts must match.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn rust_parity_run_against_fixture_vault() {
+        // Resolve the fixture path relative to CARGO_MANIFEST_DIR so the test
+        // runs regardless of where `cargo test` is invoked from.
+        let fixture_root =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests-fixtures/vault-min");
+        assert!(
+            fixture_root.exists(),
+            "fixture vault missing — Plan 01-01 Task 3 must land first: {:?}",
+            fixture_root
+        );
+
+        let dir = unique_test_dir();
+        let pool = crate::db::queries::init_db(&dir).await.expect("init db");
+
+        // Pre-seed the employees row that alice-iyer-kpi.md's `member_id: emp-001`
+        // resolves to. The roster lookup in resolve_employee_for_kpi reads from
+        // the `employees` table. clockify_user_id is NOT NULL per
+        // migrations/001_initial.sql:2-13.
+        sqlx::query(
+            "INSERT INTO employees (id, clockify_user_id, name, email, is_active) \
+             VALUES ('emp-001', 'cl-emp-001', 'Alice Iyer', 'alice@example.com', 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed employee");
+
+        // Run the importer in DRY-RUN mode — no Worker calls, no SQLite writes.
+        let report_path = dir.join("rust-report.json");
+        crate::vault::parity::run_dry_run(
+            &pool,
+            fixture_root.to_str().expect("fixture path utf8"),
+            "ws-test-001",
+            "https://teamforge-api.invalid",
+            "fake-token",
+            &report_path,
+        )
+        .await
+        .expect("run_dry_run against fixture vault");
+
+        // Read the report and assert every count the production parser at
+        // commands/mod.rs:2708-2805 reads.
+        let report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&report_path).expect("read report"))
+                .expect("parse report");
+
+        assert_eq!(report["mode"], "dry-run", "mode must be dry-run");
+        assert_eq!(
+            report["counts"]["projectBriefsFound"], 1,
+            "exactly one project brief in the fixture (acme-corp/project-brief.md)"
+        );
+        assert_eq!(
+            report["counts"]["clientProfilesFound"], 1,
+            "exactly one client profile (acme-corp/client-profile.md)"
+        );
+        assert_eq!(
+            report["counts"]["projectArtifactsFound"], 2,
+            "two artifacts: technical-spec.md + design/ux-flow.md"
+        );
+        assert_eq!(
+            report["counts"]["onboardingClientFlowsFound"], 1,
+            "one client onboarding (acme-corp/onboarding/client-onboarding.md)"
+        );
+        assert_eq!(
+            report["counts"]["onboardingEmployeeFlowsFound"], 1,
+            "one employee onboarding (50-team/onboarding/bob-employee-onboarding.md)"
+        );
+        assert_eq!(
+            report["counts"]["employeeKpiNotesFound"], 1,
+            "one KPI note (50-team/alice-iyer-kpi.md)"
+        );
+        assert!(
+            report["warnings"].is_array(),
+            "warnings must be array (read by commands/mod.rs:2774-2784)"
+        );
+        assert!(
+            report["counts"].is_object(),
+            "counts must be object (read by json_usize)"
+        );
+
+        // Total onboarding flows = client + employee.
+        assert_eq!(report["counts"]["onboardingFlowsFound"], 2);
+
+        // Failure arrays must be present (empty in dry-run mode) so
+        // summarize_sync_failures can iterate without surprises.
+        assert!(report["failures"].is_array());
+        assert!(report["clientProfileFailures"].is_array());
+        assert!(report["onboardingFlowFailures"].is_array());
+        assert!(report["employeeKpiFailures"].is_array());
+        assert!(report["clientProfileApplied"].is_array());
+        assert!(report["onboardingFlowApplied"].is_array());
+        assert!(report["employeeKpiApplied"].is_array());
+
+        // Cleanup. Mirrors db/queries.rs:2298-2331's pattern.
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
