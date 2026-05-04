@@ -4481,6 +4481,28 @@ pub async fn trigger_huly_sync(db: State<'_, DbPool>) -> Result<String, String> 
     ))
 }
 
+/// Run a Slack message delta sync (channels → messages → identity mapping).
+#[tauri::command]
+pub async fn trigger_slack_sync(db: State<'_, DbPool>) -> Result<String, String> {
+    let pool = &db.0;
+
+    let token = queries::get_setting(pool, "slack_bot_token")
+        .await
+        .map_err(|e| format!("db error: {e}"))?
+        .ok_or_else(|| "Slack bot token not configured. Save a valid xoxb-... token first.".to_string())?;
+
+    let token = validate_slack_bot_token(&token)?;
+    let client = Arc::new(SlackClient::new(token));
+    let engine = SlackSyncEngine::new(client, pool.clone());
+
+    let report = engine.sync_message_deltas().await?;
+
+    Ok(format!(
+        "Slack sync complete: {}/{} channels synced, {} messages scanned, {} persisted",
+        report.channels_synced, report.channels_total, report.messages_scanned, report.messages_persisted
+    ))
+}
+
 // ─── Background sync ───────────────────────────────────────────
 
 #[tauri::command]

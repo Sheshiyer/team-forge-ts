@@ -201,6 +201,7 @@ const invokeApi = {
   testSlackConnection: (token: string) =>
     invoke<string>("test_slack_connection", { token }),
   triggerHulySync: () => invoke<string>("trigger_huly_sync"),
+  triggerSlackSync: () => invoke<string>("trigger_slack_sync"),
   getTeamSnapshot: () => invoke<TeamSnapshotView>("get_team_snapshot"),
   refreshTeamSnapshot: () => invoke<TeamSnapshotView>("refresh_team_snapshot"),
   getMilestones: () => invoke<MilestoneView[]>("get_milestones"),

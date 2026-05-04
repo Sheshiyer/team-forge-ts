@@ -109,6 +109,8 @@ function Settings() {
   const [slackChannelFilters, setSlackChannelFilters] = useState("");
   const [slackStatus, setSlackStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [slackMessage, setSlackMessage] = useState<string | null>(null);
+  const [slackSyncing, setSlackSyncing] = useState(false);
+  const [slackSyncResult, setSlackSyncResult] = useState<string | null>(null);
 
   const [githubToken, setGithubToken] = useState("");
   const [showGithubToken, setShowGithubToken] = useState(false);
@@ -623,6 +625,19 @@ function Settings() {
     } catch (err) {
       setSlackStatus("error");
       setSlackMessage(`Error: ${err}`);
+    }
+  };
+
+  const handleSlackSync = async () => {
+    setSlackSyncing(true);
+    setSlackSyncResult(null);
+    try {
+      const result = await api.triggerSlackSync();
+      setSlackSyncResult(result);
+    } catch (err) {
+      setSlackSyncResult(`Error: ${String(err)}`);
+    } finally {
+      setSlackSyncing(false);
     }
   };
 
@@ -1308,12 +1323,24 @@ function Settings() {
 
         <div style={styles.buttonRow}>
           <button onClick={handleSaveSlack} style={styles.primaryButton}>SAVE</button>
+          <button
+            onClick={handleSlackSync}
+            disabled={slackSyncing || !trimmedSlackToken}
+            style={{ ...styles.primaryButton, opacity: slackSyncing || !trimmedSlackToken ? 0.5 : 1 }}
+          >
+            {slackSyncing ? "SYNCING..." : "SYNC SLACK NOW"}
+          </button>
           {slackMessage && (
             <span style={{ ...styles.label, color: slackMessage.startsWith("Error") ? "var(--lcars-red)" : "var(--lcars-green)" }}>
               {slackMessage.toUpperCase()}
             </span>
           )}
         </div>
+        {slackSyncResult && (
+          <div style={{ ...styles.helperText, marginTop: 8, color: slackSyncResult.startsWith("Error") ? "var(--lcars-red)" : "var(--lcars-green)" }}>
+            {slackSyncResult.toUpperCase()}
+          </div>
+        )}
       </div>
 
       {showSlackIdentityRepair && (
