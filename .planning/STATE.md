@@ -11,8 +11,8 @@ See: `.planning/PROJECT.md` (updated 2026-05-04)
 
 Phase: 1 of 8 (Founder Sync Hardening)
 Plan: 0 of TBD in current phase
-Status: Ready to discuss
-Last activity: 2026-05-04 — v0.2 milestone bootstrap (PROJECT.md, REQUIREMENTS.md, ROADMAP.md, codebase map committed)
+Status: Ready to plan (CONTEXT.md captured)
+Last activity: 2026-05-04 — Phase 1 discuss-phase complete: locked Rust importer (D-01), dual-path with v0.2.1 kill date (D-02), full parity scope (D-03), preserve JSON report contract (D-04), straight to stable (D-05), cross-AI peer review yes (D-06)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -42,6 +42,9 @@ Decisions are logged in PROJECT.md Key Decisions table. Recent decisions affecti
 - Bootstrap (2026-05-04): Adopted GSD workflow at "Medium" depth — `.planning/` for v0.2 milestone, retire `tasks/todo.md` for new work, keep `tasks/lessons.md`.
 - Bootstrap (2026-05-04): Pilot phase = #45 Founder Sync Hardening (highest signal on whether the discuss → research → plan-with-reviews loop pays off).
 - Bootstrap (2026-05-04): `.planning/` tracked in git (default; visible in PRs).
+- Phase 1 (2026-05-04): Runtime path = native Rust importer at `src-tauri/src/vault/parity.rs`. Rejected packaged Node sidecar (bundle / signing surface argument is one-way). Rejected hybrid (worst of both).
+- Phase 1 (2026-05-04): Dual-path with `vault_sync_runtime` setting; default Rust, Node fallback for one release; kill date v0.2.1 after Phase 2 verifies parity.
+- Phase 1 (2026-05-04): Full parity in scope (all 4 note families); preserve JSON-on-disk report contract; straight to stable; cross-AI peer review enabled.
 
 ### Pending Todos
 
@@ -54,5 +57,5 @@ None yet — see `/gsd:check-todos` once any are captured via `/gsd:add-todo` or
 ## Session Continuity
 
 Last session: 2026-05-04 (this session)
-Stopped at: Completed v0.2 milestone bootstrap; ready to run `/gsd:discuss-phase 1` for issue #45.
+Stopped at: Phase 1 CONTEXT.md captured. Next: `/gsd:plan-phase 1 --research` to spawn the researcher (Cargo crate selection, frontmatter parsing approach), then the planner, then `/gsd:review --phase 1 --all` per D-06.
 Resume file: None
