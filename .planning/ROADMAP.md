@@ -37,13 +37,13 @@ v0.2 is a **closeout milestone** — it does not add new core integrations. It (
   3. Canonical parity is preserved for project briefs, client profiles, onboarding flows, and employee KPI notes (verified by report counts matching v0.1.28 baseline minus the warnings TF-46 will close).
   4. The OTA-shipped `.app` bundle does not reference any `../scripts/...` repo-checkout fallback path at runtime.
   5. The Cloudflare Worker / D1 wire format is unchanged (out-of-scope per the issue).
-**Plans:** TBD (likely 2-3 — research, implementation, verification)
+**Plans:** 3 plans
 **Discussion gray areas:** native Rust importer vs packaged Node sidecar (the architectural fork — calls for `gsd:plan-phase 1 --reviews` cross-AI peer review).
 
 Plans:
-- [ ] 01-01: TBD (research + path selection)
-- [ ] 01-02: TBD (implementation)
-- [ ] 01-03: TBD (verification + bundle path cleanup)
+- [ ] 01-01-PLAN.md — Wave 1: vault module rename, gray_matter dep, vault_sync_runtime dual-path setting, parity.rs skeleton, fixture vault skeleton
+- [ ] 01-02-PLAN.md — Wave 2: native importer implementation (parsers, Worker writes, KPI SQLite, ParityReport, 10 inline tests)
+- [ ] 01-03-PLAN.md — Wave 3: verification + release (Tier 2 clean-PATH .app run, Tier 3 Node-vs-Rust diff, CHANGELOG v0.2.0, version bumps to 0.2.0)
 
 ### Phase 2: Vault Parity Data Completion
 **Goal:** Founder-sync proof completes with measurably fewer parity warnings; missing client metadata, technical specs, design/research/closeout docs, onboarding notes, and Clockify project IDs are backfilled in vault frontmatter; TeamForge UI shows the newly imported canonical records.
@@ -161,7 +161,7 @@ Plans:
 
 | Phase | Issue | Plans Complete | Status | Completed |
 |-------|-------|----------------|--------|-----------|
-| 1. Founder Sync Hardening | #45 | 0/TBD | Not started | - |
+| 1. Founder Sync Hardening | #45 | 0/3 | Not started | - |
 | 2. Vault Parity Data Completion | #46 | 0/TBD | Not started | - |
 | 3. Huly Relation Types | #4 | 0/TBD | Not started | - |
 | 4. Client Onboarding Flow | #14 | 0/TBD | Not started | - |
