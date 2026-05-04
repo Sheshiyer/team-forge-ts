@@ -2,6 +2,65 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.2.0 - 2026-05-04
+
+Closes Phase 1 of v0.2 Foundation Closeout (issue #45). Productizes the
+Settings-based founder vault sync so TeamForge.app runs end-to-end on a
+clean macOS install with no `node` on PATH. The previous Node script
+(~2778 LOC at `scripts/teamforge-vault-parity.mjs`) is replaced as the
+default by a native Rust importer at `src-tauri/src/vault/parity.rs`;
+the script remains bundled for one release as a `vault_sync_runtime`
+setting fallback and goes out at v0.2.1 alongside Phase 2 (#46) closing.
+
+### Added
+
+- Native Rust founder-sync importer at `src-tauri/src/vault/parity.rs`
+  (~2963 LOC including tests; ~835 LOC implementation) covering all four
+  note families: project briefs, client profiles, onboarding flows,
+  employee KPI notes.
+- `vault_sync_runtime` setting (`"rust"` (default) | `"node"`) at the
+  `sync_local_vault_to_teamforge` Tauri command. Manual override via SQL
+  against the local `settings` table is the documented v0.2.0 escape
+  hatch; no Settings UI surface in this release.
+- `gray_matter = "0.3"` (YAML feature only) — pure-Rust, MIT, zero C
+  deps. Single new dependency.
+- 11 inline tests in `vault::parity::tests` (10 unit/integration green
+  by default, 1 `#[ignore]`-gated for live real-vault parity diff).
+- Wave 0 fixture vault at `src-tauri/tests-fixtures/vault-min/` (7
+  minimal markdown files) for the integration test.
+
+### Changed
+
+- `src-tauri/src/vault.rs` (1163 LOC) moved byte-identical to
+  `src-tauri/src/vault/mod.rs` to make room for `vault/parity.rs`. No
+  public API change. No call-site change.
+- `commands/mod.rs::sync_local_vault_to_teamforge` now dispatches via
+  `match runtime_choice` between the new Rust path and the existing
+  Node shell-out. The downstream JSON parser at `:2708-2805` is
+  unchanged — D-04 preserves the on-disk report contract; only the
+  producer changes.
+- `commands/mod.rs::read_local_workspace_status` no longer surfaces
+  Node-specific blockers (`node_runtime_error`, `parity_script_error`)
+  when `vault_sync_runtime == "rust"`.
+- Bumped release metadata to `0.2.0` across the frontend package, Tauri
+  config, and Rust crate.
+
+### Removed
+
+- Nothing in this release. The Node script and the dual-path setting
+  remain bundled until v0.2.1 alongside Phase 2 (#46) closing.
+
+### Verification
+
+- `cargo fmt --manifest-path src-tauri/Cargo.toml --check`
+- `cargo check --manifest-path src-tauri/Cargo.toml` — 0 errors, 0 warnings
+- `cargo test --manifest-path src-tauri/Cargo.toml --lib` — `test result: ok. 57 passed; 0 failed; 4 ignored` (+13 vs v0.1.28 baseline)
+- `pnpm build`
+- `git diff --check`
+- Tier 2: clean-PATH founder-sync run on TeamForge.app — _pending human releaser; recorded in `.planning/phases/01-founder-sync-hardening/01-VERIFICATION.md`_
+- Tier 3: Node-vs-Rust parity diff against thoughtseed-labs vault — _pending human releaser; recorded in `.planning/phases/01-founder-sync-hardening/01-VERIFICATION.md`_
+- Full audit trail: `.planning/phases/01-founder-sync-hardening/01-VERIFICATION.md`
+
 ## v0.1.28 - 2026-05-01
 
 This release closes the remaining normal Paperclip founder loop inside

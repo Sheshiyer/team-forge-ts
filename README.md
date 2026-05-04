@@ -85,12 +85,14 @@ Leave tracking and yearly holidays now live on a dedicated Calendar route, keepi
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
-## New In v0.1.28
+## New In v0.2.0
 
-- **Agents now includes Paperclip runtime maintenance controls** so you can warm-start, refresh stale agents, and maintain heartbeat from TeamForge instead of opening the separate Paperclip dashboard.
-- **A new approvals view lives inside the Agents shell** with a founder decision queue and approve / block / defer actions backed by the existing Paperclip task registry.
-- **The Paperclip adapter contract is wider now** with TeamForge-native runtime-status and approvals commands layered over the local `/api/runtime/*` and `/api/approvals*` routes.
-- **Release metadata is now at `0.1.28`** across the frontend package, Tauri config, and Rust crate.
+- **Founder vault sync now runs end-to-end without `node` on PATH.** TeamForge.app on a clean macOS install can complete `Settings → Local Workspace → Sync vault` end-to-end with no external Node runtime — the literal acceptance criterion of issue #45 (Phase 1 of v0.2 Foundation Closeout).
+- **Native Rust importer at `src-tauri/src/vault/parity.rs`** replaces the `scripts/teamforge-vault-parity.mjs` Node script (~2778 LOC) as the default founder-sync producer. Full parity for all four note families: project briefs, client profiles, onboarding flows, employee KPI notes.
+- **One-release dual-path safety belt via the `vault_sync_runtime` setting** (values: `"rust"` (default) | `"node"`). The Node script stays bundled in `bundle.resources` for one release; both producers emit the same JSON-on-disk report so the existing IPC consumer at `commands/mod.rs:2708-2805` is untouched.
+- **Single new dependency: `gray_matter` 0.3** (YAML feature only, pure-Rust, MIT, zero C deps) for vault frontmatter parsing.
+- **Verified by clean-PATH founder-sync run on TeamForge.app + Node-vs-Rust parity diff against the real `thoughtseed-labs` vault** (records in `.planning/phases/01-founder-sync-hardening/01-VERIFICATION.md`).
+- **Release metadata is now at `0.2.0`** across the frontend package, Tauri config, and Rust crate.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
@@ -147,8 +149,8 @@ The repo-pinned 39-skill manifest lives at
 
 ## Releases
 
-- **Current app version in repo:** `0.1.28`
-- **Latest published tag:** `v0.1.28`
+- **Current app version in repo:** `0.2.0`
+- **Latest published tag:** `v0.2.0`
 - **Release trigger:** pushing a tag that matches `v*`
 - **Canonical OTA signing/publish path:** [`.github/workflows/release.yml`](.github/workflows/release.yml)
 - **Artifacts:** macOS `.app` and `.dmg` bundles built by GitHub Actions for Apple Silicon and Intel targets
@@ -223,7 +225,7 @@ The rollout is now documented in-repo instead of living only in chat and GitHub 
 - [Cloudflare Project Sync Architecture](docs/plans/2026-04-17-cloudflare-project-sync-design.md)
 - [Cloudflare Project Backend Implementation Plan](docs/plans/2026-04-17-cloudflare-project-backend-implementation.md)
 
-The first Cloudflare project-registry tranche tracked in GitHub is now implemented on the current `0.1.28` line:
+The first Cloudflare project-registry tranche tracked in GitHub is now implemented on the current `0.2.0` line:
 
 - milestone propagation from GitHub into Huly with drift-review conflict records
 - Huly-owned execution/admin issue propagation
