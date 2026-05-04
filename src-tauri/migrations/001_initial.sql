@@ -571,3 +571,9 @@ CREATE INDEX IF NOT EXISTS idx_entity_relations_type
     ON entity_relations(relation_type);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_relations_unique_edge
     ON entity_relations(relation_type, source_type, source_id, target_type, target_id);
+
+-- Notification dismissals (for unified notification center)
+CREATE TABLE IF NOT EXISTS notification_dismissals (
+    notification_key TEXT PRIMARY KEY,
+    dismissed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

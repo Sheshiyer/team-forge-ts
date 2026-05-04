@@ -255,6 +255,13 @@ function Settings() {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [syncStates, setSyncStates] = useState<SyncState[]>([]);
+  const [webhookToggles, setWebhookToggles] = useState<Record<string, boolean>>({
+    webhook_project_created: true,
+    webhook_milestone_complete: true,
+    webhook_onboarding_initiated: true,
+    webhook_closeout_generated: true,
+    webhook_sprint_velocity_breach: true,
+  });
 
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [identityReviewQueue, setIdentityReviewQueue] = useState<IdentityMapEntry[]>([]);
@@ -376,6 +383,14 @@ function Settings() {
           ? settings.paperclip_auto_launch_enabled !== "false"
           : Boolean(settings.paperclip_script_path || settings.paperclip_api_url)
       );
+      // Load webhook toggles
+      setWebhookToggles({
+        webhook_project_created: settings.webhook_project_created !== "false",
+        webhook_milestone_complete: settings.webhook_milestone_complete !== "false",
+        webhook_onboarding_initiated: settings.webhook_onboarding_initiated !== "false",
+        webhook_closeout_generated: settings.webhook_closeout_generated !== "false",
+        webhook_sprint_velocity_breach: settings.webhook_sprint_velocity_breach !== "false",
+      });
     } catch { /* Settings may not exist yet */ }
   }, []);
 
@@ -2195,6 +2210,44 @@ function Settings() {
             </div>
           </div>
         )}
+      </CollapsibleCard>
+
+      {/* Webhook Events */}
+      <CollapsibleCard
+        title="WEBHOOK EVENTS"
+        borderColor="var(--lcars-peach)"
+        statusLabel="HERMES"
+        statusColor="var(--lcars-peach)"
+      >
+        <p style={styles.helperNote}>
+          Toggle lifecycle events that trigger Hermes TG notifications.
+          Events are dispatched via the Cloudflare Worker queue.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column" as const, gap: 8, marginTop: 12 }}>
+          {[
+            { key: "webhook_project_created", label: "PROJECT CREATED / ARCHIVED" },
+            { key: "webhook_milestone_complete", label: "MILESTONE COMPLETED" },
+            { key: "webhook_onboarding_initiated", label: "CLIENT ONBOARDING INITIATED" },
+            { key: "webhook_closeout_generated", label: "CLOSEOUT DOCUMENT GENERATED" },
+            { key: "webhook_sprint_velocity_breach", label: "SPRINT VELOCITY THRESHOLD BREACHED" },
+          ].map(({ key, label }) => (
+            <label key={key} style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={webhookToggles[key] !== false}
+                onChange={async (e) => {
+                  const val = e.target.checked ? "true" : "false";
+                  await api.saveSetting(key, val);
+                  setWebhookToggles((s) => ({ ...s, [key]: e.target.checked }));
+                }}
+                style={{ accentColor: "var(--lcars-peach)" }}
+              />
+              <span style={{ fontFamily: "'Orbitron', sans-serif", fontSize: 10, letterSpacing: "0.8px", color: "var(--lcars-text, #f0e0c0)" }}>
+                {label}
+              </span>
+            </label>
+          ))}
+        </div>
       </CollapsibleCard>
 
       {/* App Updates */}

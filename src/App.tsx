@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { Routes, Route, NavLink, Navigate, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
@@ -26,7 +26,7 @@ import CommandPalette from "./components/ui/CommandPalette";
 import type { CommandItem } from "./components/ui/CommandPalette";
 import { useViewportWidth } from "./hooks/useViewportWidth";
 import { useAppStore } from "./stores/appStore";
-import type { PaperclipStartupResult, PresenceStatus } from "./lib/types";
+import type { NotificationItem, PaperclipStartupResult, PresenceStatus } from "./lib/types";
 
 const navSections = [
   {
@@ -113,6 +113,30 @@ function App() {
     const interval = setInterval(checkHeartbeat, 15000);
     return () => { clearTimeout(timer); clearInterval(interval); };
   }, []);
+
+  // Notification feed polling every 60s
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notifOpen, setNotifOpen] = useState(false);
+
+  const refreshNotifications = useCallback(async () => {
+    try {
+      const feed = await invoke<NotificationItem[]>("get_notification_feed");
+      setNotifications(feed);
+    } catch { /* silent */ }
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(refreshNotifications, 5000);
+    const interval = setInterval(refreshNotifications, 60000);
+    return () => { clearTimeout(timer); clearInterval(interval); };
+  }, [refreshNotifications]);
+
+  const dismissNotif = async (key: string) => {
+    try {
+      await invoke<void>("dismiss_notification", { notificationKey: key });
+      setNotifications((prev) => prev.filter((n) => n.key !== key));
+    } catch { /* silent */ }
+  };
 
   // Cloud credential sync on launch (enabled by default, opt-out via settings)
   useEffect(() => {
@@ -576,6 +600,45 @@ function App() {
                 title={syncActive ? "Syncing" : "Idle"}
               />
             </div>
+            {/* Notification bell */}
+            <div style={{ position: "relative" }}>
+              <button
+                type="button"
+                onClick={() => setNotifOpen(!notifOpen)}
+                style={styles.notifBell}
+                title={`${notifications.length} notifications`}
+              >
+                🔔
+                {notifications.length > 0 && (
+                  <span style={styles.notifBadge}>{notifications.length}</span>
+                )}
+              </button>
+              {notifOpen && notifications.length > 0 && (
+                <div style={styles.notifDropdown}>
+                  <div style={styles.notifHeader}>NOTIFICATIONS</div>
+                  {notifications.slice(0, 10).map((n) => (
+                    <div key={n.key} style={styles.notifRow}>
+                      <span style={{
+                        ...styles.notifSource,
+                        color: n.severity === "critical" ? "var(--lcars-red)"
+                          : n.severity === "warning" ? "var(--lcars-yellow)"
+                          : "var(--lcars-lavender)",
+                      }}>
+                        {n.source.toUpperCase()}
+                      </span>
+                      <span style={styles.notifTitle}>{n.title}</span>
+                      <button
+                        type="button"
+                        style={styles.notifDismiss}
+                        onClick={(e) => { e.stopPropagation(); dismissNotif(n.key); }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             <DateRangePicker value={dateRange} onChange={setDateRange} />
             <div style={styles.topBarEndcapRight} />
           </div>
@@ -855,6 +918,82 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     overflow: "auto",
     padding: "var(--space-8)",
+  },
+  notifBell: {
+    position: "relative" as const,
+    background: "transparent",
+    border: "none",
+    fontSize: 16,
+    cursor: "pointer",
+    padding: "4px 8px",
+    lineHeight: 1,
+  },
+  notifBadge: {
+    position: "absolute" as const,
+    top: 0,
+    right: 2,
+    background: "var(--lcars-red)",
+    color: "#000",
+    fontSize: 8,
+    fontWeight: 700,
+    width: 14,
+    height: 14,
+    borderRadius: "50%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  notifDropdown: {
+    position: "absolute" as const,
+    top: "100%",
+    right: 0,
+    width: 320,
+    maxHeight: 400,
+    overflow: "auto",
+    background: "rgba(11,12,24,0.98)",
+    border: "1px solid var(--lcars-cyan)",
+    borderRadius: 6,
+    zIndex: 9999,
+    boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+  },
+  notifHeader: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 10,
+    letterSpacing: "1.5px",
+    color: "var(--lcars-orange)",
+    padding: "10px 12px 6px",
+    borderBottom: "1px solid rgba(153,153,204,0.15)",
+  },
+  notifRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "8px 12px",
+    borderBottom: "1px solid rgba(153,153,204,0.08)",
+  },
+  notifSource: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 8,
+    letterSpacing: "0.5px",
+    flexShrink: 0,
+    minWidth: 52,
+  },
+  notifTitle: {
+    fontSize: 11,
+    color: "var(--lcars-text, #f0e0c0)",
+    flex: 1,
+    overflow: "hidden" as const,
+    textOverflow: "ellipsis" as const,
+    whiteSpace: "nowrap" as const,
+  },
+  notifDismiss: {
+    background: "transparent",
+    border: "none",
+    color: "var(--lcars-red)",
+    fontSize: 12,
+    cursor: "pointer",
+    padding: "2px 4px",
+    flexShrink: 0,
   },
 };
 

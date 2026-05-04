@@ -845,6 +845,23 @@ export interface VaultEntry {
   sizeBytes: number;
 }
 
+export interface NotificationItem {
+  key: string;
+  source: string;
+  severity: string;
+  title: string;
+  detail: string | null;
+  occurredAt: string;
+  actionLabel: string | null;
+  actionRoute: string | null;
+}
+
+export interface ScaffoldResult {
+  success: boolean;
+  message: string;
+  filesCreated: string[];
+}
+
 export interface TimeEntry {
   id: string;
   employeeId: string;

@@ -76,6 +76,8 @@ import type {
   IdentityMapEntry,
   IdentityOverrideInput,
   VaultEntry,
+  NotificationItem,
+  ScaffoldResult,
 } from "../lib/types";
 
 const invokeApi = {
@@ -153,6 +155,12 @@ const invokeApi = {
     invoke<VaultEntry[]>("list_vault_entries", { relativePath: relativePath || null }),
   readVaultFile: (relativePath: string) =>
     invoke<string>("read_vault_file", { relativePath }),
+  getNotificationFeed: () =>
+    invoke<NotificationItem[]>("get_notification_feed"),
+  dismissNotification: (notificationKey: string) =>
+    invoke<void>("dismiss_notification", { notificationKey }),
+  scaffoldProject: (projectId: string, projectName: string, clientName?: string) =>
+    invoke<ScaffoldResult>("scaffold_project", { projectId, projectName, clientName: clientName || null }),
   triggerSync: () => invoke<string>("trigger_sync"),
   getOverview: () => invoke<OverviewData>("get_overview"),
   getFounderCommandCenter: () =>

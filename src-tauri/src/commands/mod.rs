@@ -11190,6 +11190,267 @@ async fn run_github_sync_from_settings(
     engine.sync_all().await
 }
 
+// ─── Notification Feed (#54) ───────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationItem {
+    pub key: String,
+    pub source: String,
+    pub severity: String,
+    pub title: String,
+    pub detail: Option<String>,
+    pub occurred_at: String,
+    pub action_label: Option<String>,
+    pub action_route: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_notification_feed(db: State<'_, DbPool>) -> Result<Vec<NotificationItem>, String> {
+    let pool = &db.0;
+    let today = chrono::Local::now().date_naive();
+    let yesterday = (today - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+    let two_days_ago = (today - chrono::Duration::days(2)).format("%Y-%m-%d").to_string();
+
+    let mut notifications: Vec<NotificationItem> = Vec::new();
+
+    // 1. Paperclip escalations pending approval
+    let escalations: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT id, title, COALESCE(created_at, '') FROM paperclip_escalations WHERE status = 'pending' LIMIT 5",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for (id, title, created_at) in &escalations {
+        notifications.push(NotificationItem {
+            key: format!("escalation-{id}"),
+            source: "paperclip".to_string(),
+            severity: "critical".to_string(),
+            title: format!("Escalation: {title}"),
+            detail: None,
+            occurred_at: created_at.clone(),
+            action_label: Some("REVIEW".to_string()),
+            action_route: Some("/agents/queue".to_string()),
+        });
+    }
+
+    // 2. Team members missing standup (>24h)
+    let missing_standup: Vec<(String, String)> = sqlx::query_as(
+        "SELECT e.id, e.name FROM employees e
+         WHERE e.is_active = 1
+           AND e.id NOT IN (
+             SELECT DISTINCT sm.user_id FROM slack_messages sm
+             WHERE sm.ts >= ?1
+               AND (LOWER(sm.text) LIKE '%standup%' OR LOWER(sm.text) LIKE '%stand-up%')
+           )
+           AND e.id NOT IN (
+             SELECT DISTINCT o.employee_id FROM ops_events o
+             WHERE o.source = 'standup' AND o.occurred_at >= ?1
+           )
+         LIMIT 10",
+    )
+    .bind(&yesterday)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for (id, name) in &missing_standup {
+        notifications.push(NotificationItem {
+            key: format!("missing-standup-{id}-{}", today),
+            source: "slack".to_string(),
+            severity: if yesterday < two_days_ago { "critical".to_string() } else { "warning".to_string() },
+            title: format!("{name} — no standup"),
+            detail: Some("Last 24h+ without standup post".to_string()),
+            occurred_at: yesterday.clone(),
+            action_label: Some("VIEW TEAM".to_string()),
+            action_route: Some("/team".to_string()),
+        });
+    }
+
+    // 3. Zero-hours today (clockify)
+    let today_str = today.format("%Y-%m-%d").to_string();
+    let zero_hours: Vec<(String, String)> = sqlx::query_as(
+        "SELECT e.id, e.name FROM employees e
+         WHERE e.is_active = 1
+           AND e.id NOT IN (
+             SELECT DISTINCT te.employee_id FROM time_entries te
+             WHERE te.start_time >= ?1
+           )
+         LIMIT 10",
+    )
+    .bind(&today_str)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for (id, name) in &zero_hours {
+        notifications.push(NotificationItem {
+            key: format!("zero-hours-{id}-{}", today),
+            source: "clockify".to_string(),
+            severity: "info".to_string(),
+            title: format!("{name} — 0h today"),
+            detail: None,
+            occurred_at: today_str.clone(),
+            action_label: None,
+            action_route: None,
+        });
+    }
+
+    // 4. Huly issues assigned to founder or urgent
+    let urgent_issues: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT h.huly_issue_id, COALESCE(h.issue_identifier, ''), COALESCE(h.issue_title, ''), h.occurred_at
+         FROM huly_issue_activity h
+         WHERE h.action IN ('created', 'status_changed')
+           AND (h.new_status = 'Urgent' OR h.new_status = 'Critical')
+           AND h.occurred_at >= ?1
+         ORDER BY h.occurred_at DESC
+         LIMIT 5",
+    )
+    .bind(&yesterday)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for (_, identifier, title, at) in &urgent_issues {
+        notifications.push(NotificationItem {
+            key: format!("huly-urgent-{identifier}"),
+            source: "huly".to_string(),
+            severity: "warning".to_string(),
+            title: format!("{identifier}: {title}"),
+            detail: Some("Marked urgent/critical".to_string()),
+            occurred_at: at.clone(),
+            action_label: Some("VIEW".to_string()),
+            action_route: Some("/board".to_string()),
+        });
+    }
+
+    // Filter out dismissed notifications
+    let dismissed: Vec<(String,)> = sqlx::query_as(
+        "SELECT notification_key FROM notification_dismissals",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    let dismissed_set: std::collections::HashSet<String> =
+        dismissed.into_iter().map(|(k,)| k).collect();
+
+    notifications.retain(|n| !dismissed_set.contains(&n.key));
+    notifications.sort_by(|a, b| b.occurred_at.cmp(&a.occurred_at));
+    notifications.truncate(25);
+
+    Ok(notifications)
+}
+
+#[tauri::command]
+pub async fn dismiss_notification(
+    db: State<'_, DbPool>,
+    notification_key: String,
+) -> Result<(), String> {
+    sqlx::query(
+        "INSERT OR IGNORE INTO notification_dismissals (notification_key) VALUES (?1)",
+    )
+    .bind(&notification_key)
+    .execute(&db.0)
+    .await
+    .map_err(|e| format!("dismiss notification: {e}"))?;
+    Ok(())
+}
+
+// ─── Project Scaffold (#55) ───────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScaffoldResult {
+    pub success: bool,
+    pub message: String,
+    pub files_created: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn scaffold_project(
+    db: State<'_, DbPool>,
+    project_id: String,
+    project_name: String,
+    client_name: Option<String>,
+) -> Result<ScaffoldResult, String> {
+    let pool = &db.0;
+    let vault_root = vault::resolve_local_vault_root(pool).await?;
+    let client_slug = client_name
+        .as_deref()
+        .unwrap_or(&project_name)
+        .to_lowercase()
+        .replace(' ', "-")
+        .replace('_', "-");
+
+    let client_dir = vault_root.join("60-client-ecosystem").join(&client_slug);
+    let mut files_created: Vec<String> = Vec::new();
+
+    // Create client directory if it doesn't exist
+    if !client_dir.exists() {
+        std::fs::create_dir_all(&client_dir)
+            .map_err(|e| format!("create client dir: {e}"))?;
+    }
+
+    // project-brief.md
+    let brief_path = client_dir.join("project-brief.md");
+    if !brief_path.exists() {
+        let brief_content = format!(
+            "---\ntype: project-brief\nproject_id: {pid}\nclient: {cn}\nstatus: active\ncreated: {date}\n---\n\n# {pn} — Project Brief\n\n## Overview\n\n_To be filled._\n\n## Objectives\n\n- [ ] Define scope\n- [ ] Set milestones\n- [ ] Assign team\n\n## Timeline\n\n| Phase | Target |\n|-------|--------|\n| Discovery | -- |\n| MVP | -- |\n| Launch | -- |\n",
+            pid = project_id,
+            cn = client_slug,
+            date = chrono::Local::now().format("%Y-%m-%d"),
+            pn = project_name,
+        );
+        std::fs::write(&brief_path, brief_content)
+            .map_err(|e| format!("write project-brief: {e}"))?;
+        files_created.push(format!("60-client-ecosystem/{}/project-brief.md", client_slug));
+    }
+
+    // client-profile.md
+    let profile_path = client_dir.join("client-profile.md");
+    if !profile_path.exists() {
+        let profile_content = format!(
+            "---\ntype: client-profile\nproject_id: {pid}\nclient: {cn}\nstatus: active\ncreated: {date}\n---\n\n# {pn} — Client Profile\n\n## Contact\n\n- Primary: _TBD_\n- Email: _TBD_\n\n## Engagement Type\n\n_Retainer / Project / Consulting_\n\n## Notes\n\n_To be filled._\n",
+            pid = project_id,
+            cn = client_slug,
+            date = chrono::Local::now().format("%Y-%m-%d"),
+            pn = project_name,
+        );
+        std::fs::write(&profile_path, profile_content)
+            .map_err(|e| format!("write client-profile: {e}"))?;
+        files_created.push(format!("60-client-ecosystem/{}/client-profile.md", client_slug));
+    }
+
+    // onboarding/client-onboarding-flow.md
+    let onboarding_dir = client_dir.join("onboarding");
+    if !onboarding_dir.exists() {
+        std::fs::create_dir_all(&onboarding_dir)
+            .map_err(|e| format!("create onboarding dir: {e}"))?;
+    }
+    let onboarding_path = onboarding_dir.join("client-onboarding-flow.md");
+    if !onboarding_path.exists() {
+        let onboarding_content = format!(
+            "---\ntype: onboarding-flow\nproject_id: {pid}\nclient: {cn}\nstatus: pending\ncreated: {date}\n---\n\n# {pn} — Client Onboarding Flow\n\n## Checklist\n\n- [ ] Kickoff meeting scheduled\n- [ ] Access credentials shared\n- [ ] Communication channel created\n- [ ] Brief reviewed & signed off\n- [ ] First sprint planned\n",
+            pid = project_id,
+            cn = client_slug,
+            date = chrono::Local::now().format("%Y-%m-%d"),
+            pn = project_name,
+        );
+        std::fs::write(&onboarding_path, onboarding_content)
+            .map_err(|e| format!("write onboarding-flow: {e}"))?;
+        files_created.push(format!("60-client-ecosystem/{}/onboarding/client-onboarding-flow.md", client_slug));
+    }
+
+    let msg = if files_created.is_empty() {
+        format!("Scaffold already exists for {client_slug} — no new files created.")
+    } else {
+        format!("Scaffolded {} files for {client_slug}", files_created.len())
+    };
+
+    Ok(ScaffoldResult {
+        success: true,
+        message: msg,
+        files_created,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
