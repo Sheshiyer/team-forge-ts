@@ -3,6 +3,7 @@ import { Routes, Route, NavLink, Navigate, useNavigate } from "react-router-dom"
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
+import { checkForUpdate, isUpdaterSupported } from "./lib/updater";
 import Overview from "./pages/Overview";
 import Timesheet from "./pages/Timesheet";
 import Projects from "./pages/Projects";
@@ -87,6 +88,7 @@ function App() {
   const dateRange = useAppStore((s) => s.dateRange);
   const setDateRange = useAppStore((s) => s.setDateRange);
   const [syncActive, setSyncActive] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
   const isTightShell = viewportWidth < 1240;
   const isCompactShell = viewportWidth < 1080;
   const sidebarWidth = isCompactShell ? 208 : isTightShell ? 224 : 240;
@@ -241,6 +243,20 @@ function App() {
     };
   }, []);
 
+  // Silent update check on mount
+  useEffect(() => {
+    if (!isUpdaterSupported()) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const result = await checkForUpdate();
+        if (!cancelled && result) setUpdateAvailable(true);
+      } catch { /* silent */ }
+    };
+    check();
+    return () => { cancelled = true; };
+  }, []);
+
   return (
     <div style={styles.shell}>
       {/* LCARS Sidebar */}
@@ -378,6 +394,15 @@ function App() {
         <div style={styles.sidebarVersionWrap}>
           <span style={styles.sidebarVersionLabel}>BUILD</span>
           <span style={styles.sidebarVersionValue}>v{appVersion}</span>
+          {updateAvailable && (
+            <span
+              onClick={() => navigate("/settings")}
+              style={styles.sidebarUpdateBadge}
+              title="Update available — click to install"
+            >
+              ↑ UPDATE
+            </span>
+          )}
         </div>
 
         {/* Bottom bar */}
@@ -589,6 +614,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 8,
     padding: "8px 12px 6px 16px",
     flexShrink: 0,
+    flexWrap: "wrap" as const,
   },
   sidebarVersionLabel: {
     fontFamily: "'Orbitron', sans-serif",
@@ -604,6 +630,19 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     color: "var(--lcars-tan)",
     letterSpacing: "0.08em",
+  },
+  sidebarUpdateBadge: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 8,
+    fontWeight: 600,
+    color: "var(--lcars-green)",
+    letterSpacing: "1.2px",
+    textTransform: "uppercase" as const,
+    cursor: "pointer",
+    padding: "2px 6px",
+    border: "1px solid var(--lcars-green)",
+    borderRadius: "0 6px 6px 0",
+    animation: "lcars-pulse 2s ease-in-out infinite",
   },
   sidebarBottomBar: {
     height: 32,

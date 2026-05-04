@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { useInvoke } from "../hooks/useInvoke";
 import { timeAgo } from "../lib/format";
@@ -24,6 +24,95 @@ import type {
   VaultDirectoryValidation,
   SyncState,
 } from "../lib/types";
+
+/* ─── Collapsible Section Card ─── */
+function CollapsibleCard({
+  title,
+  borderColor,
+  statusLabel,
+  statusColor,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  borderColor: string;
+  statusLabel?: string;
+  statusColor?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ ...collapsibleStyles.card, borderLeftColor: borderColor }}>
+      <div
+        style={collapsibleStyles.header}
+        onClick={() => setOpen(!open)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setOpen(!open); }}
+      >
+        <span style={collapsibleStyles.chevron}>{open ? "▾" : "▸"}</span>
+        <h2 style={collapsibleStyles.title}>{title}</h2>
+        {statusLabel && (
+          <span style={{ ...collapsibleStyles.statusPill, color: statusColor || "var(--lcars-green)" }}>
+            {statusLabel}
+          </span>
+        )}
+      </div>
+      {open && (
+        <div style={collapsibleStyles.body}>
+          <div style={collapsibleStyles.divider} />
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const collapsibleStyles: Record<string, React.CSSProperties> = {
+  card: {
+    ...lcarsPageStyles.card,
+    borderLeftColor: "var(--lcars-orange)",
+  },
+  header: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    cursor: "pointer",
+    userSelect: "none",
+    padding: "2px 0",
+  },
+  chevron: {
+    fontFamily: "monospace",
+    fontSize: 14,
+    color: "var(--lcars-lavender)",
+    width: 16,
+    flexShrink: 0,
+  },
+  title: {
+    ...lcarsPageStyles.sectionTitle,
+    margin: 0,
+    flex: 1,
+  },
+  statusPill: {
+    fontFamily: "'Orbitron', sans-serif",
+    fontSize: 9,
+    letterSpacing: "1.25px",
+    textTransform: "uppercase",
+    whiteSpace: "nowrap",
+    padding: "3px 10px",
+    borderRadius: "0 8px 8px 0",
+    background: "rgba(255, 255, 255, 0.04)",
+    border: "1px solid rgba(153, 153, 204, 0.12)",
+  },
+  body: {
+    marginTop: 12,
+  },
+  divider: {
+    ...lcarsPageStyles.sectionDivider,
+    marginBottom: 12,
+  },
+};
 
 const DEFAULT_IGNORED_EMAILS = "thoughtseedlabs@gmail.com";
 const DEFAULT_HULY_ISSUES_INTERVAL_SECONDS = "600";
@@ -990,10 +1079,12 @@ function Settings() {
       <div style={styles.pageTitleBar} />
 
       {/* Clockify Connection */}
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-orange)" }}>
-        <h2 style={styles.sectionTitle}>CLOCKIFY CONNECTION</h2>
-        <div style={styles.sectionDivider} />
-
+      <CollapsibleCard
+        title="CLOCKIFY CONNECTION"
+        borderColor="var(--lcars-orange)"
+        statusLabel={apiKey.trim() ? "CONFIGURED" : "NOT SET"}
+        statusColor={apiKey.trim() ? "var(--lcars-green)" : "var(--lcars-orange)"}
+      >
         <div style={styles.field}>
           <label style={styles.label}>API KEY</label>
           <div style={styles.inputRow}>
@@ -1140,13 +1231,15 @@ function Settings() {
             </span>
           )}
         </div>
-      </div>
+      </CollapsibleCard>
 
       {/* Huly Connection */}
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
-        <h2 style={styles.sectionTitle}>HULY CONNECTION</h2>
-        <div style={styles.sectionDivider} />
-
+      <CollapsibleCard
+        title="HULY CONNECTION"
+        borderColor="var(--lcars-cyan)"
+        statusLabel={hulyToken.trim() ? "CONFIGURED" : "NOT SET"}
+        statusColor={hulyToken.trim() ? "var(--lcars-green)" : "var(--lcars-orange)"}
+      >
         <div style={styles.field}>
           <label style={styles.label}>USER TOKEN</label>
           <div style={styles.inputRow}>
@@ -1234,13 +1327,15 @@ function Settings() {
             </span>
           )}
         </div>
-      </div>
+      </CollapsibleCard>
 
       {/* Slack Connection */}
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-lavender)" }}>
-        <h2 style={styles.sectionTitle}>SLACK CONNECTION</h2>
-        <div style={styles.sectionDivider} />
-
+      <CollapsibleCard
+        title="SLACK CONNECTION"
+        borderColor="var(--lcars-lavender)"
+        statusLabel={slackSetupStatus}
+        statusColor={slackSetupStatus === "BOT TOKEN READY" ? "var(--lcars-green)" : slackSetupStatus === "WRONG TOKEN TYPE" ? "var(--lcars-red)" : "var(--lcars-orange)"}
+      >
         <div style={styles.summaryGrid}>
           <div style={styles.summaryItem}>
             <span style={styles.summaryLabel}>STATUS</span>
@@ -1268,7 +1363,7 @@ function Settings() {
           </div>
           <div style={styles.summaryItem}>
             <span style={styles.summaryLabel}>CHANNEL MODE</span>
-            <span style={styles.summaryValue}>{slackChannelMode}</span>
+            <span style={{ ...styles.summaryValue, color: slackFilterCount > 0 ? "var(--lcars-green)" : "var(--lcars-tan)" }}>{slackChannelMode}</span>
           </div>
         </div>
 
@@ -1346,21 +1441,23 @@ function Settings() {
             {slackSyncResult.toUpperCase()}
           </div>
         )}
-      </div>
+      </CollapsibleCard>
 
       {showSlackIdentityRepair && (
-        <div style={{ ...styles.card, borderLeftColor: "var(--lcars-lavender)" }}>
-          <h2 style={styles.sectionTitle}>SLACK IDENTITY REPAIR</h2>
-          <div style={styles.sectionDivider} />
-
+        <CollapsibleCard
+          title="SLACK IDENTITY REPAIR"
+          borderColor="var(--lcars-lavender)"
+          statusLabel={`${slackIdentityReviewQueue.length} QUEUED`}
+          statusColor={slackIdentityReviewQueue.length > 0 ? "var(--lcars-orange)" : "var(--lcars-green)"}
+        >
           <div style={styles.summaryGrid}>
             <div style={styles.summaryItem}>
               <span style={styles.summaryLabel}>REVIEW QUEUE</span>
-              <span style={styles.summaryValue}>{slackIdentityReviewQueue.length}</span>
+              <span style={{ ...styles.summaryValue, color: slackIdentityReviewQueue.length > 0 ? "var(--lcars-orange)" : "var(--lcars-green)" }}>{slackIdentityReviewQueue.length}</span>
             </div>
             <div style={styles.summaryItem}>
               <span style={styles.summaryLabel}>UNMATCHED</span>
-              <span style={styles.summaryValue}>
+              <span style={{ ...styles.summaryValue, color: "var(--lcars-orange)" }}>
                 {
                   slackIdentityReviewQueue.filter(
                     (entry) => !entry.employeeId || entry.resolutionStatus !== "linked"
@@ -1370,7 +1467,7 @@ function Settings() {
             </div>
             <div style={styles.summaryItem}>
               <span style={styles.summaryLabel}>LOW CONFIDENCE</span>
-              <span style={styles.summaryValue}>
+              <span style={{ ...styles.summaryValue, color: "var(--lcars-tan)" }}>
                 {
                   slackIdentityReviewQueue.filter(
                     (entry) => entry.employeeId && entry.confidence < 0.85
@@ -1499,14 +1596,16 @@ function Settings() {
               </table>
             </div>
           )}
-        </div>
+        </CollapsibleCard>
       )}
 
       {/* GitHub Plans */}
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
-        <h2 style={styles.sectionTitle}>GITHUB PLANS</h2>
-        <div style={styles.sectionDivider} />
-
+      <CollapsibleCard
+        title="GITHUB PLANS"
+        borderColor="var(--lcars-cyan)"
+        statusLabel={githubToken.trim() ? "CONFIGURED" : "NOT SET"}
+        statusColor={githubToken.trim() ? "var(--lcars-green)" : "var(--lcars-orange)"}
+      >
         <div style={styles.field}>
           <label style={styles.label}>TOKEN</label>
           <div style={styles.inputRow}>
@@ -1569,13 +1668,15 @@ function Settings() {
             </span>
           )}
         </div>
-      </div>
+      </CollapsibleCard>
 
       {/* Cloud Credential Sync */}
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-cyan)" }}>
-        <h2 style={styles.sectionTitle}>CLOUD CREDENTIAL SYNC</h2>
-        <div style={styles.sectionDivider} />
-
+      <CollapsibleCard
+        title="CLOUD CREDENTIAL SYNC"
+        borderColor="var(--lcars-cyan)"
+        statusLabel={cloudAccessTokenPresent ? "CONFIGURED" : "NOT SET"}
+        statusColor={cloudAccessTokenPresent ? "var(--lcars-green)" : "var(--lcars-orange)"}
+      >
         <div style={styles.field}>
           <label style={styles.label}>STARTUP MODE</label>
           <label style={styles.checkboxRow}>
@@ -1656,13 +1757,16 @@ function Settings() {
             </span>
           )}
         </div>
-      </div>
+      </CollapsibleCard>
 
       {/* Local Workspace */}
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-orange)" }}>
-        <h2 style={styles.sectionTitle}>DESKTOP WORKSPACE</h2>
-        <div style={styles.sectionDivider} />
-
+      <CollapsibleCard
+        title="DESKTOP WORKSPACE"
+        borderColor="var(--lcars-orange)"
+        statusLabel={vaultConfigured && paperclipScriptConfigured ? "READY" : "NEEDS SETUP"}
+        statusColor={vaultConfigured && paperclipScriptConfigured ? "var(--lcars-green)" : "var(--lcars-orange)"}
+        defaultOpen
+      >
         <div style={styles.summaryGrid}>
           <div style={styles.summaryItem}>
             <span style={styles.summaryLabel}>NOTES FOLDER</span>
@@ -2100,17 +2204,19 @@ function Settings() {
             </div>
           </div>
         )}
-      </div>
+      </CollapsibleCard>
 
       {/* App Updates */}
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-green)" }}>
-        <h2 style={styles.sectionTitle}>APP UPDATES</h2>
-        <div style={styles.sectionDivider} />
-
+      <CollapsibleCard
+        title="APP UPDATES"
+        borderColor="var(--lcars-green)"
+        statusLabel={`v${currentAppVersion}`}
+        statusColor="var(--lcars-green)"
+      >
         <div style={styles.summaryGrid}>
           <div style={styles.summaryItem}>
             <span style={styles.summaryLabel}>CURRENT VERSION</span>
-            <span style={styles.summaryValue}>{currentAppVersion}</span>
+            <span style={{ ...styles.summaryValue, color: "var(--lcars-green)" }}>{currentAppVersion}</span>
           </div>
           <div style={styles.summaryItem}>
             <span style={styles.summaryLabel}>UPDATER</span>
@@ -2127,7 +2233,7 @@ function Settings() {
           </div>
           <div style={styles.summaryItem}>
             <span style={styles.summaryLabel}>PENDING RELEASE</span>
-            <span style={styles.summaryValue}>
+            <span style={{ ...styles.summaryValue, color: availableUpdate ? "var(--lcars-green)" : "var(--lcars-tan)" }}>
               {availableUpdate ? availableUpdate.version : "NONE"}
             </span>
           </div>
@@ -2207,13 +2313,15 @@ function Settings() {
             )}
           </div>
         )}
-      </div>
+      </CollapsibleCard>
 
       {/* Sync Controls */}
-      <div style={{ ...styles.card, borderLeftColor: "var(--lcars-green)" }}>
-        <h2 style={styles.sectionTitle}>CLOCKIFY SYNC STATE</h2>
-        <div style={styles.sectionDivider} />
-
+      <CollapsibleCard
+        title="SYNC STATE"
+        borderColor="var(--lcars-green)"
+        statusLabel={syncStates.length > 0 ? `${syncStates.length} SOURCES` : "IDLE"}
+        statusColor="var(--lcars-green)"
+      >
         <div style={styles.helperText}>
           THIS MANUAL ACTION RUNS THE FULL CLOCKIFY REFRESH. THE TABLE BELOW SHOWS THE LAST
           RECORDED SYNC TIMES ACROSS SOURCES.
@@ -2257,7 +2365,7 @@ function Settings() {
             </table>
           </div>
         )}
-      </div>
+      </CollapsibleCard>
 
     </div>
   );
