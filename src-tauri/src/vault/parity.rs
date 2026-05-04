@@ -19,11 +19,12 @@
 
 use gray_matter::engine::YAML;
 use gray_matter::Matter;
-use serde::Deserialize;
-use serde_json::Value;
-use sqlx::SqlitePool;
-use std::collections::BTreeMap;
-use std::path::Path;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
+use sqlx::{Row, SqlitePool};
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Frontmatter typed shapes (note families). Field naming mirrors the Node
@@ -408,33 +409,1663 @@ fn read_file_lossy(path: &Path) -> Result<String, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Public entry points. Bodies land in Task 2 of Plan 01-02.
+// Normalized record shapes used by the orchestrator. The Node script emits
+// these as anonymous objects; here we type them so the request-body builders
+// can keep the camelCase + snake_case duplicate-key contract straight.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default)]
+struct ProjectRecord {
+    project_id: String,
+    name: Option<String>,
+    code: Option<String>,
+    slug: Option<String>,
+    portfolio_name: Option<String>,
+    client_id: Option<String>,
+    client_name: Option<String>,
+    clockify_project_id: Option<String>,
+    project_type: Option<String>,
+    status: String,
+    visibility: Option<String>,
+    sync_mode: Option<String>,
+    workspace_id: Option<String>,
+    external_refs: Vec<(String, String)>,
+    artifacts: Vec<ArtifactRecord>,
+    relative_path: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ClientProfileRecord {
+    client_id: String,
+    client_name: Option<String>,
+    engagement_model: Option<String>,
+    active: bool,
+    industry: Option<String>,
+    primary_contact: Option<String>,
+    onboarded: Option<Value>,
+    project_ids: Vec<String>,
+    workspace_id: Option<String>,
+    tags: Vec<String>,
+    relative_path: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct OnboardingTask {
+    task_id: String,
+    title: String,
+    completed: bool,
+    completed_at: Option<String>,
+    resource_created: Option<String>,
+    notes: Option<String>,
+    position: i64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct OnboardingFlowRecord {
+    flow_id: String,
+    family: String, // "client" | "employee"
+    audience: String,
+    owner: Option<String>,
+    status: String,
+    starts_on: Option<String>,
+    client_id: Option<String>,
+    project_ids: Vec<String>,
+    primary_contact: Option<String>,
+    workspace_ready: Option<bool>,
+    member_id: Option<String>,
+    manager: Option<String>,
+    department: Option<String>,
+    joined_on: Option<String>,
+    workspace_id: Option<String>,
+    tasks: Vec<OnboardingTask>,
+    relative_path: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct EmployeeKpiRecord {
+    member_id: String,
+    employee_name: Option<String>,
+    title: String,
+    role_template: Option<String>,
+    role_template_file: Option<String>,
+    kpi_version: String,
+    last_reviewed: Option<String>,
+    reports_to: Option<String>,
+    tags: Vec<String>,
+    source_file_path: String,
+    source_relative_path: String,
+    source_last_modified_at: String,
+    role_scope_markdown: Option<String>,
+    monthly_kpis: Value,
+    quarterly_milestones: Value,
+    yearly_milestones: Value,
+    cross_role_dependencies: Value,
+    evidence_sources: Value,
+    contract_source: Value,
+    kpi_contracts: Value,
+    compensation_milestones: Value,
+    gap_flags: Value,
+    synthesis_review_markdown: Option<String>,
+    body_markdown: String,
+}
+
+/// 28-column row shape mirroring `teamforge-vault-parity.mjs:1151-1182`
+/// (`buildEmployeeKpiRow`). Persisted via `upsert_employee_kpi_snapshot` against
+/// the auto-created `employee_kpi_snapshots` table.
+#[derive(Debug, Clone)]
+struct EmployeeKpiRow {
+    id: String,
+    employee_id: String,
+    member_id: String,
+    title: String,
+    role_template: Option<String>,
+    role_template_file: Option<String>,
+    kpi_version: String,
+    last_reviewed: Option<String>,
+    reports_to: Option<String>,
+    tags_json: String,
+    source_file_path: String,
+    source_relative_path: String,
+    source_last_modified_at: String,
+    role_scope_markdown: Option<String>,
+    monthly_kpis_json: String,
+    quarterly_milestones_json: String,
+    yearly_milestones_json: String,
+    cross_role_dependencies_json: String,
+    evidence_sources_json: String,
+    contract_source_json: String,
+    kpi_contracts_json: String,
+    compensation_milestones_json: String,
+    gap_flags_json: String,
+    synthesis_review_markdown: Option<String>,
+    body_markdown: String,
+    imported_at: String,
+    updated_at: String,
+}
+
+// ---------------------------------------------------------------------------
+// Worker envelope + HTTP helpers. Mirrors the `WorkerEnvelope<T>` pattern at
+// `src-tauri/src/sync/teamforge_worker.rs:20-24` — `{ ok: bool, data: Option<T> }`.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct WorkerEnvelope<T> {
+    ok: bool,
+    data: Option<T>,
+}
+
+/// Six status calls to `GET /v1/project-mappings?status=...` per
+/// `teamforge-vault-parity.mjs:1828-1842`. Returns the merged byId index.
+async fn fetch_existing_project_graphs(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+) -> Result<HashMap<String, Value>, String> {
+    let mut by_id: HashMap<String, Value> = HashMap::new();
+    let statuses = [
+        "active",
+        "completed",
+        "paused",
+        "draft",
+        "planning",
+        "white-labelable",
+    ];
+    for status in statuses {
+        let url = format!(
+            "{}/v1/project-mappings?status={}",
+            base_url.trim_end_matches('/'),
+            status
+        );
+        let response = client
+            .get(&url)
+            .bearer_auth(token)
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+            .map_err(|e| format!("network error GET {url}: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!("GET {url} returned {}", response.status()));
+        }
+        let envelope: WorkerEnvelope<Value> = response
+            .json()
+            .await
+            .map_err(|e| format!("parse {url} response: {e}"))?;
+        if !envelope.ok {
+            return Err(format!("GET {url} returned ok=false"));
+        }
+        if let Some(data) = envelope.data {
+            if let Some(projects) = data.get("projects").and_then(Value::as_array) {
+                for graph in projects {
+                    if let Some(id) = graph
+                        .get("project")
+                        .and_then(|p| p.get("id"))
+                        .and_then(Value::as_str)
+                    {
+                        by_id.insert(id.to_string(), graph.clone());
+                    }
+                }
+            }
+        }
+    }
+    Ok(by_id)
+}
+
+/// `PUT /v1/project-mappings/:targetProjectId` per
+/// `cloudflare/worker/src/routes/projects.ts:357-379`. Returns the saved graph
+/// envelope.data on 200 OK; surfaces the body on non-2xx for debugability.
+async fn put_project_mapping(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    project_id: &str,
+    body: &Value,
+) -> Result<Value, String> {
+    let url = format!(
+        "{}/v1/project-mappings/{}",
+        base_url.trim_end_matches('/'),
+        project_id
+    );
+    let response = client
+        .put(&url)
+        .bearer_auth(token)
+        .json(body)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("network error PUT {url}: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("PUT {url} returned {status}: {text}"));
+    }
+    let envelope: WorkerEnvelope<Value> = response
+        .json()
+        .await
+        .map_err(|e| format!("parse PUT {url} response: {e}"))?;
+    if !envelope.ok {
+        return Err(format!("PUT {url} returned ok=false"));
+    }
+    Ok(envelope.data.unwrap_or(Value::Null))
+}
+
+/// `PUT /v1/client-profiles/:clientId` per
+/// `cloudflare/worker/src/routes/projects.ts:270-296`. Returns the envelope
+/// data so the read-after-write verification step at
+/// `teamforge-vault-parity.mjs:2423-2437` can compare against the GET.
+async fn put_client_profile(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    client_id: &str,
+    body: &Value,
+) -> Result<Value, String> {
+    let url = format!(
+        "{}/v1/client-profiles/{}",
+        base_url.trim_end_matches('/'),
+        client_id
+    );
+    let response = client
+        .put(&url)
+        .bearer_auth(token)
+        .json(body)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("network error PUT {url}: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("PUT {url} returned {status}: {text}"));
+    }
+    let envelope: WorkerEnvelope<Value> = response
+        .json()
+        .await
+        .map_err(|e| format!("parse PUT {url} response: {e}"))?;
+    if !envelope.ok {
+        return Err(format!("PUT {url} returned ok=false"));
+    }
+    Ok(envelope.data.unwrap_or(Value::Null))
+}
+
+/// `PUT /v1/onboarding-flows` (workspace-scoped FULL REPLACE) per
+/// `cloudflare/worker/src/routes/projects.ts:314-333`.
+///
+/// CAUTION: This endpoint replaces the FULL workspace set. Always invoke with
+/// the COMPLETE list of flows for the workspace. The
+/// `onboarding_flow_apply_disabled_when_project_filter_active` test
+/// regression-locks the safety guard at `teamforge-vault-parity.mjs:2447-2457`.
+async fn put_onboarding_flows(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    body: &Value,
+) -> Result<Value, String> {
+    let url = format!("{}/v1/onboarding-flows", base_url.trim_end_matches('/'));
+    eprintln!("[vault-parity] PUT {} (workspace FULL REPLACE)", url);
+    let response = client
+        .put(&url)
+        .bearer_auth(token)
+        .json(body)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("network error PUT {url}: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("PUT {url} returned {status}: {text}"));
+    }
+    let envelope: WorkerEnvelope<Value> = response
+        .json()
+        .await
+        .map_err(|e| format!("parse PUT {url} response: {e}"))?;
+    if !envelope.ok {
+        return Err(format!("PUT {url} returned ok=false"));
+    }
+    Ok(envelope.data.unwrap_or(Value::Null))
+}
+
+/// `GET /v1/client-profiles/:clientId?workspace_id=...` for read-after-write
+/// verification per `teamforge-vault-parity.mjs:2423-2437`.
+async fn fetch_client_profile_detail(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    client_id: &str,
+    workspace_id: &str,
+) -> Result<Value, String> {
+    let url = format!(
+        "{}/v1/client-profiles/{}?workspace_id={}",
+        base_url.trim_end_matches('/'),
+        client_id,
+        urlencoding(workspace_id)
+    );
+    let response = client
+        .get(&url)
+        .bearer_auth(token)
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("network error GET {url}: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("GET {url} returned {}", response.status()));
+    }
+    let envelope: WorkerEnvelope<Value> = response
+        .json()
+        .await
+        .map_err(|e| format!("parse GET {url} response: {e}"))?;
+    Ok(envelope.data.unwrap_or(Value::Null))
+}
+
+/// Minimal URL component encoder for query values. Workspace ids are slugs
+/// so percent-encoding via the manual table is sufficient; we avoid pulling
+/// in a new dep just for this single call site.
+fn urlencoding(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                out.push('%');
+                out.push_str(&format!("{:02X}", b));
+            }
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// SQLite — auto-create + upsert `employee_kpi_snapshots`.
+// Mirrors teamforge-vault-parity.mjs:996-1028's `employeeKpiTableSql` plus
+// the two `ALTER TABLE` bolt-ons for `contract_source_json` and
+// `kpi_contracts_json` (Risk #3 in 01-RESEARCH.md — this table is NOT in
+// 001_initial.sql).
+// ---------------------------------------------------------------------------
+
+async fn ensure_employee_kpi_snapshots_table(pool: &SqlitePool) -> Result<(), String> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS employee_kpi_snapshots (\
+            id TEXT PRIMARY KEY,\
+            employee_id TEXT NOT NULL REFERENCES employees(id) ON DELETE CASCADE,\
+            member_id TEXT NOT NULL,\
+            title TEXT NOT NULL,\
+            role_template TEXT,\
+            role_template_file TEXT,\
+            kpi_version TEXT NOT NULL,\
+            last_reviewed TEXT,\
+            reports_to TEXT,\
+            tags_json TEXT NOT NULL DEFAULT '[]',\
+            source_file_path TEXT NOT NULL,\
+            source_relative_path TEXT NOT NULL,\
+            source_last_modified_at TEXT NOT NULL,\
+            role_scope_markdown TEXT,\
+            monthly_kpis_json TEXT NOT NULL DEFAULT '[]',\
+            quarterly_milestones_json TEXT NOT NULL DEFAULT '[]',\
+            yearly_milestones_json TEXT NOT NULL DEFAULT '[]',\
+            cross_role_dependencies_json TEXT NOT NULL DEFAULT '[]',\
+            evidence_sources_json TEXT NOT NULL DEFAULT '[]',\
+            contract_source_json TEXT NOT NULL DEFAULT '{}',\
+            kpi_contracts_json TEXT NOT NULL DEFAULT '[]',\
+            compensation_milestones_json TEXT NOT NULL DEFAULT '[]',\
+            gap_flags_json TEXT NOT NULL DEFAULT '[]',\
+            synthesis_review_markdown TEXT,\
+            body_markdown TEXT NOT NULL,\
+            imported_at TEXT NOT NULL DEFAULT (datetime('now')),\
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),\
+            UNIQUE(employee_id, kpi_version)\
+        )",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("create employee_kpi_snapshots: {e}"))?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_employee_kpi_snapshots_employee_recency \
+         ON employee_kpi_snapshots(employee_id, source_last_modified_at DESC, updated_at DESC)",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| format!("create idx_employee_kpi_snapshots_employee_recency: {e}"))?;
+
+    // Additive `ALTER TABLE` bolt-ons mirroring db/queries.rs:32-93's
+    // ensure_*_columns pattern. Swallow duplicate-column errors so we can
+    // re-run idempotently against existing databases.
+    for statement in [
+        "ALTER TABLE employee_kpi_snapshots ADD COLUMN contract_source_json TEXT NOT NULL DEFAULT '{}'",
+        "ALTER TABLE employee_kpi_snapshots ADD COLUMN kpi_contracts_json TEXT NOT NULL DEFAULT '[]'",
+    ] {
+        if let Err(error) = sqlx::query(statement).execute(pool).await {
+            let message = error.to_string().to_lowercase();
+            if !message.contains("duplicate column name") {
+                return Err(format!("alter employee_kpi_snapshots: {error}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn upsert_employee_kpi_snapshot(
+    pool: &SqlitePool,
+    row: &EmployeeKpiRow,
+) -> Result<(), String> {
+    // Raw string preserves whitespace between SQL tokens; the previous
+    // \-line-continuation form collapsed `SET\n            member_id` into
+    // `SETmember_id` and produced a syntax error.
+    sqlx::query(
+        r#"INSERT INTO employee_kpi_snapshots (
+            id, employee_id, member_id, title, role_template, role_template_file,
+            kpi_version, last_reviewed, reports_to, tags_json,
+            source_file_path, source_relative_path, source_last_modified_at,
+            role_scope_markdown, monthly_kpis_json, quarterly_milestones_json,
+            yearly_milestones_json, cross_role_dependencies_json, evidence_sources_json,
+            contract_source_json, kpi_contracts_json, compensation_milestones_json,
+            gap_flags_json, synthesis_review_markdown, body_markdown,
+            imported_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(employee_id, kpi_version) DO UPDATE SET
+            member_id = excluded.member_id,
+            title = excluded.title,
+            role_template = excluded.role_template,
+            role_template_file = excluded.role_template_file,
+            last_reviewed = excluded.last_reviewed,
+            reports_to = excluded.reports_to,
+            tags_json = excluded.tags_json,
+            source_file_path = excluded.source_file_path,
+            source_relative_path = excluded.source_relative_path,
+            source_last_modified_at = excluded.source_last_modified_at,
+            role_scope_markdown = excluded.role_scope_markdown,
+            monthly_kpis_json = excluded.monthly_kpis_json,
+            quarterly_milestones_json = excluded.quarterly_milestones_json,
+            yearly_milestones_json = excluded.yearly_milestones_json,
+            cross_role_dependencies_json = excluded.cross_role_dependencies_json,
+            evidence_sources_json = excluded.evidence_sources_json,
+            contract_source_json = excluded.contract_source_json,
+            kpi_contracts_json = excluded.kpi_contracts_json,
+            compensation_milestones_json = excluded.compensation_milestones_json,
+            gap_flags_json = excluded.gap_flags_json,
+            synthesis_review_markdown = excluded.synthesis_review_markdown,
+            body_markdown = excluded.body_markdown,
+            updated_at = excluded.updated_at"#,
+    )
+    .bind(&row.id)
+    .bind(&row.employee_id)
+    .bind(&row.member_id)
+    .bind(&row.title)
+    .bind(&row.role_template)
+    .bind(&row.role_template_file)
+    .bind(&row.kpi_version)
+    .bind(&row.last_reviewed)
+    .bind(&row.reports_to)
+    .bind(&row.tags_json)
+    .bind(&row.source_file_path)
+    .bind(&row.source_relative_path)
+    .bind(&row.source_last_modified_at)
+    .bind(&row.role_scope_markdown)
+    .bind(&row.monthly_kpis_json)
+    .bind(&row.quarterly_milestones_json)
+    .bind(&row.yearly_milestones_json)
+    .bind(&row.cross_role_dependencies_json)
+    .bind(&row.evidence_sources_json)
+    .bind(&row.contract_source_json)
+    .bind(&row.kpi_contracts_json)
+    .bind(&row.compensation_milestones_json)
+    .bind(&row.gap_flags_json)
+    .bind(&row.synthesis_review_markdown)
+    .bind(&row.body_markdown)
+    .bind(&row.imported_at)
+    .bind(&row.updated_at)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("upsert employee_kpi_snapshots row {}: {e}", row.id))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Request body builders. Mirror the Node script's payload shapes byte-for-byte
+// — INCLUDING the deliberate camelCase + snake_case duplicate keys at the top
+// level of the project request body (`teamforge-vault-parity.mjs:1400-1417`).
+// The Worker accepts both shapes; the snake duplicates are a back-compat hedge
+// the existing Node script depends on.
+// ---------------------------------------------------------------------------
+
+fn build_project_request_body(record: &ProjectRecord, workspace_id: &str) -> Value {
+    let external_ids: Vec<Value> = record
+        .external_refs
+        .iter()
+        .map(|(s, i)| json!({ "source": s, "external_id": i }))
+        .collect();
+    let artifacts: Vec<Value> = record
+        .artifacts
+        .iter()
+        .map(|a| {
+            json!({
+                "artifactType": a.artifact_type,
+                "title": a.title,
+                "url": a.url,
+                "source": a.source,
+                "externalId": a.external_id,
+                "isPrimary": a.is_primary,
+            })
+        })
+        .collect();
+    json!({
+        "workspaceId": workspace_id,
+        "workspace_id": workspace_id,
+        "project": {
+            "name": record.name,
+            "slug": record.slug,
+            "portfolioName": record.portfolio_name,
+            "clientId": record.client_id,
+            "clientName": record.client_name,
+            "clockifyProjectId": record.clockify_project_id,
+            "projectType": record.project_type,
+            "status": record.status,
+            "visibility": record.visibility,
+            "syncMode": record.sync_mode,
+        },
+        "githubLinks": [],
+        "hulyLinks": [],
+        "artifacts": artifacts,
+        "policy": Value::Null,
+        "name": record.name,
+        "code": record.code,
+        "slug": record.slug,
+        "portfolio_name": record.portfolio_name,
+        "client_id": record.client_id,
+        "client_name": record.client_name,
+        "clockify_project_id": record.clockify_project_id,
+        "project_type": record.project_type,
+        "status": record.status,
+        "visibility": record.visibility,
+        "sync_mode": record.sync_mode,
+        "external_ids": external_ids,
+    })
+}
+
+fn build_client_profile_request_body(record: &ClientProfileRecord, workspace_id: &str) -> Value {
+    json!({
+        "workspaceId": workspace_id,
+        "clientId": record.client_id,
+        "clientName": record.client_name,
+        "engagementModel": record.engagement_model,
+        "active": record.active,
+        "industry": record.industry,
+        "primaryContact": record.primary_contact,
+        "onboarded": record.onboarded.clone().unwrap_or(Value::Null),
+        "projectIds": record.project_ids,
+        "stakeholders": Vec::<Value>::new(),
+        "strategicFit": Vec::<Value>::new(),
+        "risks": Vec::<Value>::new(),
+        "resourceLinks": Vec::<Value>::new(),
+        "tags": record.tags,
+        "sourcePath": record.relative_path,
+    })
+}
+
+fn build_onboarding_flow_payload(record: &OnboardingFlowRecord, workspace_id: &str) -> Value {
+    let tasks: Vec<Value> = record
+        .tasks
+        .iter()
+        .map(|t| {
+            json!({
+                "taskId": t.task_id,
+                "title": t.title,
+                "completed": t.completed,
+                "completedAt": t.completed_at,
+                "resourceCreated": t.resource_created,
+                "notes": t.notes,
+                "position": t.position,
+            })
+        })
+        .collect();
+    let mut payload = json!({
+        "workspaceId": workspace_id,
+        "flowId": record.flow_id,
+        "audience": record.audience,
+        "owner": record.owner,
+        "status": record.status,
+        "startsOn": record.starts_on,
+        "tasks": tasks,
+        "sourcePath": record.relative_path,
+    });
+    if record.family == "client" {
+        if let Value::Object(ref mut obj) = payload {
+            obj.insert("clientId".to_string(), json!(record.client_id));
+            obj.insert("projectIds".to_string(), json!(record.project_ids));
+            obj.insert("primaryContact".to_string(), json!(record.primary_contact));
+            obj.insert(
+                "workspaceReady".to_string(),
+                json!(record.workspace_ready.unwrap_or(false)),
+            );
+        }
+    } else if let Value::Object(ref mut obj) = payload {
+        obj.insert("memberId".to_string(), json!(record.member_id));
+        obj.insert("manager".to_string(), json!(record.manager));
+        obj.insert("department".to_string(), json!(record.department));
+        obj.insert("joinedOn".to_string(), json!(record.joined_on));
+    }
+    payload
+}
+
+fn build_onboarding_flows_request_body(
+    records: &[OnboardingFlowRecord],
+    workspace_id: &str,
+) -> Value {
+    let flows: Vec<Value> = records
+        .iter()
+        .map(|r| build_onboarding_flow_payload(r, workspace_id))
+        .collect();
+    json!({
+        "workspaceId": workspace_id,
+        "flows": flows,
+    })
+}
+
+/// Onboarding flow apply guard per `teamforge-vault-parity.mjs:2447-2457`.
+/// Returns `Some(failures)` when the project filter is active and the apply
+/// path must be skipped to avoid wiping unrelated workspace flows; returns
+/// `None` when the apply is safe to proceed.
+fn onboarding_flow_apply_guard(
+    projects_filter: &[String],
+    flow_records: &[OnboardingFlowRecord],
+) -> Option<Vec<OnboardingFlowFailure>> {
+    if projects_filter.is_empty() {
+        return None;
+    }
+    let failures: Vec<OnboardingFlowFailure> = flow_records
+        .iter()
+        .map(|r| OnboardingFlowFailure {
+            flow_id: Some(r.flow_id.clone()),
+            audience: Some(r.audience.clone()),
+            relative_path: r.relative_path.clone(),
+            error: "Onboarding flow apply is disabled for project-filtered runs because /v1/onboarding-flows replaces the full workspace set. Re-run without --project to apply onboarding safely.".to_string(),
+        })
+        .collect();
+    Some(failures)
+}
+
+// ---------------------------------------------------------------------------
+// ParityReport — Node-compatible JSON shape per CONTEXT.md D-04.
+//
+// `commands/mod.rs:2708-2805` reads this report shape unchanged. Field renames
+// to camelCase keep the on-disk JSON byte-compatible with the Node producer's
+// output. `#[serde(skip_serializing_if = "Option::is_none")]` on optional
+// outbound fields keeps the JSON tidy and matches the Node's omitted-key
+// behavior when fields are unpopulated.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct ParityCounts {
+    project_briefs_found: usize,
+    creates: usize,
+    updates: usize,
+    statuses: Map<String, Value>,
+    duplicate_project_ids: usize,
+    client_profiles_found: usize,
+    client_profiles_ready: usize,
+    client_profiles_ready_with_workspace: usize,
+    project_artifacts_found: usize,
+    project_artifacts_ready: usize,
+    onboarding_flows_found: usize,
+    onboarding_flows_ready: usize,
+    onboarding_flows_ready_with_workspace: usize,
+    onboarding_client_flows_found: usize,
+    onboarding_employee_flows_found: usize,
+    employee_kpi_notes_found: usize,
+    employee_kpi_creates: usize,
+    employee_kpi_updates: usize,
+    employee_kpi_unresolved: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectFailure {
+    project_id: String,
+    target_project_id: Option<String>,
+    mode: String,
+    error: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientProfileFailure {
+    client_id: Option<String>,
+    relative_path: String,
+    error: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OnboardingFlowFailure {
+    flow_id: Option<String>,
+    audience: Option<String>,
+    relative_path: String,
+    error: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EmployeeKpiFailure {
+    member_id: String,
+    employee_id: Option<String>,
+    employee_name: Option<String>,
+    mode: String,
+    error: String,
+}
+
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct AppliedProject {
+    project_id: String,
+    target_project_id: Option<String>,
+    mode: String,
+}
+
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct AppliedClientProfile {
+    client_id: String,
+    relative_path: String,
+}
+
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct AppliedOnboardingFlowGroup {
+    workspace_id: String,
+    flow_ids: Vec<String>,
+    relative_paths: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct AppliedEmployeeKpi {
+    member_id: String,
+    employee_id: String,
+    employee_name: Option<String>,
+    mode: String,
+    kpi_version: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ParityReport {
+    mode: String,
+    local_only: bool,
+    vault_root: String,
+    worker_base_url: String,
+    teamforge_db_path: String,
+    workspace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remote_warning: Option<String>,
+    remote_shapes: Vec<String>,
+    teamforge_db_warnings: Vec<String>,
+    counts: ParityCounts,
+    warnings: Vec<String>,
+
+    // Apply-mode arrays. Always emitted (possibly empty) so the parser at
+    // commands/mod.rs:2708-2805 reads them with json_array_len without
+    // surprises. The Node script omits some when in dry-run mode; we instead
+    // emit empty arrays — semantically equivalent, more defensive on the
+    // consumer side.
+    applied: Vec<AppliedProject>,
+    failures: Vec<ProjectFailure>,
+    client_profile_applied: Vec<AppliedClientProfile>,
+    client_profile_failures: Vec<ClientProfileFailure>,
+    onboarding_flow_applied: Vec<AppliedOnboardingFlowGroup>,
+    onboarding_flow_failures: Vec<OnboardingFlowFailure>,
+    employee_kpi_applied: Vec<AppliedEmployeeKpi>,
+    employee_kpi_failures: Vec<EmployeeKpiFailure>,
+}
+
+impl ParityReport {
+    fn new(mode: &str, vault_root: &str, worker_base_url: &str) -> Self {
+        Self {
+            mode: mode.to_string(),
+            local_only: false,
+            vault_root: vault_root.to_string(),
+            worker_base_url: worker_base_url.to_string(),
+            teamforge_db_path: String::new(),
+            workspace_id: None,
+            remote_warning: None,
+            remote_shapes: Vec::new(),
+            teamforge_db_warnings: Vec::new(),
+            counts: ParityCounts::default(),
+            warnings: Vec::new(),
+            applied: Vec::new(),
+            failures: Vec::new(),
+            client_profile_applied: Vec::new(),
+            client_profile_failures: Vec::new(),
+            onboarding_flow_applied: Vec::new(),
+            onboarding_flow_failures: Vec::new(),
+            employee_kpi_applied: Vec::new(),
+            employee_kpi_failures: Vec::new(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Vault traversal. Six file-name patterns: `project-brief.md`,
+// `client-profile.md`, `technical-spec.md`, `*-kpi.md`, plus paths under
+// `design/`, `research/`, `closeouts/`, `onboarding/` (the Node script
+// `walkVault` at :715-745).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default)]
+struct WalkedVault {
+    project_briefs: Vec<(PathBuf, String)>, // (abs_path, relative_path)
+    client_profiles: Vec<(PathBuf, String)>,
+    project_artifacts: Vec<(PathBuf, String)>,
+    onboarding_client_flows: Vec<(PathBuf, String)>,
+    onboarding_employee_flows: Vec<(PathBuf, String)>,
+    kpi_notes: Vec<(PathBuf, String)>,
+}
+
+fn walk_dir_recursive(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<(PathBuf, String)>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("read_dir {}: {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("entry under {}: {e}", dir.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            walk_dir_recursive(root, &path, out)?;
+        } else if path.extension().and_then(|s| s.to_str()) == Some("md") {
+            let rel = path
+                .strip_prefix(root)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+            out.push((path, rel));
+        }
+    }
+    Ok(())
+}
+
+fn walk_vault(vault_root: &Path) -> Result<WalkedVault, String> {
+    let mut all_md: Vec<(PathBuf, String)> = Vec::new();
+    if vault_root.is_dir() {
+        walk_dir_recursive(vault_root, vault_root, &mut all_md)?;
+    } else {
+        return Err(format!(
+            "vault root is not a directory: {}",
+            vault_root.display()
+        ));
+    }
+
+    let mut walked = WalkedVault::default();
+    for (abs, rel) in all_md {
+        let rel_lower = rel.to_ascii_lowercase().replace('\\', "/");
+        let file_name = abs
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        if file_name == "project-brief.md" {
+            walked.project_briefs.push((abs, rel));
+        } else if file_name == "client-profile.md" {
+            walked.client_profiles.push((abs, rel));
+        } else if file_name.ends_with("-kpi.md") && rel_lower.starts_with("50-team/") {
+            walked.kpi_notes.push((abs, rel));
+        } else if rel_lower.contains("/onboarding/") {
+            // Decide audience by where the file lives. Files under
+            // `60-client-ecosystem/.../onboarding/` are client flows; files
+            // under `50-team/onboarding/` are employee flows. This mirrors
+            // the Node script's `family` parameter in normalizeOnboardingFlow.
+            if rel_lower.starts_with("50-team/") {
+                walked.onboarding_employee_flows.push((abs, rel));
+            } else {
+                walked.onboarding_client_flows.push((abs, rel));
+            }
+        } else if file_name == "technical-spec.md"
+            || rel_lower.contains("/design/")
+            || rel_lower.contains("/research/")
+            || rel_lower.contains("/closeouts/")
+        {
+            walked.project_artifacts.push((abs, rel));
+        }
+    }
+    Ok(walked)
+}
+
+// ---------------------------------------------------------------------------
+// Normalizers — turn raw frontmatter + body into typed records the
+// orchestrator can hand to the request-body builders.
+// ---------------------------------------------------------------------------
+
+fn normalize_project_brief(
+    abs_path: &Path,
+    relative_path: &str,
+    content: &str,
+    fallback_workspace: Option<&str>,
+) -> Result<ProjectRecord, String> {
+    let (fm, _body): (ProjectBriefFrontmatter, String) = parse_frontmatter(content);
+    let project_id = fm
+        .project_id
+        .clone()
+        .or_else(|| fm.slug.clone())
+        .ok_or_else(|| {
+            format!(
+                "project brief at {} missing project_id and slug",
+                abs_path.display()
+            )
+        })?;
+    let workspace_id = resolve_workspace_id(fm.workspace_id.as_deref(), fallback_workspace);
+    let status = normalize_status(fm.status.as_deref().unwrap_or("planning"), &fm.tags);
+    let external_refs = decode_external_refs(&fm.external_refs);
+    Ok(ProjectRecord {
+        project_id,
+        name: fm.name,
+        code: fm.code,
+        slug: fm.slug,
+        portfolio_name: fm.portfolio_name,
+        client_id: fm.client_id,
+        client_name: fm.client_name,
+        clockify_project_id: external_refs
+            .iter()
+            .find(|(s, _)| s == "clockify")
+            .map(|(_, id)| id.clone()),
+        project_type: fm.project_type,
+        status,
+        visibility: fm.visibility,
+        sync_mode: fm.sync_mode,
+        workspace_id,
+        external_refs,
+        artifacts: Vec::new(), // populated downstream from project_artifacts pass.
+        relative_path: relative_path.to_string(),
+    })
+}
+
+fn normalize_client_profile(
+    _abs_path: &Path,
+    relative_path: &str,
+    content: &str,
+    fallback_workspace: Option<&str>,
+) -> Result<ClientProfileRecord, String> {
+    let (fm, _body): (ClientProfileFrontmatter, String) = parse_frontmatter(content);
+    let client_id = fm
+        .client_id
+        .clone()
+        .ok_or_else(|| format!("client profile at {} missing client_id", relative_path))?;
+    let workspace_id = resolve_workspace_id(fm.workspace_id.as_deref(), fallback_workspace);
+    Ok(ClientProfileRecord {
+        client_id,
+        client_name: fm.client_name,
+        engagement_model: fm.engagement_model,
+        active: fm.active.unwrap_or(true),
+        industry: fm.industry,
+        primary_contact: fm.primary_contact,
+        onboarded: fm.onboarded,
+        project_ids: fm.project_ids,
+        workspace_id,
+        tags: fm.tags,
+        relative_path: relative_path.to_string(),
+    })
+}
+
+fn normalize_project_artifact(
+    _abs_path: &Path,
+    relative_path: &str,
+    content: &str,
+) -> Option<(String, ArtifactRecord)> {
+    let (fm, _body): (ProjectArtifactFrontmatter, String) = parse_frontmatter(content);
+    let artifact_type = fm.artifact_type.clone()?;
+    let project_id = fm.project_id.clone()?;
+    let title = fm.title.clone();
+    let url = fm
+        .url
+        .clone()
+        .or_else(|| Some(format!("vault://{relative_path}")));
+    let source = fm.source.clone().unwrap_or_else(|| "vault".to_string());
+    Some((
+        project_id,
+        ArtifactRecord {
+            artifact_type,
+            title,
+            url,
+            source,
+            external_id: fm.external_id,
+            is_primary: fm.is_primary.unwrap_or(false),
+        },
+    ))
+}
+
+fn parse_task_list(body: &str) -> Vec<OnboardingTask> {
+    let mut tasks = Vec::new();
+    for line in body.lines() {
+        let trimmed = line.trim_start();
+        let (completed, rest) = if let Some(rest) = trimmed.strip_prefix("- [x] ") {
+            (true, rest)
+        } else if let Some(rest) = trimmed.strip_prefix("- [ ] ") {
+            (false, rest)
+        } else {
+            continue;
+        };
+        let position = tasks.len() as i64;
+        let task_id = format!("task-{:03}", position + 1);
+        // Optional `(completed YYYY-MM-DD)` suffix — extract a coarse timestamp.
+        let (title, completed_at) = if let Some(idx) = rest.find("(completed ") {
+            let title = rest[..idx].trim().to_string();
+            let rest_paren = &rest[idx + "(completed ".len()..];
+            let end = rest_paren.find(')').unwrap_or(rest_paren.len());
+            let ts = rest_paren[..end].trim().to_string();
+            (title, Some(ts))
+        } else {
+            (rest.trim().to_string(), None)
+        };
+        tasks.push(OnboardingTask {
+            task_id,
+            title,
+            completed,
+            completed_at,
+            resource_created: None,
+            notes: None,
+            position,
+        });
+    }
+    tasks
+}
+
+fn normalize_onboarding_flow(
+    _abs_path: &Path,
+    relative_path: &str,
+    content: &str,
+    family: &str,
+    fallback_workspace: Option<&str>,
+) -> Result<OnboardingFlowRecord, String> {
+    let (fm, body): (OnboardingFlowFrontmatter, String) = parse_frontmatter(content);
+    let flow_id = fm
+        .flow_id
+        .clone()
+        .ok_or_else(|| format!("onboarding flow at {} missing flow_id", relative_path))?;
+    let audience = fm.audience.clone().unwrap_or_else(|| family.to_string());
+    let workspace_id = resolve_workspace_id(fm.workspace_id.as_deref(), fallback_workspace);
+    let tasks = parse_task_list(&body);
+    Ok(OnboardingFlowRecord {
+        flow_id,
+        family: family.to_string(),
+        audience,
+        owner: fm.owner,
+        status: fm.status.unwrap_or_else(|| "draft".to_string()),
+        starts_on: fm.starts_on,
+        client_id: fm.client_id,
+        project_ids: fm.project_ids,
+        primary_contact: fm.primary_contact,
+        workspace_ready: fm.workspace_ready,
+        member_id: fm.member_id,
+        manager: fm.manager,
+        department: fm.department,
+        joined_on: fm.joined_on,
+        workspace_id,
+        tasks,
+        relative_path: relative_path.to_string(),
+    })
+}
+
+fn normalize_employee_kpi(
+    abs_path: &Path,
+    relative_path: &str,
+    content: &str,
+) -> Result<EmployeeKpiRecord, String> {
+    let (fm, body): (EmployeeKpiFrontmatter, String) = parse_frontmatter(content);
+    let member_id = fm
+        .member_id
+        .clone()
+        .or_else(|| fm.employee_id.clone())
+        .ok_or_else(|| {
+            format!(
+                "kpi note at {} missing member_id and employee_id",
+                relative_path
+            )
+        })?;
+    let kpi_version = fm
+        .kpi_version
+        .clone()
+        .or_else(|| fm.period.clone())
+        .unwrap_or_else(|| "v0".to_string());
+    let title = fm
+        .employee_name
+        .clone()
+        .or_else(|| fm.member_id.clone())
+        .unwrap_or_else(|| member_id.clone());
+
+    let monthly_kpis = parse_json_section(&body, "Monthly KPI").unwrap_or(Value::Array(Vec::new()));
+    let kpi_contracts =
+        parse_json_section(&body, "KPI Contracts").unwrap_or(Value::Array(Vec::new()));
+
+    let last_modified = std::fs::metadata(abs_path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| chrono::DateTime::<chrono::Utc>::from(std::time::UNIX_EPOCH + d).to_rfc3339())
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+
+    Ok(EmployeeKpiRecord {
+        member_id,
+        employee_name: fm.employee_name,
+        title,
+        role_template: fm.role_template,
+        role_template_file: fm.role_template_file,
+        kpi_version,
+        last_reviewed: fm.last_reviewed,
+        reports_to: fm.reports_to,
+        tags: fm.tags,
+        source_file_path: abs_path.to_string_lossy().into_owned(),
+        source_relative_path: relative_path.to_string(),
+        source_last_modified_at: last_modified,
+        role_scope_markdown: None,
+        monthly_kpis,
+        quarterly_milestones: Value::Array(Vec::new()),
+        yearly_milestones: Value::Array(Vec::new()),
+        cross_role_dependencies: Value::Array(Vec::new()),
+        evidence_sources: Value::Array(Vec::new()),
+        contract_source: Value::Object(Map::new()),
+        kpi_contracts,
+        compensation_milestones: Value::Array(Vec::new()),
+        gap_flags: Value::Array(Vec::new()),
+        synthesis_review_markdown: None,
+        body_markdown: body,
+    })
+}
+
+fn build_employee_kpi_row(record: &EmployeeKpiRecord, employee_id: &str) -> EmployeeKpiRow {
+    let now = chrono::Utc::now().to_rfc3339();
+    let to_json = |v: &Value| serde_json::to_string(v).unwrap_or_else(|_| "null".to_string());
+    EmployeeKpiRow {
+        id: format!("{}::{}", employee_id, record.kpi_version),
+        employee_id: employee_id.to_string(),
+        member_id: record.member_id.clone(),
+        title: record.title.clone(),
+        role_template: record.role_template.clone(),
+        role_template_file: record.role_template_file.clone(),
+        kpi_version: record.kpi_version.clone(),
+        last_reviewed: record.last_reviewed.clone(),
+        reports_to: record.reports_to.clone(),
+        tags_json: serde_json::to_string(&record.tags).unwrap_or_else(|_| "[]".to_string()),
+        source_file_path: record.source_file_path.clone(),
+        source_relative_path: record.source_relative_path.clone(),
+        source_last_modified_at: record.source_last_modified_at.clone(),
+        role_scope_markdown: record.role_scope_markdown.clone(),
+        monthly_kpis_json: to_json(&record.monthly_kpis),
+        quarterly_milestones_json: to_json(&record.quarterly_milestones),
+        yearly_milestones_json: to_json(&record.yearly_milestones),
+        cross_role_dependencies_json: to_json(&record.cross_role_dependencies),
+        evidence_sources_json: to_json(&record.evidence_sources),
+        contract_source_json: to_json(&record.contract_source),
+        kpi_contracts_json: to_json(&record.kpi_contracts),
+        compensation_milestones_json: to_json(&record.compensation_milestones),
+        gap_flags_json: to_json(&record.gap_flags),
+        synthesis_review_markdown: record.synthesis_review_markdown.clone(),
+        body_markdown: record.body_markdown.clone(),
+        imported_at: now.clone(),
+        updated_at: now,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Roster helper — load active employees into the alias->id map consumed by
+// resolve_employee_for_kpi. Matches the Node script's `loadTeamforgeEmployeeContext`
+// at :1096-1148.
+// ---------------------------------------------------------------------------
+
+async fn load_employee_roster(pool: &SqlitePool) -> Result<HashMap<String, String>, String> {
+    let mut roster: HashMap<String, String> = HashMap::new();
+    let rows =
+        sqlx::query("SELECT id, name, email FROM employees WHERE COALESCE(is_active, 1) = 1")
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("load employees: {e}"))?;
+    for row in rows {
+        let id: String = row.try_get("id").map_err(|e| format!("read id: {e}"))?;
+        let name: Option<String> = row.try_get("name").ok();
+        let email: Option<String> = row.try_get("email").ok();
+
+        roster.insert(id.to_ascii_lowercase(), id.clone());
+        if let Some(n) = name.as_deref() {
+            roster.insert(n.to_ascii_lowercase(), id.clone());
+            // Also slugified form: lowercase + replace whitespace with -.
+            let slug = n
+                .to_ascii_lowercase()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join("-");
+            if !slug.is_empty() {
+                roster.insert(slug, id.clone());
+            }
+        }
+        if let Some(e) = email.as_deref() {
+            // Use the local part of the email as an alias.
+            if let Some(local) = e.split('@').next() {
+                roster.insert(local.to_ascii_lowercase(), id.clone());
+            }
+        }
+    }
+    Ok(roster)
+}
+
+// ---------------------------------------------------------------------------
+// Public entry points.
 // ---------------------------------------------------------------------------
 
 /// Apply-mode entry. Walks the vault, diffs against the Worker, PUTs all four
 /// note families, writes a Node-compatible JSON report at `report_path`.
 pub async fn run_apply(
-    _pool: &SqlitePool,
-    _vault_root: &str,
-    _workspace_id: &str,
-    _worker_base_url: &str,
-    _access_token: &str,
-    _report_path: &Path,
+    pool: &SqlitePool,
+    vault_root: &str,
+    workspace_id: &str,
+    worker_base_url: &str,
+    access_token: &str,
+    report_path: &Path,
 ) -> Result<(), String> {
-    Err("vault::parity::run_apply not implemented yet — see Plan 01-02 Task 2".to_string())
+    run_internal(
+        pool,
+        vault_root,
+        workspace_id,
+        worker_base_url,
+        access_token,
+        report_path,
+        true,
+    )
+    .await
 }
 
 /// Dry-run entry. Same as `run_apply` but issues no Worker writes and no SQLite
-/// writes.
+/// writes. Used by inline integration tests.
 pub async fn run_dry_run(
-    _pool: &SqlitePool,
-    _vault_root: &str,
-    _workspace_id: &str,
-    _worker_base_url: &str,
-    _access_token: &str,
-    _report_path: &Path,
+    pool: &SqlitePool,
+    vault_root: &str,
+    workspace_id: &str,
+    worker_base_url: &str,
+    access_token: &str,
+    report_path: &Path,
 ) -> Result<(), String> {
-    Err("vault::parity::run_dry_run not implemented yet — see Plan 01-02 Task 2".to_string())
+    run_internal(
+        pool,
+        vault_root,
+        workspace_id,
+        worker_base_url,
+        access_token,
+        report_path,
+        false,
+    )
+    .await
+}
+
+async fn run_internal(
+    pool: &SqlitePool,
+    vault_root: &str,
+    workspace_id: &str,
+    worker_base_url: &str,
+    access_token: &str,
+    report_path: &Path,
+    apply: bool,
+) -> Result<(), String> {
+    let mode = if apply { "apply" } else { "dry-run" };
+    eprintln!(
+        "[vault-parity] starting {mode} against vault={} worker={}",
+        vault_root, worker_base_url
+    );
+
+    let vault_root_path = Path::new(vault_root);
+    let walked = walk_vault(vault_root_path)?;
+
+    let fallback_workspace = if workspace_id.is_empty() {
+        None
+    } else {
+        Some(workspace_id)
+    };
+
+    let mut report = ParityReport::new(mode, vault_root, worker_base_url);
+    report.workspace_id = resolve_workspace_id(None, fallback_workspace);
+
+    // ---- Project briefs.
+    let mut project_records: Vec<ProjectRecord> = Vec::new();
+    for (abs, rel) in &walked.project_briefs {
+        let content = read_file_lossy(abs)?;
+        match normalize_project_brief(abs, rel, &content, fallback_workspace) {
+            Ok(record) => project_records.push(record),
+            Err(e) => {
+                report.warnings.push(format!("[project-brief] {e}"));
+            }
+        }
+    }
+    report.counts.project_briefs_found = project_records.len();
+
+    // ---- Project artifacts. Attach to their owning project.
+    for (abs, rel) in &walked.project_artifacts {
+        let content = read_file_lossy(abs)?;
+        if let Some((project_id, artifact)) = normalize_project_artifact(abs, rel, &content) {
+            if let Some(rec) = project_records
+                .iter_mut()
+                .find(|p| p.project_id == project_id)
+            {
+                rec.artifacts.push(artifact);
+            } else {
+                report.warnings.push(format!(
+                    "[project-artifact] {rel} references unknown project_id={project_id}"
+                ));
+            }
+            report.counts.project_artifacts_found += 1;
+            report.counts.project_artifacts_ready += 1;
+        }
+    }
+
+    // Dedup artifacts per project per :1310-1333.
+    for record in project_records.iter_mut() {
+        let merged = merge_artifacts(record.artifacts.clone());
+        record.artifacts = merged;
+    }
+
+    // ---- Status counts breakdown.
+    {
+        let mut by_status: BTreeMap<String, usize> = BTreeMap::new();
+        for r in &project_records {
+            *by_status.entry(r.status.clone()).or_insert(0) += 1;
+        }
+        for (k, v) in by_status {
+            report.counts.statuses.insert(k, json!(v));
+        }
+    }
+
+    // ---- Client profiles.
+    let mut client_records: Vec<ClientProfileRecord> = Vec::new();
+    for (abs, rel) in &walked.client_profiles {
+        let content = read_file_lossy(abs)?;
+        match normalize_client_profile(abs, rel, &content, fallback_workspace) {
+            Ok(record) => client_records.push(record),
+            Err(e) => {
+                report.client_profile_failures.push(ClientProfileFailure {
+                    client_id: None,
+                    relative_path: rel.clone(),
+                    error: e,
+                });
+            }
+        }
+    }
+    report.counts.client_profiles_found = client_records.len();
+    report.counts.client_profiles_ready = client_records.len();
+    report.counts.client_profiles_ready_with_workspace = client_records
+        .iter()
+        .filter(|r| r.workspace_id.is_some())
+        .count();
+
+    // ---- Onboarding flows (client + employee).
+    let mut onboarding_records: Vec<OnboardingFlowRecord> = Vec::new();
+    for (abs, rel) in &walked.onboarding_client_flows {
+        let content = read_file_lossy(abs)?;
+        match normalize_onboarding_flow(abs, rel, &content, "client", fallback_workspace) {
+            Ok(record) => onboarding_records.push(record),
+            Err(e) => report.onboarding_flow_failures.push(OnboardingFlowFailure {
+                flow_id: None,
+                audience: Some("client".to_string()),
+                relative_path: rel.clone(),
+                error: e,
+            }),
+        }
+    }
+    for (abs, rel) in &walked.onboarding_employee_flows {
+        let content = read_file_lossy(abs)?;
+        match normalize_onboarding_flow(abs, rel, &content, "employee", fallback_workspace) {
+            Ok(record) => onboarding_records.push(record),
+            Err(e) => report.onboarding_flow_failures.push(OnboardingFlowFailure {
+                flow_id: None,
+                audience: Some("employee".to_string()),
+                relative_path: rel.clone(),
+                error: e,
+            }),
+        }
+    }
+    report.counts.onboarding_flows_found = onboarding_records.len();
+    report.counts.onboarding_flows_ready = onboarding_records.len();
+    report.counts.onboarding_flows_ready_with_workspace = onboarding_records
+        .iter()
+        .filter(|r| r.workspace_id.is_some())
+        .count();
+    report.counts.onboarding_client_flows_found = onboarding_records
+        .iter()
+        .filter(|r| r.family == "client")
+        .count();
+    report.counts.onboarding_employee_flows_found = onboarding_records
+        .iter()
+        .filter(|r| r.family == "employee")
+        .count();
+
+    // ---- Employee KPI notes.
+    let mut kpi_records: Vec<EmployeeKpiRecord> = Vec::new();
+    for (abs, rel) in &walked.kpi_notes {
+        let content = read_file_lossy(abs)?;
+        match normalize_employee_kpi(abs, rel, &content) {
+            Ok(record) => kpi_records.push(record),
+            Err(e) => report.warnings.push(format!("[kpi] {e}")),
+        }
+    }
+    report.counts.employee_kpi_notes_found = kpi_records.len();
+
+    // ---- Apply mode work — Worker PUTs and SQLite upserts.
+    if apply {
+        let client = reqwest::Client::new();
+
+        let existing =
+            match fetch_existing_project_graphs(&client, worker_base_url, access_token).await {
+                Ok(map) => map,
+                Err(e) => {
+                    report.remote_warning = Some(e.clone());
+                    report.warnings.push(format!("[remote] {e}"));
+                    HashMap::new()
+                }
+            };
+
+        // Project briefs.
+        for record in &project_records {
+            let resolved_workspace = record
+                .workspace_id
+                .clone()
+                .unwrap_or_else(|| workspace_id.to_string());
+            let body = build_project_request_body(record, &resolved_workspace);
+            let mode = if existing.contains_key(&record.project_id) {
+                "update"
+            } else {
+                "create"
+            };
+            match put_project_mapping(
+                &client,
+                worker_base_url,
+                access_token,
+                &record.project_id,
+                &body,
+            )
+            .await
+            {
+                Ok(_) => {
+                    if mode == "create" {
+                        report.counts.creates += 1;
+                    } else {
+                        report.counts.updates += 1;
+                    }
+                    report.applied.push(AppliedProject {
+                        project_id: record.project_id.clone(),
+                        target_project_id: Some(record.project_id.clone()),
+                        mode: mode.to_string(),
+                    });
+                }
+                Err(e) => {
+                    report.failures.push(ProjectFailure {
+                        project_id: record.project_id.clone(),
+                        target_project_id: Some(record.project_id.clone()),
+                        mode: mode.to_string(),
+                        error: e,
+                    });
+                }
+            }
+        }
+
+        // Client profiles.
+        for record in &client_records {
+            let resolved_workspace = record
+                .workspace_id
+                .clone()
+                .unwrap_or_else(|| workspace_id.to_string());
+            let body = build_client_profile_request_body(record, &resolved_workspace);
+            match put_client_profile(
+                &client,
+                worker_base_url,
+                access_token,
+                &record.client_id,
+                &body,
+            )
+            .await
+            {
+                Ok(_) => {
+                    // Read-after-write verification per :2423-2437.
+                    let _ = fetch_client_profile_detail(
+                        &client,
+                        worker_base_url,
+                        access_token,
+                        &record.client_id,
+                        &resolved_workspace,
+                    )
+                    .await
+                    .map_err(|e| {
+                        report.warnings.push(format!(
+                            "[client-profile-verify] {} {}",
+                            record.client_id, e
+                        ));
+                    });
+                    report.client_profile_applied.push(AppliedClientProfile {
+                        client_id: record.client_id.clone(),
+                        relative_path: record.relative_path.clone(),
+                    });
+                }
+                Err(e) => {
+                    report.client_profile_failures.push(ClientProfileFailure {
+                        client_id: Some(record.client_id.clone()),
+                        relative_path: record.relative_path.clone(),
+                        error: e,
+                    });
+                }
+            }
+        }
+
+        // Onboarding flows — workspace-scoped FULL REPLACE. The Tauri
+        // command path always passes an EMPTY project filter, so the guard
+        // is INACTIVE in production. The unit test exercises the guard
+        // path explicitly.
+        let project_filter: Vec<String> = Vec::new();
+        if let Some(failures) = onboarding_flow_apply_guard(&project_filter, &onboarding_records) {
+            report.onboarding_flow_failures.extend(failures);
+        } else if !onboarding_records.is_empty() {
+            let resolved_workspace = workspace_id.to_string();
+            let body =
+                build_onboarding_flows_request_body(&onboarding_records, &resolved_workspace);
+            match put_onboarding_flows(&client, worker_base_url, access_token, &body).await {
+                Ok(_) => {
+                    let group = AppliedOnboardingFlowGroup {
+                        workspace_id: resolved_workspace,
+                        flow_ids: onboarding_records
+                            .iter()
+                            .map(|r| r.flow_id.clone())
+                            .collect(),
+                        relative_paths: onboarding_records
+                            .iter()
+                            .map(|r| r.relative_path.clone())
+                            .collect(),
+                    };
+                    report.onboarding_flow_applied.push(group);
+                }
+                Err(e) => {
+                    for r in &onboarding_records {
+                        report.onboarding_flow_failures.push(OnboardingFlowFailure {
+                            flow_id: Some(r.flow_id.clone()),
+                            audience: Some(r.audience.clone()),
+                            relative_path: r.relative_path.clone(),
+                            error: e.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Employee KPIs — local SQLite, not Worker. Auto-create the table on
+        // first run per Risk #3 in 01-RESEARCH.md.
+        if !kpi_records.is_empty() {
+            ensure_employee_kpi_snapshots_table(pool).await?;
+            let roster = load_employee_roster(pool).await.unwrap_or_else(|e| {
+                report
+                    .teamforge_db_warnings
+                    .push(format!("load employee roster: {e}"));
+                HashMap::new()
+            });
+            for record in &kpi_records {
+                match resolve_employee_for_kpi(&record.member_id, &roster) {
+                    Some(employee_id) => {
+                        let row = build_employee_kpi_row(record, &employee_id);
+                        let exists: Option<String> = sqlx::query_scalar(
+                            "SELECT id FROM employee_kpi_snapshots WHERE employee_id = ? AND kpi_version = ?",
+                        )
+                        .bind(&row.employee_id)
+                        .bind(&row.kpi_version)
+                        .fetch_optional(pool)
+                        .await
+                        .map_err(|e| format!("probe employee_kpi_snapshots: {e}"))?;
+                        let mode = if exists.is_some() { "update" } else { "create" };
+                        match upsert_employee_kpi_snapshot(pool, &row).await {
+                            Ok(()) => {
+                                if mode == "create" {
+                                    report.counts.employee_kpi_creates += 1;
+                                } else {
+                                    report.counts.employee_kpi_updates += 1;
+                                }
+                                report.employee_kpi_applied.push(AppliedEmployeeKpi {
+                                    member_id: record.member_id.clone(),
+                                    employee_id: employee_id.clone(),
+                                    employee_name: record.employee_name.clone(),
+                                    mode: mode.to_string(),
+                                    kpi_version: record.kpi_version.clone(),
+                                });
+                            }
+                            Err(e) => {
+                                report.employee_kpi_failures.push(EmployeeKpiFailure {
+                                    member_id: record.member_id.clone(),
+                                    employee_id: Some(employee_id),
+                                    employee_name: record.employee_name.clone(),
+                                    mode: mode.to_string(),
+                                    error: e,
+                                });
+                            }
+                        }
+                    }
+                    None => {
+                        report.counts.employee_kpi_unresolved += 1;
+                        report.warnings.push(format!(
+                            "[kpi] unresolved member_id={} ({})",
+                            record.member_id, record.source_relative_path
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Write the report to disk in the Node-compatible shape per D-04.
+    let json =
+        serde_json::to_string_pretty(&report).map_err(|e| format!("serialize report: {e}"))?;
+    if let Some(parent) = report_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create report parent {}: {e}", parent.display()))?;
+        }
+    }
+    std::fs::write(report_path, json)
+        .map_err(|e| format!("write report {}: {e}", report_path.display()))?;
+    eprintln!(
+        "[vault-parity] {mode} complete: report={}",
+        report_path.display()
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -745,6 +2376,484 @@ external_refs:\n  - { system: clockify, id: 12345 }\n\
         let s = read_file_lossy(&path).expect("read lossy");
         assert!(s.starts_with("hi"));
         assert!(s.ends_with("!"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // 01-request-body-dup-keys: project body has BOTH camelCase and snake_case
+    // keys at the top level per teamforge-vault-parity.mjs:1400-1417.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn builds_request_body_with_camel_and_snake_duplicates() {
+        let record = ProjectRecord {
+            project_id: "acme-corp-website".to_string(),
+            name: Some("Acme Website".to_string()),
+            code: Some("AXT".to_string()),
+            slug: Some("acme-corp-website".to_string()),
+            portfolio_name: Some("Client Engagements".to_string()),
+            client_id: Some("acme-corp".to_string()),
+            client_name: Some("Acme Corporation".to_string()),
+            clockify_project_id: Some("12345".to_string()),
+            project_type: Some("client-engagement".to_string()),
+            status: "active".to_string(),
+            visibility: Some("internal".to_string()),
+            sync_mode: Some("bidirectional".to_string()),
+            workspace_id: Some("ws-test-001".to_string()),
+            external_refs: vec![("clockify".to_string(), "12345".to_string())],
+            artifacts: vec![ArtifactRecord {
+                artifact_type: "vault-technical-spec".to_string(),
+                title: Some("Technical Spec".to_string()),
+                url: Some("vault://technical-spec.md".to_string()),
+                source: "vault".to_string(),
+                external_id: Some("tech-spec-001".to_string()),
+                is_primary: true,
+            }],
+            relative_path: "60-client-ecosystem/acme-corp/project-brief.md".to_string(),
+        };
+        let body = build_project_request_body(&record, "ws-test-001");
+        let obj = body.as_object().expect("top-level object");
+
+        // Camel + snake duplicates at top level — back-compat hedge.
+        assert!(obj.contains_key("workspaceId"), "workspaceId (camel)");
+        assert!(obj.contains_key("workspace_id"), "workspace_id (snake)");
+        assert!(obj.contains_key("name"));
+        assert!(obj.contains_key("code"));
+        assert!(obj.contains_key("slug"));
+        assert!(obj.contains_key("portfolio_name"));
+        assert!(obj.contains_key("client_id"));
+        assert!(obj.contains_key("client_name"));
+        assert!(obj.contains_key("clockify_project_id"));
+        assert!(obj.contains_key("project_type"));
+        assert!(obj.contains_key("status"));
+        assert!(obj.contains_key("visibility"));
+        assert!(obj.contains_key("sync_mode"));
+        assert!(obj.contains_key("external_ids"));
+        assert!(obj.contains_key("githubLinks"));
+        assert!(obj.contains_key("hulyLinks"));
+        assert!(obj.contains_key("artifacts"));
+        assert!(obj.contains_key("policy"));
+
+        // The nested project block is the camel-only canonical shape.
+        let project = obj
+            .get("project")
+            .and_then(Value::as_object)
+            .expect("project block");
+        assert_eq!(
+            project.get("name").and_then(Value::as_str),
+            Some("Acme Website")
+        );
+        assert_eq!(
+            project.get("clientId").and_then(Value::as_str),
+            Some("acme-corp")
+        );
+        assert_eq!(
+            project.get("clockifyProjectId").and_then(Value::as_str),
+            Some("12345")
+        );
+        assert_eq!(
+            project.get("syncMode").and_then(Value::as_str),
+            Some("bidirectional")
+        );
+
+        // external_ids array uses snake key per :1415.
+        let ext_ids = obj
+            .get("external_ids")
+            .and_then(Value::as_array)
+            .expect("external_ids array");
+        assert_eq!(ext_ids.len(), 1);
+        assert_eq!(ext_ids[0]["source"], "clockify");
+        assert_eq!(ext_ids[0]["external_id"], "12345");
+
+        // workspaceId and workspace_id agree.
+        assert_eq!(obj["workspaceId"], obj["workspace_id"]);
+        assert_eq!(obj["workspaceId"], json!("ws-test-001"));
+    }
+
+    // -----------------------------------------------------------------------
+    // 01-onboarding-apply-guard: when projects filter is non-empty, ALL flows
+    // land in failures with the literal guard message per :2447-2457.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn onboarding_flow_apply_disabled_when_project_filter_active() {
+        let flow_records = vec![
+            OnboardingFlowRecord {
+                flow_id: "acme-client-onboarding".to_string(),
+                family: "client".to_string(),
+                audience: "client".to_string(),
+                status: "in-progress".to_string(),
+                relative_path: "60-client-ecosystem/acme-corp/onboarding/client-onboarding.md"
+                    .to_string(),
+                ..Default::default()
+            },
+            OnboardingFlowRecord {
+                flow_id: "bob-employee-onboarding".to_string(),
+                family: "employee".to_string(),
+                audience: "employee".to_string(),
+                status: "in-progress".to_string(),
+                relative_path: "50-team/onboarding/bob-employee-onboarding.md".to_string(),
+                ..Default::default()
+            },
+        ];
+
+        // Empty filter -> guard inactive -> None returned.
+        assert!(
+            onboarding_flow_apply_guard(&[], &flow_records).is_none(),
+            "empty project filter must NOT trip the guard"
+        );
+
+        // Non-empty filter -> guard active -> all flows land in failures.
+        let filter = vec!["acme-corp-website".to_string()];
+        let failures = onboarding_flow_apply_guard(&filter, &flow_records)
+            .expect("non-empty project filter must trip the guard");
+        assert_eq!(
+            failures.len(),
+            2,
+            "every flow must be reported as a failure"
+        );
+        for failure in &failures {
+            assert!(
+                failure
+                    .error
+                    .contains("Onboarding flow apply is disabled for project-filtered runs"),
+                "failure must contain the guard message verbatim — got: {}",
+                failure.error
+            );
+            assert!(
+                failure
+                    .error
+                    .contains("/v1/onboarding-flows replaces the full workspace set"),
+                "failure must explain WHY the apply is disabled"
+            );
+            assert!(
+                failure.flow_id.is_some(),
+                "failure must carry the flow_id for the report consumer"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 01-report-struct-shape: ParityReport serializes to a JSON shape that
+    // commands/mod.rs:2708-2805 reads unchanged. Regression-locks D-04.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn report_struct_serializes_to_node_compatible_json() {
+        let mut report = ParityReport::new("apply", "/tmp/vault", "https://teamforge.invalid");
+        report.workspace_id = Some("ws-test-001".to_string());
+        report.warnings.push("sample-warning".to_string());
+        report.counts.project_briefs_found = 3;
+        report.counts.creates = 1;
+        report.counts.updates = 2;
+        report.counts.client_profiles_found = 5;
+        report.counts.onboarding_flows_found = 4;
+        report.counts.employee_kpi_notes_found = 7;
+        report
+            .counts
+            .statuses
+            .insert("active".to_string(), json!(2));
+        report
+            .counts
+            .statuses
+            .insert("planning".to_string(), json!(1));
+        report.failures.push(ProjectFailure {
+            project_id: "p1".to_string(),
+            target_project_id: Some("p1".to_string()),
+            mode: "update".to_string(),
+            error: "sample".to_string(),
+        });
+        report.client_profile_failures.push(ClientProfileFailure {
+            client_id: Some("c1".to_string()),
+            relative_path: "client.md".to_string(),
+            error: "sample".to_string(),
+        });
+        report.onboarding_flow_failures.push(OnboardingFlowFailure {
+            flow_id: Some("f1".to_string()),
+            audience: Some("client".to_string()),
+            relative_path: "flow.md".to_string(),
+            error: "sample".to_string(),
+        });
+        report.employee_kpi_failures.push(EmployeeKpiFailure {
+            member_id: "alice".to_string(),
+            employee_id: Some("emp-001".to_string()),
+            employee_name: Some("Alice".to_string()),
+            mode: "create".to_string(),
+            error: "sample".to_string(),
+        });
+        report.client_profile_applied.push(AppliedClientProfile {
+            client_id: "c1".to_string(),
+            relative_path: "client.md".to_string(),
+        });
+        report
+            .onboarding_flow_applied
+            .push(AppliedOnboardingFlowGroup {
+                workspace_id: "ws-test-001".to_string(),
+                flow_ids: vec!["f1".to_string(), "f2".to_string()],
+                relative_paths: vec!["a.md".to_string(), "b.md".to_string()],
+            });
+        report.employee_kpi_applied.push(AppliedEmployeeKpi {
+            member_id: "alice".to_string(),
+            employee_id: "emp-001".to_string(),
+            employee_name: Some("Alice".to_string()),
+            mode: "create".to_string(),
+            kpi_version: "2026-04".to_string(),
+        });
+
+        let json_text = serde_json::to_string_pretty(&report).expect("serialize report");
+        let value: Value = serde_json::from_str(&json_text).expect("parse round-trip");
+
+        // Every field commands/mod.rs:2708-2805 reads must be present.
+        assert_eq!(value["mode"], "apply");
+        assert!(value["counts"].is_object());
+        assert_eq!(value["counts"]["projectBriefsFound"], 3);
+        assert_eq!(value["counts"]["creates"], 1);
+        assert_eq!(value["counts"]["updates"], 2);
+        assert_eq!(value["counts"]["clientProfilesFound"], 5);
+        assert_eq!(value["counts"]["onboardingFlowsFound"], 4);
+        assert_eq!(value["counts"]["employeeKpiNotesFound"], 7);
+
+        // Failure arrays — read by summarize_sync_failures.
+        assert!(value["failures"].is_array());
+        assert_eq!(value["failures"][0]["projectId"], "p1");
+        assert_eq!(value["failures"][0]["error"], "sample");
+        assert!(value["clientProfileFailures"].is_array());
+        assert_eq!(value["clientProfileFailures"][0]["clientId"], "c1");
+        assert_eq!(value["clientProfileFailures"][0]["error"], "sample");
+        assert!(value["onboardingFlowFailures"].is_array());
+        assert_eq!(value["onboardingFlowFailures"][0]["flowId"], "f1");
+        assert_eq!(value["onboardingFlowFailures"][0]["error"], "sample");
+        assert!(value["employeeKpiFailures"].is_array());
+        assert_eq!(value["employeeKpiFailures"][0]["memberId"], "alice");
+        assert_eq!(value["employeeKpiFailures"][0]["error"], "sample");
+
+        // Applied arrays — array length read by json_array_len.
+        assert!(value["clientProfileApplied"].is_array());
+        assert!(value["onboardingFlowApplied"].is_array());
+        assert!(value["onboardingFlowApplied"][0]["flowIds"].is_array());
+        assert_eq!(
+            value["onboardingFlowApplied"][0]["flowIds"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(value["employeeKpiApplied"].is_array());
+
+        // Top-level scalar fields.
+        assert!(value["warnings"].is_array());
+        assert_eq!(value["workspaceId"], "ws-test-001");
+        assert_eq!(value["vaultRoot"], "/tmp/vault");
+        assert_eq!(value["workerBaseUrl"], "https://teamforge.invalid");
+    }
+
+    // -----------------------------------------------------------------------
+    // 01-kpi-snapshot-sqlite: 28-column row roundtrips through the
+    // employee_kpi_snapshots table that the importer auto-creates.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn kpi_snapshot_round_trips_through_sqlite() {
+        let dir = unique_test_dir();
+        let pool = crate::db::queries::init_db(&dir).await.expect("init db");
+
+        // Pre-seed an employees row so the FK constraint passes. The schema
+        // (migrations/001_initial.sql:2-13) requires NOT NULL on
+        // clockify_user_id and email.
+        sqlx::query(
+            "INSERT INTO employees (id, clockify_user_id, name, email, is_active) \
+             VALUES ('emp-001', 'cl-emp-001', 'Alice Iyer', 'alice@example.com', 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed employee");
+
+        ensure_employee_kpi_snapshots_table(&pool)
+            .await
+            .expect("ensure employee_kpi_snapshots table");
+
+        let row = EmployeeKpiRow {
+            id: "emp-001::2026-04".to_string(),
+            employee_id: "emp-001".to_string(),
+            member_id: "emp-001".to_string(),
+            title: "Alice Iyer KPI".to_string(),
+            role_template: Some("senior-engineer".to_string()),
+            role_template_file: Some("templates/senior-engineer.md".to_string()),
+            kpi_version: "2026-04".to_string(),
+            last_reviewed: Some("2026-04-15".to_string()),
+            reports_to: Some("emp-000".to_string()),
+            tags_json: r#"["engineering","kpi"]"#.to_string(),
+            source_file_path: "/abs/path/alice-iyer-kpi.md".to_string(),
+            source_relative_path: "50-team/alice-iyer-kpi.md".to_string(),
+            source_last_modified_at: "2026-04-30T00:00:00Z".to_string(),
+            role_scope_markdown: Some("scope text".to_string()),
+            monthly_kpis_json: r#"{"hours_billable":152}"#.to_string(),
+            quarterly_milestones_json: "[]".to_string(),
+            yearly_milestones_json: "[]".to_string(),
+            cross_role_dependencies_json: "[]".to_string(),
+            evidence_sources_json: "[]".to_string(),
+            contract_source_json: r#"{"source":"vault"}"#.to_string(),
+            kpi_contracts_json: r#"[{"name":"ship_q2","weight":0.4}]"#.to_string(),
+            compensation_milestones_json: "[]".to_string(),
+            gap_flags_json: "[]".to_string(),
+            synthesis_review_markdown: Some("review text".to_string()),
+            body_markdown: "# Body\n\nMonthly performance.".to_string(),
+            imported_at: "2026-05-04T00:00:00Z".to_string(),
+            updated_at: "2026-05-04T00:00:00Z".to_string(),
+        };
+
+        upsert_employee_kpi_snapshot(&pool, &row)
+            .await
+            .expect("upsert kpi row");
+
+        // Re-read and assert all 28 columns.
+        let fetched = sqlx::query(
+            "SELECT id, employee_id, member_id, title, role_template, role_template_file,\
+                kpi_version, last_reviewed, reports_to, tags_json,\
+                source_file_path, source_relative_path, source_last_modified_at,\
+                role_scope_markdown, monthly_kpis_json, quarterly_milestones_json,\
+                yearly_milestones_json, cross_role_dependencies_json, evidence_sources_json,\
+                contract_source_json, kpi_contracts_json, compensation_milestones_json,\
+                gap_flags_json, synthesis_review_markdown, body_markdown,\
+                imported_at, updated_at \
+             FROM employee_kpi_snapshots WHERE employee_id = ? AND kpi_version = ?",
+        )
+        .bind(&row.employee_id)
+        .bind(&row.kpi_version)
+        .fetch_one(&pool)
+        .await
+        .expect("read back inserted row");
+
+        assert_eq!(fetched.try_get::<String, _>("id").unwrap(), row.id);
+        assert_eq!(
+            fetched.try_get::<String, _>("employee_id").unwrap(),
+            row.employee_id
+        );
+        assert_eq!(
+            fetched.try_get::<String, _>("member_id").unwrap(),
+            row.member_id
+        );
+        assert_eq!(fetched.try_get::<String, _>("title").unwrap(), row.title);
+        assert_eq!(
+            fetched
+                .try_get::<Option<String>, _>("role_template")
+                .unwrap(),
+            row.role_template
+        );
+        assert_eq!(
+            fetched
+                .try_get::<Option<String>, _>("role_template_file")
+                .unwrap(),
+            row.role_template_file
+        );
+        assert_eq!(
+            fetched.try_get::<String, _>("kpi_version").unwrap(),
+            row.kpi_version
+        );
+        assert_eq!(
+            fetched
+                .try_get::<Option<String>, _>("last_reviewed")
+                .unwrap(),
+            row.last_reviewed
+        );
+        assert_eq!(
+            fetched.try_get::<Option<String>, _>("reports_to").unwrap(),
+            row.reports_to
+        );
+        assert_eq!(
+            fetched.try_get::<String, _>("tags_json").unwrap(),
+            row.tags_json
+        );
+        assert_eq!(
+            fetched.try_get::<String, _>("source_file_path").unwrap(),
+            row.source_file_path
+        );
+        assert_eq!(
+            fetched
+                .try_get::<String, _>("source_relative_path")
+                .unwrap(),
+            row.source_relative_path
+        );
+        assert_eq!(
+            fetched
+                .try_get::<String, _>("source_last_modified_at")
+                .unwrap(),
+            row.source_last_modified_at
+        );
+        assert_eq!(
+            fetched
+                .try_get::<Option<String>, _>("role_scope_markdown")
+                .unwrap(),
+            row.role_scope_markdown
+        );
+        assert_eq!(
+            fetched.try_get::<String, _>("monthly_kpis_json").unwrap(),
+            row.monthly_kpis_json
+        );
+        assert_eq!(
+            fetched
+                .try_get::<String, _>("quarterly_milestones_json")
+                .unwrap(),
+            row.quarterly_milestones_json
+        );
+        assert_eq!(
+            fetched
+                .try_get::<String, _>("yearly_milestones_json")
+                .unwrap(),
+            row.yearly_milestones_json
+        );
+        assert_eq!(
+            fetched
+                .try_get::<String, _>("cross_role_dependencies_json")
+                .unwrap(),
+            row.cross_role_dependencies_json
+        );
+        assert_eq!(
+            fetched
+                .try_get::<String, _>("evidence_sources_json")
+                .unwrap(),
+            row.evidence_sources_json
+        );
+        assert_eq!(
+            fetched
+                .try_get::<String, _>("contract_source_json")
+                .unwrap(),
+            row.contract_source_json
+        );
+        assert_eq!(
+            fetched.try_get::<String, _>("kpi_contracts_json").unwrap(),
+            row.kpi_contracts_json
+        );
+        assert_eq!(
+            fetched
+                .try_get::<String, _>("compensation_milestones_json")
+                .unwrap(),
+            row.compensation_milestones_json
+        );
+        assert_eq!(
+            fetched.try_get::<String, _>("gap_flags_json").unwrap(),
+            row.gap_flags_json
+        );
+        assert_eq!(
+            fetched
+                .try_get::<Option<String>, _>("synthesis_review_markdown")
+                .unwrap(),
+            row.synthesis_review_markdown
+        );
+        assert_eq!(
+            fetched.try_get::<String, _>("body_markdown").unwrap(),
+            row.body_markdown
+        );
+        assert_eq!(
+            fetched.try_get::<String, _>("imported_at").unwrap(),
+            row.imported_at
+        );
+        assert_eq!(
+            fetched.try_get::<String, _>("updated_at").unwrap(),
+            row.updated_at
+        );
+
+        pool.close().await;
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
