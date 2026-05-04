@@ -308,6 +308,7 @@ function Overview() {
   const [openingVaultPath, setOpeningVaultPath] = useState<string | null>(null);
   const [paperclipRetryCount, setPaperclipRetryCount] = useState(0);
   const [standup, setStandup] = useState<StandupReport | null>(null);
+  const [dashboardRole, setDashboardRole] = useState<"executive" | "pm" | "developer">("executive");
 
   const load = useCallback(async () => {
     try {
@@ -504,6 +505,31 @@ function Overview() {
     <div>
       <h1 style={styles.pageTitle}>OVERVIEW</h1>
       <div style={styles.pageTitleBar} />
+
+      {/* Role-Based Dashboard Selector (#12) */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {(["executive", "pm", "developer"] as const).map((role) => (
+          <button
+            key={role}
+            type="button"
+            onClick={() => setDashboardRole(role)}
+            style={{
+              padding: "5px 12px",
+              fontSize: 9,
+              letterSpacing: "1px",
+              fontFamily: "'Orbitron', sans-serif",
+              color: dashboardRole === role ? "var(--lcars-orange)" : "var(--lcars-lavender)",
+              background: dashboardRole === role ? "rgba(255,153,0,0.1)" : "transparent",
+              border: `1px solid ${dashboardRole === role ? "var(--lcars-orange)" : "rgba(153,153,204,0.25)"}`,
+              borderRadius: 4,
+              cursor: "pointer",
+              textTransform: "uppercase" as const,
+            }}
+          >
+            {role === "executive" ? "EXECUTIVE" : role === "pm" ? "PM" : "DEVELOPER"}
+          </button>
+        ))}
+      </div>
 
       <div style={styles.metricGrid}>
         <MetricRail
