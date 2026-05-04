@@ -1259,7 +1259,12 @@ function Settings() {
           </div>
           <div style={styles.summaryItem}>
             <span style={styles.summaryLabel}>TOKEN SOURCE</span>
-            <span style={styles.summaryValue}>INSTALL APP</span>
+            <span style={{
+              ...styles.summaryValue,
+              color: slackSetupStatus === "BOT TOKEN READY"
+                ? "var(--lcars-green)"
+                : "var(--lcars-orange)",
+            }}>INSTALL APP</span>
           </div>
           <div style={styles.summaryItem}>
             <span style={styles.summaryLabel}>CHANNEL MODE</span>
