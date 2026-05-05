@@ -1374,7 +1374,7 @@ function Settings() {
               color: slackSetupStatus === "BOT TOKEN READY"
                 ? "var(--lcars-green)"
                 : "var(--lcars-orange)",
-            }}>INSTALL APP</span>
+            }}>{slackSetupStatus === "BOT TOKEN READY" ? "INSTALLED" : "INSTALL APP"}</span>
           </div>
           <div style={styles.summaryItem}>
             <span style={styles.summaryLabel}>CHANNEL MODE</span>

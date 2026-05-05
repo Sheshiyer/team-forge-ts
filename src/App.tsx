@@ -94,9 +94,11 @@ function App() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paperclipAlive, setPaperclipAlive] = useState<boolean | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const isTightShell = viewportWidth < 1240;
   const isCompactShell = viewportWidth < 1080;
-  const sidebarWidth = isCompactShell ? 208 : isTightShell ? 224 : 240;
+  const sidebarExpandedWidth = isCompactShell ? 208 : isTightShell ? 224 : 240;
+  const sidebarWidth = sidebarCollapsed ? 52 : sidebarExpandedWidth;
   const visiblePresence = teamPresence.slice(0, isCompactShell ? 6 : 8);
 
   // Paperclip heartbeat polling every 15s
@@ -301,6 +303,11 @@ function App() {
           setPaletteOpen((prev) => !prev);
           return;
         }
+        if (e.key === "b") {
+          e.preventDefault();
+          setSidebarCollapsed((prev) => !prev);
+          return;
+        }
         const routes = [
           "/", "/timesheet", "/projects", "/sprints", "/insights",
           "/team", "/calendar", "/comms", "/activity", "/agents",
@@ -391,40 +398,55 @@ function App() {
           borderRight: isCompactShell
             ? "1px solid rgba(255, 153, 0, 0.18)"
             : styles.sidebar.borderRight,
+          transition: "width 0.2s ease",
         }}
       >
-        {/* Top bar with title */}
+        {/* Top bar with title + collapse toggle */}
         <div
           style={{
             ...styles.sidebarTopBar,
-            paddingLeft: isCompactShell ? 12 : 16,
-            paddingRight: isCompactShell ? 10 : 12,
+            paddingLeft: sidebarCollapsed ? 8 : isCompactShell ? 12 : 16,
+            paddingRight: sidebarCollapsed ? 8 : isCompactShell ? 10 : 12,
+            justifyContent: sidebarCollapsed ? "center" : "space-between",
           }}
         >
-          <span
-            style={{
-              ...styles.logoText,
-              fontSize: isCompactShell ? 12 : 14,
-              letterSpacing: isCompactShell ? "3px" : "4px",
-            }}
+          {!sidebarCollapsed && (
+            <span
+              style={{
+                ...styles.logoText,
+                fontSize: isCompactShell ? 12 : 14,
+                letterSpacing: isCompactShell ? "3px" : "4px",
+              }}
+            >
+              TEAMFORGE
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            style={styles.collapseBtn}
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
-            TEAMFORGE
-          </span>
+            {sidebarCollapsed ? "▶" : "◀"}
+          </button>
         </div>
 
         {/* Connector bar */}
+        {!sidebarCollapsed && (
         <div
           style={{
             ...styles.connectorBar,
             marginRight: isCompactShell ? 28 : 40,
           }}
         />
+        )}
 
         {/* Nav sections */}
         <nav style={styles.nav}>
           {navSections.map((section, si) => (
             <div key={section.label}>
               {/* Section divider bar */}
+              {!sidebarCollapsed ? (
               <div
                 style={{
                   ...styles.sectionBar,
@@ -433,6 +455,9 @@ function App() {
               >
                 <span style={styles.sectionBarLabel}>{section.label}</span>
               </div>
+              ) : (
+                <div style={{ height: 3, background: section.color, margin: "4px 8px", borderRadius: 2 }} />
+              )}
 
               {/* Nav items */}
               {section.items.map((item) => (
@@ -440,14 +465,16 @@ function App() {
                   key={item.path}
                   to={item.path}
                   end={item.path === "/"}
+                  title={sidebarCollapsed ? item.label : undefined}
                   style={({ isActive }) => ({
                     ...styles.navItem,
-                    padding: isCompactShell ? "6px 10px 6px 14px" : styles.navItem.padding,
-                    fontSize: isCompactShell ? 11 : 12,
+                    padding: sidebarCollapsed ? "6px 0" : isCompactShell ? "6px 10px 6px 14px" : styles.navItem.padding,
+                    fontSize: sidebarCollapsed ? 14 : isCompactShell ? 11 : 12,
+                    textAlign: sidebarCollapsed ? ("center" as const) : ("left" as const),
                     color: isActive
                       ? "var(--lcars-orange)"
                       : "var(--lcars-lavender)",
-                    borderLeft: isActive
+                    borderLeft: sidebarCollapsed ? "none" : isActive
                       ? `4px solid ${section.color}`
                       : "4px solid transparent",
                     backgroundColor: isActive
@@ -455,7 +482,7 @@ function App() {
                       : "transparent",
                   })}
                 >
-                  {item.label.toUpperCase()}
+                  {sidebarCollapsed ? item.label.charAt(0) : item.label.toUpperCase()}
                 </NavLink>
               ))}
 
@@ -468,6 +495,7 @@ function App() {
         </nav>
 
         {/* Team Presence Section */}
+        {!sidebarCollapsed && (
         <div style={styles.teamSection}>
           <div style={styles.teamBar}>
             <span style={styles.sectionBarLabel}>CREW STATUS</span>
@@ -514,23 +542,67 @@ function App() {
             </div>
           ))}
         </div>
+        )}
+
+        {/* Quick Actions Tray */}
+        {!sidebarCollapsed && (
+          <div style={styles.quickActions}>
+            <div style={styles.quickActionsBar}>
+              <span style={styles.sectionBarLabel}>QUICK ACTIONS</span>
+            </div>
+            <div style={styles.quickActionsGrid}>
+              <button
+                type="button"
+                style={styles.quickActionBtn}
+                title="Launch Paperclip Runtime"
+                onClick={() => invoke("ensure_paperclip_runtime_started").catch(() => {})}
+              >
+                📎 LAUNCH
+              </button>
+              <button
+                type="button"
+                style={styles.quickActionBtn}
+                title="Open Paperclip UI"
+                onClick={() => invoke("open_paperclip_ui", { url: "http://127.0.0.1:3100" }).catch(() => {})}
+              >
+                🖥 UI
+              </button>
+              <button
+                type="button"
+                style={styles.quickActionBtn}
+                title="Sync All Sources"
+                onClick={() => { setSyncActive(true); invoke("trigger_sync").catch(() => {}).finally(() => setSyncActive(false)); }}
+              >
+                ⟳ SYNC
+              </button>
+              <button
+                type="button"
+                style={styles.quickActionBtn}
+                title="Sync Vault → TeamForge"
+                onClick={() => invoke("sync_local_vault_to_teamforge").catch(() => {})}
+              >
+                📂 VAULT
+              </button>
+            </div>
+          </div>
+        )}
 
         <div style={styles.sidebarVersionWrap}>
-          <span style={styles.sidebarVersionLabel}>BUILD</span>
-          <span style={styles.sidebarVersionValue}>v{appVersion}</span>
+          {!sidebarCollapsed && <span style={styles.sidebarVersionLabel}>BUILD</span>}
+          <span style={styles.sidebarVersionValue}>{sidebarCollapsed ? appVersion.split(".").slice(0, 2).join(".") : `v${appVersion}`}</span>
           {updateAvailable && (
             <span
               onClick={() => navigate("/settings")}
               style={styles.sidebarUpdateBadge}
               title="Update available — click to install"
             >
-              ↑ UPDATE
+              {sidebarCollapsed ? "↑" : "↑ UPDATE"}
             </span>
           )}
         </div>
         <div style={styles.sidebarHeartbeat} title={paperclipAlive === null ? "Checking Paperclip..." : paperclipAlive ? "Paperclip connected" : "Paperclip offline"}>
           <span style={{ ...styles.heartbeatDot, background: paperclipAlive === null ? "var(--lcars-yellow)" : paperclipAlive ? "var(--lcars-green)" : "var(--lcars-red)" }} />
-          <span style={styles.heartbeatLabel}>PAPERCLIP</span>
+          {!sidebarCollapsed && <span style={styles.heartbeatLabel}>PAPERCLIP</span>}
         </div>
 
         {/* Bottom bar */}
@@ -840,6 +912,51 @@ const styles: Record<string, React.CSSProperties> = {
     background: "linear-gradient(90deg, var(--lcars-tan), #d7a677)",
     borderRadius: "0 16px 0 0",
     flexShrink: 0,
+  },
+  collapseBtn: {
+    background: "transparent",
+    border: "none",
+    color: "#000",
+    fontSize: 10,
+    cursor: "pointer",
+    padding: "2px 6px",
+    borderRadius: 4,
+    opacity: 0.7,
+    fontWeight: 700,
+  },
+  quickActions: {
+    flexShrink: 0,
+    padding: "0 0 4px 0",
+  },
+  quickActionsBar: {
+    height: 18,
+    background: "var(--lcars-lavender)",
+    borderRadius: "0 9px 9px 0",
+    marginRight: 16,
+    display: "flex",
+    alignItems: "center",
+    paddingLeft: 12,
+    marginBottom: 4,
+  },
+  quickActionsGrid: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 3,
+    padding: "2px 8px",
+  },
+  quickActionBtn: {
+    background: "rgba(153, 153, 204, 0.08)",
+    border: "1px solid rgba(153, 153, 204, 0.18)",
+    borderRadius: 4,
+    color: "var(--lcars-tan)",
+    fontSize: 8,
+    fontFamily: "'Orbitron', sans-serif",
+    letterSpacing: "0.5px",
+    padding: "5px 4px",
+    cursor: "pointer",
+    textAlign: "center" as const,
+    whiteSpace: "nowrap" as const,
+    transition: "background 0.15s, border-color 0.15s",
   },
   main: {
     flex: 1,
