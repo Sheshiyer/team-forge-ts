@@ -30,47 +30,47 @@ import type { NotificationItem, PaperclipStartupResult, PresenceStatus } from ".
 
 const navSections = [
   {
-    label: "COMMAND CENTER",
+    label: "COMMAND",
     color: "var(--lcars-orange)",
     items: [
-      { path: "/", label: "Overview" },
-      { path: "/timesheet", label: "Timesheet" },
-      { path: "/projects", label: "Projects" },
+      { path: "/", label: "Overview", icon: "◈" },
+      { path: "/timesheet", label: "Timesheet", icon: "◷" },
+      { path: "/projects", label: "Projects", icon: "▣" },
     ],
   },
   {
     label: "EXECUTION",
     color: "var(--lcars-peach)",
     items: [
-      { path: "/sprints", label: "Sprints" },
-      { path: "/insights", label: "Insights" },
-      { path: "/team", label: "Team" },
-      { path: "/calendar", label: "Calendar" },
-      { path: "/comms", label: "Comms" },
+      { path: "/sprints", label: "Sprints", icon: "⟐" },
+      { path: "/insights", label: "Insights", icon: "◉" },
+      { path: "/team", label: "Team", icon: "⧫" },
+      { path: "/calendar", label: "Calendar", icon: "▦" },
+      { path: "/comms", label: "Comms", icon: "◬" },
     ],
   },
   {
     label: "REGISTRY",
     color: "var(--lcars-cyan)",
     items: [
-      { path: "/clients", label: "Clients" },
-      { path: "/issues", label: "Issues" },
-      { path: "/onboarding", label: "Onboarding" },
-      { path: "/knowledge", label: "Skills" },
+      { path: "/clients", label: "Clients", icon: "◇" },
+      { path: "/issues", label: "Issues", icon: "⬡" },
+      { path: "/onboarding", label: "Onboarding", icon: "▷" },
+      { path: "/knowledge", label: "Skills", icon: "◎" },
     ],
   },
   {
-    label: "MONITORING",
+    label: "OPS",
     color: "var(--lcars-tan)",
     items: [
-      { path: "/activity", label: "Activity" },
-      { path: "/agents", label: "Agents" },
+      { path: "/activity", label: "Activity", icon: "◫" },
+      { path: "/agents", label: "Agents", icon: "⬢" },
     ],
   },
   {
-    label: "SYSTEM",
+    label: "SYS",
     color: "var(--lcars-lavender)",
-    items: [{ path: "/settings", label: "Settings" }],
+    items: [{ path: "/settings", label: "Settings", icon: "⚙" }],
   },
 ];
 
@@ -390,76 +390,93 @@ function App() {
 
   return (
     <div style={styles.shell}>
-      {/* LCARS Sidebar */}
+      {/* ── LCARS Sidebar ── */}
       <aside
         style={{
           ...styles.sidebar,
           width: sidebarWidth,
-          borderRight: isCompactShell
-            ? "1px solid rgba(255, 153, 0, 0.18)"
-            : styles.sidebar.borderRight,
           transition: "width 0.2s ease",
         }}
       >
-        {/* Top bar with title + collapse toggle */}
-        <div
-          style={{
-            ...styles.sidebarTopBar,
-            paddingLeft: sidebarCollapsed ? 8 : isCompactShell ? 12 : 16,
-            paddingRight: sidebarCollapsed ? 8 : isCompactShell ? 10 : 12,
-            justifyContent: sidebarCollapsed ? "center" : "space-between",
-          }}
-        >
+        {/* ── Top Elbow: orange header bar ── */}
+        <div style={{
+          ...styles.sidebarTopBar,
+          padding: sidebarCollapsed ? "0 6px" : "0 16px",
+          justifyContent: sidebarCollapsed ? "center" : "space-between",
+        }}>
           {!sidebarCollapsed && (
-            <span
-              style={{
-                ...styles.logoText,
-                fontSize: isCompactShell ? 12 : 14,
-                letterSpacing: isCompactShell ? "3px" : "4px",
-              }}
-            >
-              TEAMFORGE
-            </span>
+            <span style={styles.logoText}>TEAMFORGE</span>
           )}
           <button
             type="button"
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
             style={styles.collapseBtn}
-            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={sidebarCollapsed ? "Expand (⌘B)" : "Collapse (⌘B)"}
           >
-            {sidebarCollapsed ? "▶" : "◀"}
+            {sidebarCollapsed ? "▸" : "◂"}
           </button>
         </div>
 
-        {/* Connector bar */}
-        {!sidebarCollapsed && (
-        <div
-          style={{
-            ...styles.connectorBar,
-            marginRight: isCompactShell ? 28 : 40,
-          }}
-        />
-        )}
+        {/* ── LCARS Elbow Connector ── */}
+        <div style={{
+          display: "flex",
+          flexShrink: 0,
+          height: sidebarCollapsed ? 4 : 28,
+          transition: "height 0.2s ease",
+        }}>
+          <div style={{
+            width: sidebarCollapsed ? 6 : 28,
+            background: "var(--lcars-orange)",
+            transition: "width 0.2s ease",
+          }} />
+          {!sidebarCollapsed && (
+            <div style={{
+              width: 28,
+              height: 28,
+              background: "var(--lcars-orange)",
+              borderRadius: "0 0 18px 0",
+              position: "relative" as const,
+            }}>
+              <div style={{
+                position: "absolute" as const,
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: "rgba(10, 10, 26, 0.98)",
+                borderRadius: "0 0 18px 0",
+                margin: "0 0 6px 6px",
+              }} />
+            </div>
+          )}
+          {!sidebarCollapsed && (
+            <div style={{ flex: 1, height: 6, background: "var(--lcars-orange)", alignSelf: "flex-start" }} />
+          )}
+        </div>
 
-        {/* Nav sections */}
+        {/* ── Nav Sections ── */}
         <nav style={styles.nav}>
           {navSections.map((section, si) => (
             <div key={section.label}>
-              {/* Section divider bar */}
-              {!sidebarCollapsed ? (
-              <div
-                style={{
-                  ...styles.sectionBar,
-                  backgroundColor: section.color,
-                }}
-              >
-                <span style={styles.sectionBarLabel}>{section.label}</span>
+              <div style={{
+                height: sidebarCollapsed ? 4 : 20,
+                background: section.color,
+                borderRadius: sidebarCollapsed ? "0 2px 2px 0" : "0 10px 10px 0",
+                marginRight: sidebarCollapsed ? 6 : 14,
+                marginLeft: sidebarCollapsed ? 6 : 0,
+                display: "flex",
+                alignItems: "center",
+                paddingLeft: sidebarCollapsed ? 0 : 12,
+                marginTop: si > 0 ? 6 : 2,
+                marginBottom: 2,
+                transition: "height 0.2s ease",
+                overflow: "hidden",
+              }}>
+                {!sidebarCollapsed && (
+                  <span style={styles.sectionBarLabel}>{section.label}</span>
+                )}
               </div>
-              ) : (
-                <div style={{ height: 3, background: section.color, margin: "4px 8px", borderRadius: 2 }} />
-              )}
 
-              {/* Nav items */}
               {section.items.map((item) => (
                 <NavLink
                   key={item.path}
@@ -467,146 +484,169 @@ function App() {
                   end={item.path === "/"}
                   title={sidebarCollapsed ? item.label : undefined}
                   style={({ isActive }) => ({
-                    ...styles.navItem,
-                    padding: sidebarCollapsed ? "6px 0" : isCompactShell ? "6px 10px 6px 14px" : styles.navItem.padding,
-                    fontSize: sidebarCollapsed ? 14 : isCompactShell ? 11 : 12,
-                    textAlign: sidebarCollapsed ? ("center" as const) : ("left" as const),
-                    color: isActive
-                      ? "var(--lcars-orange)"
-                      : "var(--lcars-lavender)",
-                    borderLeft: sidebarCollapsed ? "none" : isActive
-                      ? `4px solid ${section.color}`
-                      : "4px solid transparent",
-                    backgroundColor: isActive
-                      ? "rgba(255, 153, 0, 0.06)"
-                      : "transparent",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: sidebarCollapsed ? 0 : 10,
+                    justifyContent: sidebarCollapsed ? "center" : "flex-start",
+                    padding: sidebarCollapsed ? "7px 0" : "6px 12px 6px 16px",
+                    fontSize: sidebarCollapsed ? 15 : 11,
+                    fontWeight: 500,
+                    textDecoration: "none",
+                    fontFamily: "'Orbitron', sans-serif",
+                    letterSpacing: sidebarCollapsed ? 0 : "1.5px",
+                    color: isActive ? "var(--lcars-orange)" : "var(--lcars-lavender)",
+                    borderLeft: sidebarCollapsed
+                      ? "none"
+                      : isActive
+                        ? `4px solid ${section.color}`
+                        : "4px solid transparent",
+                    backgroundColor: isActive ? "rgba(255, 153, 0, 0.08)" : "transparent",
+                    transition: "background-color 0.15s, color 0.15s",
                   })}
                 >
-                  {sidebarCollapsed ? item.label.charAt(0) : item.label.toUpperCase()}
+                  <span style={{
+                    display: "inline-block",
+                    width: sidebarCollapsed ? "auto" : 16,
+                    textAlign: "center" as const,
+                    fontSize: sidebarCollapsed ? 15 : 12,
+                    lineHeight: 1,
+                    flexShrink: 0,
+                  }}>
+                    {item.icon}
+                  </span>
+                  {!sidebarCollapsed && (
+                    <span>{item.label.toUpperCase()}</span>
+                  )}
                 </NavLink>
               ))}
-
-              {/* Gap between sections */}
-              {si < navSections.length - 1 && (
-                <div style={{ height: 4 }} />
-              )}
             </div>
           ))}
         </nav>
 
-        {/* Team Presence Section */}
-        {!sidebarCollapsed && (
-        <div style={styles.teamSection}>
-          <div style={styles.teamBar}>
-            <span style={styles.sectionBarLabel}>CREW STATUS</span>
-          </div>
-          {visiblePresence.map((p) => (
-            <div key={p.employeeName} style={styles.teamMember}>
-              <Avatar name={p.employeeName} size={22} />
-              <span
-                style={{
-                  width: 8,
-                  height: 8,
+        {/* ── Crew Presence ── */}
+        {!sidebarCollapsed && teamPresence.length > 0 && (
+          <div style={styles.teamSection}>
+            <div style={styles.teamBar}>
+              <span style={styles.sectionBarLabel}>CREW</span>
+            </div>
+            {visiblePresence.map((p) => (
+              <div key={p.employeeName} style={styles.teamMember}>
+                <Avatar name={p.employeeName} size={20} />
+                <span style={{
+                  width: 7,
+                  height: 7,
                   borderRadius: "50%",
-                  backgroundColor:
-                    p.combinedStatus === "active"
-                      ? "var(--status-success)"
-                      : p.combinedStatus === "idle"
-                      ? "var(--status-warning)"
-                      : "var(--text-quaternary)",
                   flexShrink: 0,
-                  boxShadow:
-                    p.combinedStatus === "active"
-                      ? "0 0 6px rgba(51, 204, 102, 0.5)"
-                      : "none",
-                  animation:
-                    p.combinedStatus === "active"
-                      ? "lcars-pulse 2s ease-in-out infinite"
-                      : "none",
-                }}
-              />
-              <span
-                style={{
-                  color: "var(--lcars-lavender)",
-                  fontSize: isCompactShell ? 11 : 12,
-                  fontFamily: "var(--font-mono)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.04em",
-                }}
-              >
-                {p.employeeName}
-              </span>
-            </div>
-          ))}
-        </div>
-        )}
-
-        {/* Quick Actions Tray */}
-        {!sidebarCollapsed && (
-          <div style={styles.quickActions}>
-            <div style={styles.quickActionsBar}>
-              <span style={styles.sectionBarLabel}>QUICK ACTIONS</span>
-            </div>
-            <div style={styles.quickActionsGrid}>
-              <button
-                type="button"
-                style={styles.quickActionBtn}
-                title="Launch Paperclip Runtime"
-                onClick={() => invoke("ensure_paperclip_runtime_started").catch(() => {})}
-              >
-                📎 LAUNCH
-              </button>
-              <button
-                type="button"
-                style={styles.quickActionBtn}
-                title="Open Paperclip UI"
-                onClick={() => invoke("open_paperclip_ui", { url: "http://127.0.0.1:3100" }).catch(() => {})}
-              >
-                🖥 UI
-              </button>
-              <button
-                type="button"
-                style={styles.quickActionBtn}
-                title="Sync All Sources"
-                onClick={() => { setSyncActive(true); invoke("trigger_sync").catch(() => {}).finally(() => setSyncActive(false)); }}
-              >
-                ⟳ SYNC
-              </button>
-              <button
-                type="button"
-                style={styles.quickActionBtn}
-                title="Sync Vault → TeamForge"
-                onClick={() => invoke("sync_local_vault_to_teamforge").catch(() => {})}
-              >
-                📂 VAULT
-              </button>
-            </div>
+                  backgroundColor: p.combinedStatus === "active"
+                    ? "var(--lcars-green)"
+                    : p.combinedStatus === "idle"
+                      ? "var(--lcars-yellow)"
+                      : "var(--text-quaternary)",
+                  boxShadow: p.combinedStatus === "active"
+                    ? "0 0 6px rgba(51, 204, 102, 0.5)"
+                    : "none",
+                }} />
+                <span style={styles.crewName}>{p.employeeName}</span>
+              </div>
+            ))}
           </div>
         )}
 
-        <div style={styles.sidebarVersionWrap}>
-          {!sidebarCollapsed && <span style={styles.sidebarVersionLabel}>BUILD</span>}
-          <span style={styles.sidebarVersionValue}>{sidebarCollapsed ? appVersion.split(".").slice(0, 2).join(".") : `v${appVersion}`}</span>
-          {updateAvailable && (
-            <span
-              onClick={() => navigate("/settings")}
-              style={styles.sidebarUpdateBadge}
-              title="Update available — click to install"
+        {/* ── Quick Actions Panel ── */}
+        <div style={styles.actionsPanel}>
+          {!sidebarCollapsed && (
+            <div style={styles.actionsPanelBar}>
+              <span style={styles.sectionBarLabel}>ACTIONS</span>
+            </div>
+          )}
+          <div style={{
+            display: "flex",
+            flexDirection: sidebarCollapsed ? "column" : "row" as const,
+            gap: 3,
+            padding: sidebarCollapsed ? "4px 6px" : "4px 10px 6px",
+          }}>
+            <button
+              type="button"
+              onClick={() => invoke("ensure_paperclip_runtime_started").catch(() => {})}
+              title={paperclipAlive ? "Paperclip running" : "Launch Paperclip"}
+              style={{
+                ...styles.actionBtn,
+                borderColor: paperclipAlive ? "rgba(51,204,102,0.3)" : "rgba(255,153,0,0.3)",
+                color: paperclipAlive ? "var(--lcars-green)" : "var(--lcars-orange)",
+              }}
             >
-              {sidebarCollapsed ? "↑" : "↑ UPDATE"}
-            </span>
+              {sidebarCollapsed ? "📎" : "📎 LAUNCH"}
+            </button>
+            <button
+              type="button"
+              onClick={() => invoke("open_paperclip_ui", { url: "http://127.0.0.1:3100" }).catch(() => {})}
+              disabled={!paperclipAlive}
+              title={paperclipAlive ? "Open Paperclip UI" : "Paperclip offline — launch first"}
+              style={{
+                ...styles.actionBtn,
+                opacity: paperclipAlive ? 1 : 0.35,
+                cursor: paperclipAlive ? "pointer" : "not-allowed",
+              }}
+            >
+              {sidebarCollapsed ? "🖥" : "🖥 UI"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setSyncActive(true); invoke("trigger_sync").catch(() => {}).finally(() => setSyncActive(false)); }}
+              title="Sync all sources"
+              style={{
+                ...styles.actionBtn,
+                color: syncActive ? "var(--lcars-cyan)" : "var(--lcars-tan)",
+                borderColor: syncActive ? "rgba(0,204,255,0.4)" : "rgba(153,153,204,0.2)",
+              }}
+            >
+              {sidebarCollapsed ? "⟳" : (syncActive ? "⟳ …" : "⟳ SYNC")}
+            </button>
+          </div>
+        </div>
+
+        {/* ── Bottom Status Strip ── */}
+        <div style={styles.bottomStrip}>
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              flexShrink: 0,
+              background: paperclipAlive === null
+                ? "var(--lcars-yellow)"
+                : paperclipAlive
+                  ? "var(--lcars-green)"
+                  : "var(--lcars-red)",
+              boxShadow: paperclipAlive
+                ? "0 0 8px rgba(51,204,102,0.6)"
+                : "none",
+            }}
+            title={paperclipAlive === null ? "Checking…" : paperclipAlive ? "Paperclip online" : "Paperclip offline"}
+          />
+          {!sidebarCollapsed && (
+            <>
+              <span style={styles.bottomLabel}>v{appVersion}</span>
+              {updateAvailable && (
+                <span onClick={() => navigate("/settings")} style={styles.updatePill} title="Update available">
+                  ↑ UPDATE
+                </span>
+              )}
+            </>
+          )}
+          {sidebarCollapsed && updateAvailable && (
+            <span onClick={() => navigate("/settings")} style={{ ...styles.updatePill, fontSize: 7, padding: "1px 3px" }} title="Update available">↑</span>
           )}
         </div>
-        <div style={styles.sidebarHeartbeat} title={paperclipAlive === null ? "Checking Paperclip..." : paperclipAlive ? "Paperclip connected" : "Paperclip offline"}>
-          <span style={{ ...styles.heartbeatDot, background: paperclipAlive === null ? "var(--lcars-yellow)" : paperclipAlive ? "var(--lcars-green)" : "var(--lcars-red)" }} />
-          {!sidebarCollapsed && <span style={styles.heartbeatLabel}>PAPERCLIP</span>}
-        </div>
 
-        {/* Bottom bar */}
-        <div style={styles.sidebarBottomBar} />
+        {/* ── Bottom LCARS Bar ── */}
+        <div style={{
+          height: sidebarCollapsed ? 16 : 28,
+          background: "linear-gradient(90deg, var(--lcars-tan), #d7a677)",
+          borderRadius: "0 14px 0 0",
+          flexShrink: 0,
+          transition: "height 0.2s ease",
+        }} />
       </aside>
 
       <main style={styles.main}>
@@ -768,13 +808,11 @@ const styles: Record<string, React.CSSProperties> = {
   sidebar: {
     width: 240,
     flexShrink: 0,
-    background:
-      "linear-gradient(180deg, rgba(10, 10, 26, 0.98) 0%, rgba(6, 6, 18, 0.98) 100%)",
+    background: "linear-gradient(180deg, rgba(10, 10, 26, 0.98) 0%, rgba(6, 6, 18, 0.98) 100%)",
     display: "flex",
     flexDirection: "column",
-    borderRight: "2px solid rgba(255, 153, 0, 0.15)",
+    borderRight: "2px solid rgba(255, 153, 0, 0.12)",
     overflow: "hidden",
-    boxShadow: "inset -1px 0 0 rgba(153, 153, 204, 0.08)",
   },
   sidebarTopBar: {
     height: 40,
@@ -782,8 +820,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "0 0 20px 0",
     display: "flex",
     alignItems: "center",
-    paddingLeft: 16,
-    paddingRight: 12,
     flexShrink: 0,
   },
   logoText: {
@@ -794,169 +830,117 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "4px",
     textTransform: "uppercase" as const,
   },
-  connectorBar: {
-    height: 5,
-    background: "linear-gradient(90deg, var(--lcars-orange), transparent)",
-    marginRight: 40,
-    flexShrink: 0,
+  collapseBtn: {
+    background: "transparent",
+    border: "none",
+    color: "rgba(0,0,0,0.6)",
+    fontSize: 11,
+    cursor: "pointer",
+    padding: "2px 6px",
+    fontWeight: 700,
+    lineHeight: 1,
   },
   nav: {
     display: "flex",
     flexDirection: "column",
     flex: 1,
     overflowY: "auto",
-    paddingTop: 4,
-  },
-  sectionBar: {
-    height: 22,
-    borderRadius: "0 11px 11px 0",
-    marginRight: 16,
-    display: "flex",
-    alignItems: "center",
-    paddingLeft: 12,
+    paddingTop: 2,
   },
   sectionBarLabel: {
     fontFamily: "'Orbitron', sans-serif",
-    fontSize: 9,
-    fontWeight: 600,
+    fontSize: 8,
+    fontWeight: 700,
     color: "#000",
     letterSpacing: "2px",
     textTransform: "uppercase" as const,
-  },
-  navItem: {
-    display: "block",
-    padding: "6px 12px 6px 16px",
-    fontSize: 12,
-    fontWeight: 500,
-    textDecoration: "none",
-    fontFamily: "'Orbitron', sans-serif",
-    letterSpacing: "1.5px",
-    transition: "background-color 0.15s, color 0.15s, border-color 0.15s",
   },
   teamSection: {
     marginTop: "auto",
     flexShrink: 0,
   },
   teamBar: {
-    height: 22,
+    height: 20,
     background: "var(--lcars-cyan)",
-    borderRadius: "0 11px 11px 0",
-    marginRight: 16,
+    borderRadius: "0 10px 10px 0",
+    marginRight: 14,
     display: "flex",
     alignItems: "center",
     paddingLeft: 12,
+    marginBottom: 2,
   },
   teamMember: {
     display: "flex",
     alignItems: "center",
-    gap: 8,
-    padding: "4px 12px 4px 16px",
+    gap: 6,
+    padding: "3px 12px 3px 16px",
   },
-  sidebarVersionWrap: {
-    display: "flex",
-    alignItems: "baseline",
-    gap: 8,
-    padding: "8px 12px 6px 16px",
-    flexShrink: 0,
-    flexWrap: "wrap" as const,
-  },
-  sidebarVersionLabel: {
-    fontFamily: "'Orbitron', sans-serif",
-    fontSize: 9,
-    fontWeight: 600,
+  crewName: {
     color: "var(--lcars-lavender)",
-    letterSpacing: "1.8px",
-    textTransform: "uppercase" as const,
-  },
-  sidebarVersionValue: {
+    fontSize: 10,
     fontFamily: "'JetBrains Mono', monospace",
-    fontSize: 12,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    textTransform: "uppercase" as const,
+    letterSpacing: "0.04em",
+  },
+  actionsPanel: {
+    flexShrink: 0,
+    marginTop: 4,
+  },
+  actionsPanelBar: {
+    height: 18,
+    background: "var(--lcars-lavender)",
+    borderRadius: "0 9px 9px 0",
+    marginRight: 14,
+    display: "flex",
+    alignItems: "center",
+    paddingLeft: 12,
+    marginBottom: 2,
+  },
+  actionBtn: {
+    flex: 1,
+    background: "rgba(153, 153, 204, 0.06)",
+    border: "1px solid rgba(153, 153, 204, 0.2)",
+    borderRadius: "0 8px 8px 0",
+    color: "var(--lcars-tan)",
+    fontSize: 8,
+    fontFamily: "'Orbitron', sans-serif",
+    letterSpacing: "0.5px",
+    padding: "6px 4px",
+    cursor: "pointer",
+    textAlign: "center" as const,
+    whiteSpace: "nowrap" as const,
+    transition: "background 0.15s, border-color 0.15s, opacity 0.15s",
+  },
+  bottomStrip: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "6px 14px",
+    flexShrink: 0,
+  },
+  bottomLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
     fontWeight: 700,
     color: "var(--lcars-tan)",
     letterSpacing: "0.08em",
   },
-  sidebarUpdateBadge: {
+  updatePill: {
     fontFamily: "'Orbitron', sans-serif",
     fontSize: 8,
     fontWeight: 600,
     color: "var(--lcars-green)",
-    letterSpacing: "1.2px",
+    letterSpacing: "1px",
     textTransform: "uppercase" as const,
     cursor: "pointer",
     padding: "2px 6px",
     border: "1px solid var(--lcars-green)",
     borderRadius: "0 6px 6px 0",
     animation: "lcars-pulse 2s ease-in-out infinite",
-  },
-  sidebarHeartbeat: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "4px 16px",
-    marginTop: 2,
-  },
-  heartbeatDot: {
-    width: 6,
-    height: 6,
-    borderRadius: "50%",
-    flexShrink: 0,
-  },
-  heartbeatLabel: {
-    fontFamily: "'JetBrains Mono', monospace",
-    fontSize: 9,
-    color: "var(--lcars-lavender)",
-    letterSpacing: "0.5px",
-  },
-  sidebarBottomBar: {
-    height: 32,
-    background: "linear-gradient(90deg, var(--lcars-tan), #d7a677)",
-    borderRadius: "0 16px 0 0",
-    flexShrink: 0,
-  },
-  collapseBtn: {
-    background: "transparent",
-    border: "none",
-    color: "#000",
-    fontSize: 10,
-    cursor: "pointer",
-    padding: "2px 6px",
-    borderRadius: 4,
-    opacity: 0.7,
-    fontWeight: 700,
-  },
-  quickActions: {
-    flexShrink: 0,
-    padding: "0 0 4px 0",
-  },
-  quickActionsBar: {
-    height: 18,
-    background: "var(--lcars-lavender)",
-    borderRadius: "0 9px 9px 0",
-    marginRight: 16,
-    display: "flex",
-    alignItems: "center",
-    paddingLeft: 12,
-    marginBottom: 4,
-  },
-  quickActionsGrid: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 3,
-    padding: "2px 8px",
-  },
-  quickActionBtn: {
-    background: "rgba(153, 153, 204, 0.08)",
-    border: "1px solid rgba(153, 153, 204, 0.18)",
-    borderRadius: 4,
-    color: "var(--lcars-tan)",
-    fontSize: 8,
-    fontFamily: "'Orbitron', sans-serif",
-    letterSpacing: "0.5px",
-    padding: "5px 4px",
-    cursor: "pointer",
-    textAlign: "center" as const,
-    whiteSpace: "nowrap" as const,
-    transition: "background 0.15s, border-color 0.15s",
+    marginLeft: "auto",
   },
   main: {
     flex: 1,
