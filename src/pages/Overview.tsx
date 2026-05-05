@@ -595,12 +595,13 @@ function Overview() {
             </div>
           </div>
           <div style={styles.commandNarrative}>
-            Delivery, portfolio health, review queues, and research intake stay
-            together here so the next decision is visible at a glance.
+            {summary.atRiskClients > 0
+              ? `⚠ ${summary.atRiskClients} CLIENT${summary.atRiskClients > 1 ? "S" : ""} AT RISK — REVIEW DELIVERY STATUS`
+              : `ALL ${summary.canonicalClients} DELIVERY STREAMS HEALTHY`}
           </div>
           {vaultError ? (
             <div style={styles.warningText}>
-              SOME WORKSPACE NOTES COULD NOT BE READ: {vaultError.toUpperCase()}
+              VAULT CONNECTION ISSUE — CHECK DESKTOP WORKSPACE IN SETTINGS
             </div>
           ) : null}
           {actionMessage ? <div style={styles.warningText}>{actionMessage}</div> : null}
@@ -651,11 +652,11 @@ function Overview() {
             </div>
           </div>
           <div style={styles.lifecycleSubtext}>
-            {portfolio.totalSurfaces} surfaces tracked across products and client
-            work, with reusable work called out separately.
+            {portfolio.productCount} PRODUCTS · {portfolio.clientDeliveryCount} CLIENT DELIVERIES · {portfolio.whiteLabelableCount} REUSABLE
           </div>
         </SectionFrame>
 
+        {dashboardRole !== "executive" && (
         <SectionFrame
           title="AGENT RUNTIME"
           subtitle="PAPERCLIP DAILY SIGNALS"
@@ -713,11 +714,12 @@ function Overview() {
           ) : (
             <div style={styles.warningText}>
               {paperclipError
-                ? paperclipError.toUpperCase()
-                : "PAPERCLIP RUNTIME IS NOT READY ON THIS MACHINE."}
+                ? "PAPERCLIP AGENT RUNTIME UNAVAILABLE — CHECK SETTINGS → DESKTOP WORKSPACE"
+                : "PAPERCLIP RUNTIME IS NOT CONFIGURED ON THIS MACHINE."}
             </div>
           )}
         </SectionFrame>
+        )}
       </div>
 
       <div style={styles.mainGrid}>
@@ -729,7 +731,7 @@ function Overview() {
             <div style={styles.actionGroup}>
               <ActionButton label="OPEN PROJECTS" onClick={() => navigate("/projects")} />
               <ActionButton
-                label="OPEN OPEN ISSUES"
+                label="OPEN ISSUES"
                 onClick={() => navigateTo("/issues", { state: "open" })}
               />
             </div>
@@ -833,6 +835,7 @@ function Overview() {
           )}
         </SectionFrame>
 
+        {dashboardRole === "developer" && (
         <SectionFrame
           title="RESEARCH INTAKE"
           subtitle="RESEARCH NOTES AND CAPTURES"
@@ -867,8 +870,7 @@ function Overview() {
             </div>
           </div>
           <div style={styles.researchMeta}>
-            <div>REGISTRY · <span style={styles.pathText}>{researchHub.registryRelativePath}</span></div>
-            <div>INBOX · <span style={styles.pathText}>{researchHub.inboxRelativePath}</span></div>
+            <div>CAPTURES · {researchHub.totalCaptures} TOTAL</div>
             <div>LIVE RESEARCH LINES · {researchHub.liveResearchCount}</div>
           </div>
           {researchHub.captures.length === 0 ? (
@@ -892,6 +894,7 @@ function Overview() {
             </div>
           )}
         </SectionFrame>
+        )}
 
         {/* Standup Digest Widget */}
         <SectionFrame
