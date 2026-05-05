@@ -94,6 +94,7 @@ function App() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paperclipAlive, setPaperclipAlive] = useState<boolean | null>(null);
+  const [paperclipUiUrl, setPaperclipUiUrl] = useState("http://127.0.0.1:3131");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const isTightShell = viewportWidth < 1240;
   const isCompactShell = viewportWidth < 1080;
@@ -114,6 +115,13 @@ function App() {
     const timer = setTimeout(checkHeartbeat, 3000);
     const interval = setInterval(checkHeartbeat, 15000);
     return () => { clearTimeout(timer); clearInterval(interval); };
+  }, []);
+
+  // Load Paperclip UI URL from settings
+  useEffect(() => {
+    invoke<Record<string, string>>("get_settings")
+      .then((s) => { if (s.paperclip_ui_url) setPaperclipUiUrl(s.paperclip_ui_url); })
+      .catch(() => {});
   }, []);
 
   // Notification feed polling every 60s
@@ -273,7 +281,7 @@ function App() {
         label: "Open Paperclip UI",
         section: "ACTIONS",
         icon: "🖥",
-        action: () => { invoke("open_paperclip_ui", { url: "http://127.0.0.1:3100" }).catch(() => {}); },
+        action: () => { invoke("open_paperclip_ui", { url: paperclipUiUrl }).catch(() => {}); },
       },
       {
         id: "action:vault-sync",
@@ -579,7 +587,7 @@ function App() {
             </button>
             <button
               type="button"
-              onClick={() => invoke("open_paperclip_ui", { url: "http://127.0.0.1:3100" }).catch(() => {})}
+              onClick={() => invoke("open_paperclip_ui", { url: paperclipUiUrl }).catch(() => {})}
               disabled={!paperclipAlive}
               title={paperclipAlive ? "Open Paperclip UI" : "Paperclip offline — launch first"}
               style={{

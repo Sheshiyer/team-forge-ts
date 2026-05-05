@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crate::db::queries;
 
-const DEFAULT_PAPERCLIP_UI_URL: &str = "http://127.0.0.1:3100";
+const DEFAULT_PAPERCLIP_UI_URL: &str = "http://127.0.0.1:3131";
 const DEFAULT_PAPERCLIP_API_URL: &str = "http://127.0.0.1:3101/api";
 
 #[derive(Debug, Clone)]

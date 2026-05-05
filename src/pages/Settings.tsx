@@ -375,7 +375,7 @@ function Settings() {
       setLocalVaultRoot(settings.local_vault_root || "");
       setPaperclipScriptPath(settings.paperclip_script_path || "");
       setPaperclipWorkingDir(settings.paperclip_working_dir || "");
-      setPaperclipUiUrl(settings.paperclip_ui_url || "http://127.0.0.1:3100");
+      setPaperclipUiUrl(settings.paperclip_ui_url || "http://127.0.0.1:3131");
       setPaperclipApiUrl(settings.paperclip_api_url || "http://127.0.0.1:3101/api");
       setPaperclipApiToken(settings.paperclip_api_token || "");
       setPaperclipAutoLaunchEnabled(
@@ -460,7 +460,7 @@ function Settings() {
       current.trim() ? current : localWorkspaceStatus.paperclipWorkingDir || ""
     );
     setPaperclipUiUrl((current) =>
-      current.trim() ? current : localWorkspaceStatus.paperclipUiUrl || "http://127.0.0.1:3100"
+      current.trim() ? current : localWorkspaceStatus.paperclipUiUrl || "http://127.0.0.1:3131"
     );
     setPaperclipApiUrl((current) =>
       current.trim() ? current : localWorkspaceStatus.paperclipApiUrl || "http://127.0.0.1:3101/api"
@@ -1960,12 +1960,12 @@ function Settings() {
           <input
             value={paperclipUiUrl}
             onChange={(event) => setPaperclipUiUrl(event.target.value)}
-            placeholder="http://127.0.0.1:3100"
+            placeholder="http://127.0.0.1:3131"
             style={styles.input}
           />
           <div style={styles.helperText}>
             Local or remote Paperclip UI address. The default local address is
-            `http://127.0.0.1:3100`.
+            `http://127.0.0.1:3131`.
           </div>
         </div>
 
