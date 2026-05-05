@@ -2,6 +2,58 @@
 
 ## Goal
 
+Tighten the current TeamForge Rust build baseline by removing the remaining
+active dead-code warnings in `cargo check`, so verification output reflects
+real problems instead of long-standing unused helper noise.
+
+## Plan
+
+- [x] Audit the currently active Rust dead-code warnings and separate the live
+      baseline from historical or out-of-scope warnings.
+- [x] Remove or trim truly unused database helpers, Huly client/auth leftovers,
+      and Slack response fields with minimal behavioral impact.
+- [x] Re-run `cargo check` and related verification, then record the new
+      warning baseline and any intentionally deferred cleanup here.
+
+## Review
+
+- Active warning baseline at start of this pass was 9 dead-code warnings.
+- The current live baseline from `cargo check` was narrower than the larger
+  historical warning paste: after the first DB cleanup pass, only 4 active
+  warnings remained in `huly` and `slack`.
+- Removed truly unused database-only leftovers:
+  - `HulyDocumentActivity` in `src-tauri/src/db/models.rs`
+  - dead query helpers in `src-tauri/src/db/queries.rs`:
+    - `upsert_employee_kpi_snapshot`
+    - `get_identity_external_ids_for_employee`
+    - `get_github_issues_for_project`
+    - `get_presence`
+    - `get_huly_issue_activities`
+- Removed unused Huly client/auth leftovers:
+  - `CORE_CLASS_TX_REMOVE_DOC`
+  - `remove_doc`
+  - `get_members`
+  - `SelectWorkspaceRequest`
+  - `AccountsResponse`
+  - `AccountsResponse::into_login_info`
+  - `HulyMember`
+- Removed the unused `user_id` field from `SlackAuthTestData`; the app only
+  consumes the Slack username/team payload from `auth.test`, and serde safely
+  ignores the extra JSON key.
+- Verification:
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+    - passed
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+    - passed with no warnings
+  - `cargo test --manifest-path src-tauri/Cargo.toml --lib`
+    - passed: `43 passed`, `0 failed`, `3 ignored`
+  - `git diff --check`
+    - passed
+
+# Task Plan
+
+## Goal
+
 Ship the current Paperclip phase-3 work as the next OTA release so the
 installed TeamForge app can pull the new runtime ops and approvals shell from
 the GitHub Actions release pipeline.

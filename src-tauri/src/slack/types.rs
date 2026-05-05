@@ -18,7 +18,6 @@ pub struct SlackEnvelope<T> {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SlackAuthTestData {
-    pub user_id: String,
     pub user: String,
     pub team: Option<String>,
     pub team_id: Option<String>,

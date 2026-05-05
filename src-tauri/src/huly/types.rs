@@ -9,48 +9,12 @@ pub struct HulyConfig {
     // Other fields may exist; ignore them.
 }
 
-// ─── Auth / workspace selection ────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SelectWorkspaceRequest {
-    pub workspace: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceLoginInfo {
     pub endpoint: String,
     pub token: String,
     pub workspace: String,
-}
-
-/// The accounts API may wrap the result in a `result` field.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountsResponse {
-    pub result: Option<WorkspaceLoginInfo>,
-    // fall through if flat
-    pub endpoint: Option<String>,
-    pub token: Option<String>,
-    pub workspace: Option<String>,
-}
-
-impl AccountsResponse {
-    /// Extract the login info whether it's nested under `result` or flat.
-    pub fn into_login_info(self) -> Option<WorkspaceLoginInfo> {
-        if let Some(info) = self.result {
-            return Some(info);
-        }
-        match (self.endpoint, self.token, self.workspace) {
-            (Some(endpoint), Some(token), Some(workspace)) => Some(WorkspaceLoginInfo {
-                endpoint,
-                token,
-                workspace,
-            }),
-            _ => None,
-        }
-    }
 }
 
 // ─── Huly domain types ─────────────────────────────────────────
@@ -87,16 +51,6 @@ pub struct HulyPerson {
     #[serde(default)]
     pub channels: Option<serde_json::Value>,
     pub city: Option<String>,
-    #[serde(rename = "_class")]
-    pub class: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HulyMember {
-    #[serde(rename = "_id")]
-    pub id: String,
-    pub role: Option<String>,
     #[serde(rename = "_class")]
     pub class: Option<String>,
 }

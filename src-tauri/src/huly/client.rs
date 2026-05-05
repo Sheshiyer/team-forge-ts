@@ -10,7 +10,6 @@ use super::types::*;
 const DEFAULT_BASE_URL: &str = "https://huly.app";
 const CORE_CLASS_TX_CREATE_DOC: &str = "core:class:TxCreateDoc";
 const CORE_CLASS_TX_UPDATE_DOC: &str = "core:class:TxUpdateDoc";
-const CORE_CLASS_TX_REMOVE_DOC: &str = "core:class:TxRemoveDoc";
 const CORE_SPACE_TX: &str = "core:space:Tx";
 
 /// Huly REST API client that talks directly to the transactor endpoint.
@@ -352,27 +351,6 @@ impl HulyClient {
         self.post_tx_value(&tx).await
     }
 
-    pub async fn remove_doc(
-        &self,
-        actor_social_id: &str,
-        class: &str,
-        object_space: &str,
-        object_id: &str,
-    ) -> Result<Value, String> {
-        let tx = json!({
-            "_id": generate_huly_id(),
-            "_class": CORE_CLASS_TX_REMOVE_DOC,
-            "space": CORE_SPACE_TX,
-            "modifiedBy": actor_social_id,
-            "modifiedOn": current_millis(),
-            "objectId": object_id,
-            "objectClass": class,
-            "objectSpace": object_space,
-        });
-
-        self.post_tx_value(&tx).await
-    }
-
     /// Fetch tracker issues, optionally only those modified since a given
     /// timestamp (milliseconds since epoch).
     pub async fn get_issues(&self, modified_since: Option<i64>) -> Result<Vec<HulyIssue>, String> {
@@ -390,37 +368,6 @@ impl HulyClient {
     pub async fn get_persons(&self) -> Result<Vec<HulyPerson>, String> {
         self.find_all_typed("contact:class:Person", json!({}), Some(500))
             .await
-    }
-
-    /// Fetch members (try contact:class:Member first, fall back to contact:mixin:Employee).
-    pub async fn get_members(&self) -> Result<Vec<HulyMember>, String> {
-        // Try contact:class:Member first
-        let docs = self
-            .find_all("contact:class:Member", json!({}), Some(500))
-            .await;
-
-        let docs = match docs {
-            Ok(d) if !d.is_empty() => d,
-            _ => {
-                eprintln!(
-                    "[huly] contact:class:Member returned nothing, trying contact:mixin:Employee"
-                );
-                self.find_all("contact:mixin:Employee", json!({}), Some(500))
-                    .await
-                    .unwrap_or_default()
-            }
-        };
-
-        let mut members = Vec::with_capacity(docs.len());
-        for doc in docs {
-            match serde_json::from_value::<HulyMember>(doc) {
-                Ok(m) => members.push(m),
-                Err(e) => {
-                    eprintln!("[huly] warning: could not parse member: {e}");
-                }
-            }
-        }
-        Ok(members)
     }
 
     pub async fn get_employees(&self) -> Result<Vec<HulyEmployee>, String> {
