@@ -1737,8 +1737,9 @@ fn resolve_default_paperclip_working_directory() -> Option<PathBuf> {
 async fn detect_node_runtime_version(app_handle: &tauri::AppHandle) -> Result<String, String> {
     let output = app_handle
         .shell()
-        .command("node")
+        .command(&resolve_node_binary())
         .args(["--version"])
+        .env("PATH", augmented_path_env())
         .output()
         .await
         .map_err(|error| format!("run node --version: {error}"))?;
@@ -2094,6 +2095,55 @@ fn resolve_paperclip_script_path(
     )
 }
 
+/// Extra bin directories to inject into PATH when spawning child processes.
+/// macOS app bundles inherit a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin),
+/// so tools installed via Homebrew, nvm, volta, fnm, or n are invisible.
+fn extra_bin_directories() -> Vec<&'static str> {
+    vec![
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",
+        "/usr/local/sbin",
+    ]
+}
+
+/// Build an augmented PATH string that prepends common tool directories
+/// to the inherited PATH.  Used by every child-process spawn so that
+/// node, npm, bash scripts, etc. can be found even when the app is
+/// launched from Finder / Dock / Spotlight.
+fn augmented_path_env() -> String {
+    let current = std::env::var("PATH").unwrap_or_default();
+    let mut parts: Vec<&str> = extra_bin_directories();
+    if !current.is_empty() {
+        parts.push(&current);
+    }
+    parts.join(":")
+}
+
+/// Resolve the absolute path to the `node` binary.
+/// Checks common macOS install locations so that the Tauri shell API
+/// works even when the app bundle's PATH is minimal.
+fn resolve_node_binary() -> String {
+    for candidate in extra_bin_directories() {
+        let path = PathBuf::from(candidate).join("node");
+        if path.is_file() {
+            return path.to_string_lossy().to_string();
+        }
+    }
+    // Fallback — let the OS try (works when run from terminal / cargo dev).
+    "node".to_string()
+}
+
+/// Resolve the absolute path to `bash`.
+fn resolve_bash_binary() -> String {
+    for candidate in ["/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/bin/bash"] {
+        if PathBuf::from(candidate).is_file() {
+            return candidate.to_string();
+        }
+    }
+    "bash".to_string()
+}
+
 fn paperclip_shell_interpreter(path: &Path) -> Option<&'static str> {
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
     match extension.as_str() {
@@ -2188,6 +2238,7 @@ async fn launch_paperclip_script_internal(
         };
 
     let mut command = app_handle.shell().command(&command_path);
+    command = command.env("PATH", augmented_path_env());
     if !args.is_empty() {
         command = command.args(args.clone());
     }
@@ -2232,10 +2283,12 @@ async fn launch_paperclip_adapter_internal(
         .ok_or_else(|| "Paperclip API URL must include a reachable port.".to_string())?;
 
     let script_string = script_path.to_string_lossy().to_string();
-    let mut command = app_handle.shell().command("node");
+    let node_binary = resolve_node_binary();
+    let mut command = app_handle.shell().command(&node_binary);
     command = command
         .args([script_string.clone()])
         .current_dir(&working_directory)
+        .env("PATH", augmented_path_env())
         .env("PORT", port.to_string())
         .env("PAPERCLIP_API_TOKEN", api_token.trim().to_string())
         .env("REPO_ROOT", working_directory.to_string_lossy().to_string());
@@ -2247,7 +2300,7 @@ async fn launch_paperclip_adapter_internal(
     Ok(PaperclipLaunchResult {
         pid: child.pid(),
         script_path: script_string,
-        command_path: "node".to_string(),
+        command_path: node_binary,
         working_directory: Some(working_directory.to_string_lossy().to_string()),
         launch_mode: format!("node-script:{adapter_source}"),
     })
@@ -2826,7 +2879,7 @@ pub async fn sync_local_vault_to_teamforge(
         "node" => {
             let output = app_handle
                 .shell()
-                .command("node")
+                .command(&resolve_node_binary())
                 .args([
                     script_path.as_str(),
                     "--apply",
@@ -2839,6 +2892,7 @@ pub async fn sync_local_vault_to_teamforge(
                     "--report",
                     report_path_string.as_str(),
                 ])
+                .env("PATH", augmented_path_env())
                 .env("TEAMFORGE_ACCESS_TOKEN", access_token.clone())
                 .env("TEAMFORGE_WORKSPACE_ID", workspace_id.clone())
                 .env("TEAMFORGE_API_BASE_URL", status.worker_base_url.clone())
@@ -4698,8 +4752,8 @@ pub async fn dispatch_hermes_command(
         .map(|d| PathBuf::from(d.trim()))
         .filter(|p| p.exists());
 
-    let mut cmd = app_handle.shell().command("bash");
-    cmd = cmd.args(&shell_args);
+    let mut cmd = app_handle.shell().command(&resolve_bash_binary());
+    cmd = cmd.args(&shell_args).env("PATH", augmented_path_env());
     if let Some(dir) = working_dir {
         cmd = cmd.current_dir(dir);
     }
