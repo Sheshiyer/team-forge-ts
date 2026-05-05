@@ -39,11 +39,17 @@ pub struct PaperclipTelemetryItem {
     pub status: String,
     pub last_cycle: Option<String>,
     pub outcome: Option<String>,
+    #[serde(default)]
     pub steps: u32,
+    #[serde(default)]
     pub blocked: u32,
+    #[serde(default)]
     pub degraded: bool,
+    #[serde(default)]
     pub stale: bool,
+    #[serde(default)]
     pub uninitialized: bool,
+    #[serde(default)]
     pub missing_files: u32,
 }
 
