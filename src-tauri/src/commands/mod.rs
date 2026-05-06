@@ -19,7 +19,11 @@ use crate::db::models::*;
 use crate::db::queries;
 use crate::github::client::GithubClient;
 use crate::github::sync::GithubSyncEngine;
-use crate::github::types::{github_project_id, normalize_github_repo_input};
+use crate::github::types::{
+    assignees_to_logins, event_type_for_issue, github_issue_id, github_project_id,
+    issue_body_excerpt, labels_to_names, normalize_github_repo_input, priority_from_labels,
+    track_from_issue, GithubIssue, GithubIssueComment,
+};
 use crate::huly::client::HulyClient;
 use crate::huly::sync::HulySyncEngine;
 use crate::huly::types::{
@@ -28,6 +32,7 @@ use crate::huly::types::{
     HulyWorkspaceNormalizationAction, HulyWorkspaceNormalizationReport,
     HulyWorkspaceNormalizationSnapshot,
 };
+use crate::intake;
 use crate::paperclip;
 use crate::slack::client::SlackClient;
 use crate::slack::sync::SlackSyncEngine;
@@ -1632,6 +1637,29 @@ pub struct PaperclipStartupResult {
     adapter_pid: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamforgeWorkerProbeResult {
+    pub ready: bool,
+    pub base_url: String,
+    pub workspace_id: Option<String>,
+    pub message: String,
+    pub credential_sources: Vec<String>,
+    pub project_count: u32,
+    pub client_profile_count: u32,
+    pub onboarding_flow_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubApiProbeResult {
+    pub ready: bool,
+    pub login: String,
+    pub message: String,
+    pub scopes: Vec<String>,
+    pub rate_limit_remaining: Option<u32>,
+}
+
 async fn trimmed_setting_value(
     pool: &sqlx::SqlitePool,
     key: &str,
@@ -2593,6 +2621,53 @@ pub async fn create_paperclip_escalation(
 }
 
 #[tauri::command]
+pub async fn create_teamforge_intake_item(
+    db: State<'_, DbPool>,
+    input: intake::TeamforgeIntakeCreateInput,
+) -> Result<intake::TeamforgeIntakeMutationResult, String> {
+    intake::create_teamforge_intake_item(&db.0, input).await
+}
+
+#[tauri::command]
+pub async fn route_teamforge_intake_item(
+    db: State<'_, DbPool>,
+    item_id: String,
+) -> Result<intake::TeamforgeIntakeMutationResult, String> {
+    intake::route_teamforge_intake_item(&db.0, &item_id).await
+}
+
+#[tauri::command]
+pub async fn update_teamforge_intake_item(
+    db: State<'_, DbPool>,
+    input: intake::TeamforgeIntakeUpdateInput,
+) -> Result<intake::TeamforgeIntakeMutationResult, String> {
+    intake::update_teamforge_intake_item(&db.0, input).await
+}
+
+#[tauri::command]
+pub async fn get_teamforge_inbox(
+    db: State<'_, DbPool>,
+) -> Result<intake::TeamforgeInboxView, String> {
+    intake::load_teamforge_inbox(&db.0).await
+}
+
+#[tauri::command]
+pub async fn get_teamforge_intake_detail(
+    db: State<'_, DbPool>,
+    item_id: String,
+) -> Result<intake::TeamforgeIntakeDetailView, String> {
+    intake::load_teamforge_intake_detail(&db.0, &item_id).await
+}
+
+#[tauri::command]
+pub async fn ingest_hermes_message(
+    db: State<'_, DbPool>,
+    input: intake::HermesIntakeInput,
+) -> Result<intake::HermesIntakeIngestResult, String> {
+    intake::ingest_hermes_message(&db.0, input).await
+}
+
+#[tauri::command]
 pub async fn get_paperclip_org_view(
     db: State<'_, DbPool>,
 ) -> Result<paperclip::PaperclipOrgView, String> {
@@ -2612,6 +2687,61 @@ pub async fn get_paperclip_agent_detail(
     user_id: String,
 ) -> Result<paperclip::PaperclipAgentDetailView, String> {
     paperclip::fetch_agent_detail(&db.0, &user_id).await
+}
+
+#[tauri::command]
+pub async fn get_paperclip_goals(
+    db: State<'_, DbPool>,
+) -> Result<paperclip::PaperclipGoalsView, String> {
+    paperclip::fetch_goals(&db.0).await
+}
+
+#[tauri::command]
+pub async fn get_paperclip_routines(
+    db: State<'_, DbPool>,
+) -> Result<paperclip::PaperclipRoutinesView, String> {
+    paperclip::fetch_routines(&db.0).await
+}
+
+#[tauri::command]
+pub async fn get_paperclip_agent_tasks_file(
+    db: State<'_, DbPool>,
+    user_id: String,
+) -> Result<paperclip::PaperclipAgentFileView, String> {
+    paperclip::fetch_agent_tasks_file(&db.0, &user_id).await
+}
+
+#[tauri::command]
+pub async fn save_paperclip_agent_tasks_file(
+    db: State<'_, DbPool>,
+    user_id: String,
+    content: String,
+) -> Result<paperclip::PaperclipFileSaveResult, String> {
+    paperclip::save_agent_tasks_file(&db.0, &user_id, &content).await
+}
+
+#[tauri::command]
+pub async fn get_paperclip_agent_manifest_file(
+    db: State<'_, DbPool>,
+    user_id: String,
+) -> Result<paperclip::PaperclipAgentFileView, String> {
+    paperclip::fetch_agent_manifest_file(&db.0, &user_id).await
+}
+
+#[tauri::command]
+pub async fn save_paperclip_agent_manifest_file(
+    db: State<'_, DbPool>,
+    user_id: String,
+    content: String,
+) -> Result<paperclip::PaperclipFileSaveResult, String> {
+    paperclip::save_agent_manifest_file(&db.0, &user_id, &content).await
+}
+
+#[tauri::command]
+pub async fn get_paperclip_hermes_sync(
+    db: State<'_, DbPool>,
+) -> Result<paperclip::PaperclipHermesSyncView, String> {
+    paperclip::fetch_hermes_sync(&db.0).await
 }
 
 #[tauri::command]
@@ -2721,23 +2851,23 @@ pub async fn list_vault_entries(
     if !base.is_dir() {
         return Err(format!("Not a directory: {}", base.display()));
     }
-    let canonical_root = std::fs::canonicalize(&vault_root)
-        .map_err(|e| format!("resolve vault root: {e}"))?;
-    let canonical_base = std::fs::canonicalize(&base)
-        .map_err(|e| format!("resolve path: {e}"))?;
+    let canonical_root =
+        std::fs::canonicalize(&vault_root).map_err(|e| format!("resolve vault root: {e}"))?;
+    let canonical_base = std::fs::canonicalize(&base).map_err(|e| format!("resolve path: {e}"))?;
     if !canonical_base.starts_with(&canonical_root) {
         return Err("Path must stay inside vault root.".to_string());
     }
 
     let mut entries: Vec<VaultEntry> = Vec::new();
-    let dir = std::fs::read_dir(&canonical_base)
-        .map_err(|e| format!("read directory: {e}"))?;
+    let dir = std::fs::read_dir(&canonical_base).map_err(|e| format!("read directory: {e}"))?;
     for entry in dir.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with('.') || name == "node_modules" || name == "dist" {
             continue;
         }
-        let meta = entry.metadata().unwrap_or_else(|_| std::fs::metadata(entry.path()).unwrap());
+        let meta = entry
+            .metadata()
+            .unwrap_or_else(|_| std::fs::metadata(entry.path()).unwrap());
         let rel = entry
             .path()
             .strip_prefix(&canonical_root)
@@ -2752,7 +2882,9 @@ pub async fn list_vault_entries(
         });
     }
     entries.sort_by(|a, b| {
-        b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     Ok(entries)
 }
@@ -2765,18 +2897,18 @@ pub async fn read_vault_file(
     let vault_root = vault::resolve_local_vault_root(&db.0).await?;
     let sanitized = sanitize_vault_relative_path(&relative_path)?;
     let target = vault_root.join(&sanitized);
-    let canonical_root = std::fs::canonicalize(&vault_root)
-        .map_err(|e| format!("resolve vault root: {e}"))?;
-    let canonical_target = std::fs::canonicalize(&target)
-        .map_err(|e| format!("resolve file: {e}"))?;
+    let canonical_root =
+        std::fs::canonicalize(&vault_root).map_err(|e| format!("resolve vault root: {e}"))?;
+    let canonical_target =
+        std::fs::canonicalize(&target).map_err(|e| format!("resolve file: {e}"))?;
     if !canonical_target.starts_with(&canonical_root) {
         return Err("Path must stay inside vault root.".to_string());
     }
     if canonical_target.is_dir() {
         return Err("Path is a directory, not a file.".to_string());
     }
-    let content = std::fs::read_to_string(&canonical_target)
-        .map_err(|e| format!("read file: {e}"))?;
+    let content =
+        std::fs::read_to_string(&canonical_target).map_err(|e| format!("read file: {e}"))?;
     // Truncate to 64KB for safety
     Ok(content.chars().take(65536).collect())
 }
@@ -3187,6 +3319,7 @@ pub struct FounderCommandCenterView {
     pub white_labelable: Vec<vault::VaultPortfolioSurface>,
     pub needs_review: FounderNeedsReviewView,
     pub research_hub: vault::VaultResearchHubSummary,
+    pub intake_console: intake::FounderIntakeConsoleView,
     pub paperclip_runtime: Option<paperclip::PaperclipRuntimeOverview>,
     pub paperclip_error: Option<String>,
     pub vault_error: Option<String>,
@@ -3228,6 +3361,14 @@ pub async fn get_founder_command_center(
     let (vault_signals, vault_error) = match vault::load_founder_vault_signals(pool).await {
         Ok(signals) => (Some(signals), None),
         Err(error) => (None, Some(error)),
+    };
+    let intake_console = match intake::load_founder_intake_console(pool).await {
+        Ok(console) => console,
+        Err(error) => {
+            let mut console = intake::empty_founder_intake_console();
+            console.error = Some(error);
+            console
+        }
     };
 
     let portfolio_surfaces = vault_signals
@@ -3366,6 +3507,7 @@ pub async fn get_founder_command_center(
         white_labelable,
         needs_review,
         research_hub,
+        intake_console,
         paperclip_runtime,
         paperclip_error,
         vault_error,
@@ -4633,7 +4775,9 @@ pub async fn trigger_slack_sync(db: State<'_, DbPool>) -> Result<String, String>
     let token = queries::get_setting(pool, "slack_bot_token")
         .await
         .map_err(|e| format!("db error: {e}"))?
-        .ok_or_else(|| "Slack bot token not configured. Save a valid xoxb-... token first.".to_string())?;
+        .ok_or_else(|| {
+            "Slack bot token not configured. Save a valid xoxb-... token first.".to_string()
+        })?;
 
     let token = validate_slack_bot_token(&token)?;
     let client = Arc::new(SlackClient::new(token));
@@ -4643,7 +4787,10 @@ pub async fn trigger_slack_sync(db: State<'_, DbPool>) -> Result<String, String>
 
     Ok(format!(
         "Slack sync complete: {}/{} channels synced, {} messages scanned, {} persisted",
-        report.channels_synced, report.channels_total, report.messages_scanned, report.messages_persisted
+        report.channels_synced,
+        report.channels_total,
+        report.messages_scanned,
+        report.messages_persisted
     ))
 }
 
@@ -4684,10 +4831,7 @@ pub async fn get_relations_by_type(
 }
 
 #[tauri::command]
-pub async fn delete_relation(
-    db: State<'_, DbPool>,
-    id: i64,
-) -> Result<bool, String> {
+pub async fn delete_relation(db: State<'_, DbPool>, id: i64) -> Result<bool, String> {
     let pool = &db.0;
     queries::delete_entity_relation(pool, id)
         .await
@@ -4727,7 +4871,10 @@ pub async fn dispatch_hermes_command(
             return Err("Paperclip working directory not configured. Set it in Settings → Desktop Workspace.".to_string());
         }
     } else {
-        return Err("Paperclip working directory not configured. Set it in Settings → Desktop Workspace.".to_string());
+        return Err(
+            "Paperclip working directory not configured. Set it in Settings → Desktop Workspace."
+                .to_string(),
+        );
     };
 
     if !script_path.exists() {
@@ -4742,7 +4889,10 @@ pub async fn dispatch_hermes_command(
         return Err("Command is required".to_string());
     }
 
-    let mut shell_args = vec![script_path.to_string_lossy().to_string(), cmd_trimmed.clone()];
+    let mut shell_args = vec![
+        script_path.to_string_lossy().to_string(),
+        cmd_trimmed.clone(),
+    ];
     if let Some(extra) = &args {
         shell_args.extend(extra.iter().map(|a| a.to_string()));
     }
@@ -4775,6 +4925,64 @@ pub async fn dispatch_hermes_command(
 
     Ok(HermesDispatchResult {
         command: cmd_trimmed,
+        success: output.status.success(),
+        output: combined.trim().to_string(),
+        exit_code: output.status.code(),
+    })
+}
+
+#[tauri::command]
+pub async fn run_hermes_poller_once(
+    app_handle: tauri::AppHandle,
+    db: State<'_, DbPool>,
+) -> Result<HermesDispatchResult, String> {
+    let pool = &db.0;
+    let paperclip_working_dir = queries::get_setting(pool, "paperclip_working_dir")
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    let Some(dir) = paperclip_working_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err(
+            "Paperclip working directory not configured. Set it in Settings → Desktop Workspace."
+                .to_string(),
+        );
+    };
+
+    let working_dir = PathBuf::from(dir);
+    let script_path = working_dir.join("scripts/hermes-tg-poller.sh");
+    if !script_path.exists() {
+        return Err(format!(
+            "Hermes poller not found at: {}",
+            script_path.display()
+        ));
+    }
+
+    let output = app_handle
+        .shell()
+        .command(&resolve_bash_binary())
+        .args([script_path.to_string_lossy().as_ref(), "--once"])
+        .current_dir(working_dir)
+        .env("PATH", augmented_path_env())
+        .output()
+        .await
+        .map_err(|error| format!("run hermes poller once: {error}"))?;
+
+    let stdout = decode_shell_output(&output.stdout);
+    let stderr = decode_shell_output(&output.stderr);
+    let combined = if stderr.is_empty() {
+        stdout.clone()
+    } else if stdout.is_empty() {
+        stderr.clone()
+    } else {
+        format!("{stdout}\n{stderr}")
+    };
+
+    Ok(HermesDispatchResult {
+        command: "poll_once".to_string(),
         success: output.status.success(),
         output: combined.trim().to_string(),
         exit_code: output.status.code(),
@@ -7851,7 +8059,9 @@ pub async fn get_employee_summary(
     );
 
     // Cross-system activity timeline (last 14 days)
-    let fourteen_days_ago = (today - chrono::Duration::days(14)).format("%Y-%m-%d").to_string();
+    let fourteen_days_ago = (today - chrono::Duration::days(14))
+        .format("%Y-%m-%d")
+        .to_string();
 
     let mut recent_activity: Vec<ActivityItem> = sqlx::query_as::<_, ActivityItem>(
         "SELECT
@@ -9536,6 +9746,84 @@ pub struct ActiveProjectIssueView {
     pub closed_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueTimelineEventView {
+    pub key: String,
+    pub event_type: String,
+    pub label: String,
+    pub severity: String,
+    pub occurred_at: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveProjectIssueAttachmentView {
+    pub url: String,
+    pub label: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveProjectIssueCommentView {
+    pub id: i64,
+    pub author_login: Option<String>,
+    pub body: String,
+    pub url: String,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub attachments: Vec<ActiveProjectIssueAttachmentView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveProjectIssueRelatedView {
+    pub relation_id: i64,
+    pub direction: String,
+    pub entity_id: String,
+    pub repo: String,
+    pub number: i64,
+    pub title: String,
+    pub state: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateActiveProjectIssueCommentInput {
+    pub repo: String,
+    pub number: i64,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateActiveProjectIssueInput {
+    pub repo: String,
+    pub number: i64,
+    pub title: String,
+    pub body: String,
+    pub state: String,
+    pub labels: Vec<String>,
+    pub assignees: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveProjectIssueDetailView {
+    pub issue: ActiveProjectIssueView,
+    pub body_excerpt: Option<String>,
+    pub body_markdown: Option<String>,
+    pub body_attachments: Vec<ActiveProjectIssueAttachmentView>,
+    pub comments: Vec<ActiveProjectIssueCommentView>,
+    pub live_data_error: Option<String>,
+    pub parent_issues: Vec<ActiveProjectIssueRelatedView>,
+    pub sub_issues: Vec<ActiveProjectIssueRelatedView>,
+    pub timeline: Vec<IssueTimelineEventView>,
+}
+
 fn map_teamforge_active_project_issue_cache(
     row: TeamforgeActiveProjectIssueCache,
 ) -> ActiveProjectIssueView {
@@ -9558,6 +9846,59 @@ fn map_teamforge_active_project_issue_cache(
         created_at: row.created_at,
         updated_at: row.updated_at.or(row.last_synced_at),
         closed_at: row.closed_at,
+    }
+}
+
+fn issue_event_detail(event: &OpsEvent) -> String {
+    let payload = serde_json::from_str::<serde_json::Value>(&event.payload_json).ok();
+    match event.event_type.as_str() {
+        "github.issue.labels_changed" => payload
+            .as_ref()
+            .and_then(|value| value.get("labels"))
+            .and_then(|value| value.as_array())
+            .map(|labels| {
+                let values = labels
+                    .iter()
+                    .filter_map(|value| value.as_str())
+                    .collect::<Vec<_>>();
+                if values.is_empty() {
+                    "Labels changed.".to_string()
+                } else {
+                    format!("Labels updated: {}.", values.join(", "))
+                }
+            })
+            .unwrap_or_else(|| "Labels changed.".to_string()),
+        "github.issue.assignees_changed" => payload
+            .as_ref()
+            .and_then(|value| value.get("assignees"))
+            .and_then(|value| value.as_array())
+            .map(|assignees| {
+                let values = assignees
+                    .iter()
+                    .filter_map(|value| value.as_str())
+                    .collect::<Vec<_>>();
+                if values.is_empty() {
+                    "Assignees updated.".to_string()
+                } else {
+                    format!("Assignees updated: {}.", values.join(", "))
+                }
+            })
+            .unwrap_or_else(|| "Assignees changed.".to_string()),
+        "github.issue.reopened" => "Issue was reopened.".to_string(),
+        "github.issue.closed" => "Issue was closed.".to_string(),
+        "github.issue.opened" => "Issue was opened.".to_string(),
+        "github.issue.commented" => payload
+            .as_ref()
+            .and_then(|value| value.get("author"))
+            .and_then(|value| value.as_str())
+            .map(|author| format!("Comment posted by {author}."))
+            .unwrap_or_else(|| "Comment posted.".to_string()),
+        _ => payload
+            .as_ref()
+            .and_then(|value| value.get("title"))
+            .and_then(|value| value.as_str())
+            .map(|title| format!("Captured `{title}`."))
+            .unwrap_or_else(|| "Issue activity recorded.".to_string()),
     }
 }
 
@@ -9786,11 +10127,569 @@ async fn load_active_project_issues(
     Ok(rows)
 }
 
+async fn resolve_github_token(pool: &sqlx::SqlitePool) -> Result<String, String> {
+    queries::get_setting(pool, "github_token")
+        .await
+        .map_err(|e| format!("read github token: {e}"))?
+        .or_else(|| std::env::var("GITHUB_TOKEN").ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "GitHub token is not configured.".to_string())
+}
+
+fn extract_attachment_urls(markdown: &str, source: &str) -> Vec<ActiveProjectIssueAttachmentView> {
+    let mut seen = HashSet::new();
+    markdown
+        .split_whitespace()
+        .filter_map(|token| {
+            let candidate = token
+                .trim_matches(|ch: char| {
+                    matches!(
+                        ch,
+                        '(' | ')' | '[' | ']' | '<' | '>' | ',' | ';' | '"' | '\''
+                    )
+                })
+                .trim();
+            if candidate.is_empty() || !candidate.starts_with("http") {
+                return None;
+            }
+
+            let lower = candidate.to_ascii_lowercase();
+            let is_attachment = lower.contains("githubusercontent.com")
+                || lower.contains("user-images.githubusercontent.com")
+                || lower.ends_with(".png")
+                || lower.ends_with(".jpg")
+                || lower.ends_with(".jpeg")
+                || lower.ends_with(".gif")
+                || lower.ends_with(".webp")
+                || lower.ends_with(".pdf")
+                || lower.ends_with(".docx")
+                || lower.ends_with(".zip");
+            if !is_attachment || !seen.insert(candidate.to_string()) {
+                return None;
+            }
+
+            let label = candidate
+                .rsplit('/')
+                .next()
+                .filter(|value| !value.is_empty())
+                .unwrap_or(candidate)
+                .to_string();
+            Some(ActiveProjectIssueAttachmentView {
+                url: candidate.to_string(),
+                label,
+                source: source.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn map_issue_comment(comment: GithubIssueComment) -> ActiveProjectIssueCommentView {
+    let body = comment.body.unwrap_or_default();
+    let attachments = extract_attachment_urls(&body, "comment");
+    ActiveProjectIssueCommentView {
+        id: comment.id,
+        author_login: comment.user.and_then(|user| Some(user.login)),
+        body,
+        url: comment.html_url,
+        created_at: comment.created_at,
+        updated_at: comment.updated_at,
+        attachments,
+    }
+}
+
+fn overlay_active_issue_from_cache(issue: &mut ActiveProjectIssueView, cached: &GithubIssueCache) {
+    issue.title = cached.title.clone();
+    issue.state = cached.state.clone();
+    issue.url = cached.url.clone();
+    issue.milestone_number = cached.milestone_number;
+    issue.labels = parse_json_string_list(&cached.labels_json);
+    issue.assignees = parse_json_string_list(&cached.assignee_logins_json);
+    issue.priority = cached.priority.clone();
+    issue.track = cached.track.clone();
+    issue.created_at = cached.created_at.clone();
+    issue.updated_at = cached.updated_at.clone().or(Some(cached.synced_at.clone()));
+    issue.closed_at = cached.closed_at.clone();
+}
+
+fn overlay_active_issue_from_live_issue(
+    issue: &mut ActiveProjectIssueView,
+    live_issue: &GithubIssue,
+) {
+    let labels = labels_to_names(&live_issue.labels);
+    issue.title = live_issue.title.clone();
+    issue.state = live_issue.state.clone();
+    issue.url = live_issue.html_url.clone();
+    issue.milestone_number = live_issue
+        .milestone
+        .as_ref()
+        .map(|milestone| milestone.number);
+    issue.labels = labels.clone();
+    issue.assignees = assignees_to_logins(&live_issue.assignees);
+    issue.priority = priority_from_labels(&labels);
+    issue.track = track_from_issue(&live_issue.title, &labels);
+    issue.created_at = live_issue.created_at.clone();
+    issue.updated_at = live_issue.updated_at.clone();
+    issue.closed_at = live_issue.closed_at.clone();
+}
+
+fn build_github_issue_cache_row(
+    repo: &str,
+    issue: &GithubIssue,
+    synced_at: &str,
+) -> Result<GithubIssueCache, String> {
+    let labels = labels_to_names(&issue.labels);
+    let assignees = assignees_to_logins(&issue.assignees);
+    let labels_json =
+        serde_json::to_string(&labels).map_err(|e| format!("serialize github labels: {e}"))?;
+    let assignee_logins_json = serde_json::to_string(&assignees)
+        .map_err(|e| format!("serialize github assignees: {e}"))?;
+
+    Ok(GithubIssueCache {
+        repo: repo.to_string(),
+        number: issue.number,
+        node_id: issue.node_id.clone(),
+        title: issue.title.clone(),
+        body_excerpt: issue_body_excerpt(issue.body.as_deref()),
+        state: issue.state.clone(),
+        url: issue.html_url.clone(),
+        milestone_number: issue.milestone.as_ref().map(|milestone| milestone.number),
+        assignee_logins_json,
+        labels_json,
+        priority: priority_from_labels(&labels),
+        track: track_from_issue(&issue.title, &labels),
+        created_at: issue.created_at.clone(),
+        updated_at: issue.updated_at.clone(),
+        closed_at: issue.closed_at.clone(),
+        synced_at: synced_at.to_string(),
+    })
+}
+
+fn parse_github_issue_entity_id(entity_id: &str) -> Option<(String, i64)> {
+    let suffix = entity_id.strip_prefix("github:")?;
+    let (repo, number) = suffix.rsplit_once(":issue:")?;
+    let number = number.parse::<i64>().ok()?;
+    Some((repo.to_string(), number))
+}
+
+async fn load_related_issue_views(
+    pool: &sqlx::SqlitePool,
+    repo: &str,
+    number: i64,
+) -> Result<
+    (
+        Vec<ActiveProjectIssueRelatedView>,
+        Vec<ActiveProjectIssueRelatedView>,
+    ),
+    String,
+> {
+    let entity_id = github_issue_id(repo, number);
+    let relations = queries::get_relations_for_entity(pool, "github_issue", &entity_id)
+        .await
+        .map_err(|e| format!("load issue relations: {e}"))?;
+
+    let mut parent_issues = Vec::new();
+    let mut sub_issues = Vec::new();
+
+    for relation in relations
+        .into_iter()
+        .filter(|relation| relation.relation_type == "sub_issue_of")
+    {
+        let (direction, related_entity_id) = if relation.source_id == entity_id {
+            ("parent", relation.target_id.clone())
+        } else if relation.target_id == entity_id {
+            ("child", relation.source_id.clone())
+        } else {
+            continue;
+        };
+
+        let Some((related_repo, related_number)) = parse_github_issue_entity_id(&related_entity_id)
+        else {
+            continue;
+        };
+
+        let cached = queries::get_github_issue(pool, &related_repo, related_number)
+            .await
+            .map_err(|e| format!("load related issue cache: {e}"))?;
+
+        let item = ActiveProjectIssueRelatedView {
+            relation_id: relation.id,
+            direction: direction.to_string(),
+            entity_id: related_entity_id,
+            repo: related_repo.clone(),
+            number: related_number,
+            title: cached
+                .as_ref()
+                .map(|row| row.title.clone())
+                .unwrap_or_else(|| format!("{related_repo}#{related_number}")),
+            state: cached
+                .as_ref()
+                .map(|row| row.state.clone())
+                .unwrap_or_else(|| "unknown".to_string()),
+            url: cached
+                .as_ref()
+                .map(|row| row.url.clone())
+                .unwrap_or_else(|| {
+                    format!("https://github.com/{related_repo}/issues/{related_number}")
+                }),
+        };
+
+        if direction == "parent" {
+            parent_issues.push(item);
+        } else {
+            sub_issues.push(item);
+        }
+    }
+
+    parent_issues.sort_by(|left, right| {
+        left.repo
+            .cmp(&right.repo)
+            .then(left.number.cmp(&right.number))
+    });
+    sub_issues.sort_by(|left, right| {
+        left.repo
+            .cmp(&right.repo)
+            .then(left.number.cmp(&right.number))
+    });
+
+    Ok((parent_issues, sub_issues))
+}
+
 #[tauri::command]
 pub async fn get_active_project_issues(
     db: State<'_, DbPool>,
 ) -> Result<Vec<ActiveProjectIssueView>, String> {
     load_active_project_issues(&db.0).await
+}
+
+async fn load_active_project_issue_detail_internal(
+    pool: &sqlx::SqlitePool,
+    repo: &str,
+    number: i64,
+) -> Result<ActiveProjectIssueDetailView, String> {
+    let issues = load_active_project_issues(pool).await?;
+    let Some(issue) = issues
+        .into_iter()
+        .find(|issue| issue.repo == repo && issue.number == number)
+    else {
+        return Err(format!("Issue not found for {repo}#{number}"));
+    };
+
+    let cached = queries::get_github_issue(pool, repo, number)
+        .await
+        .map_err(|error| format!("load cached issue detail: {error}"))?;
+    let mut issue = issue;
+    if let Some(cached_issue) = cached.as_ref() {
+        overlay_active_issue_from_cache(&mut issue, cached_issue);
+    }
+
+    let entity_id = github_issue_id(repo, number);
+    let (parent_issues, sub_issues) = load_related_issue_views(pool, repo, number).await?;
+    let timeline_rows = sqlx::query_as::<_, OpsEvent>(
+        "SELECT *
+         FROM ops_events
+         WHERE entity_type = 'github_issue' AND entity_id = ?1
+         ORDER BY occurred_at DESC, detected_at DESC
+         LIMIT 40",
+    )
+    .bind(&entity_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| format!("load issue timeline: {error}"))?;
+
+    let mut body_markdown = cached.as_ref().and_then(|row| row.body_excerpt.clone());
+    let mut body_attachments = body_markdown
+        .as_deref()
+        .map(|body| extract_attachment_urls(body, "issue_body"))
+        .unwrap_or_default();
+    let mut comments = Vec::new();
+    let mut live_data_error = None;
+
+    match resolve_github_token(pool).await {
+        Ok(token) => {
+            let client = GithubClient::new(token);
+            match tokio::try_join!(
+                client.get_issue(repo, number),
+                client.get_issue_comments(repo, number)
+            ) {
+                Ok((live_issue, live_comments)) => {
+                    overlay_active_issue_from_live_issue(&mut issue, &live_issue);
+                    body_markdown = live_issue.body.clone().or(body_markdown);
+                    body_attachments = body_markdown
+                        .as_deref()
+                        .map(|body| extract_attachment_urls(body, "issue_body"))
+                        .unwrap_or_default();
+                    comments = live_comments.into_iter().map(map_issue_comment).collect();
+                }
+                Err(error) => {
+                    live_data_error = Some(error);
+                }
+            }
+        }
+        Err(error) => {
+            live_data_error = Some(error);
+        }
+    }
+
+    Ok(ActiveProjectIssueDetailView {
+        issue,
+        body_excerpt: cached.and_then(|row| row.body_excerpt),
+        body_markdown,
+        body_attachments,
+        comments,
+        live_data_error,
+        parent_issues,
+        sub_issues,
+        timeline: timeline_rows
+            .iter()
+            .map(|event| IssueTimelineEventView {
+                key: event.sync_key.clone(),
+                event_type: event.event_type.clone(),
+                label: event
+                    .event_type
+                    .trim()
+                    .strip_prefix("github.issue.")
+                    .unwrap_or(event.event_type.as_str())
+                    .replace('_', " ")
+                    .replace('.', " ")
+                    .to_uppercase(),
+                severity: event.severity.clone(),
+                occurred_at: event.occurred_at.clone(),
+                detail: issue_event_detail(event),
+            })
+            .collect::<Vec<_>>(),
+    })
+}
+
+#[tauri::command]
+pub async fn get_active_project_issue_detail(
+    db: State<'_, DbPool>,
+    repo: String,
+    number: i64,
+) -> Result<ActiveProjectIssueDetailView, String> {
+    load_active_project_issue_detail_internal(&db.0, &repo, number).await
+}
+
+#[tauri::command]
+pub async fn update_active_project_issue(
+    db: State<'_, DbPool>,
+    input: UpdateActiveProjectIssueInput,
+) -> Result<ActiveProjectIssueDetailView, String> {
+    let repo = input.repo.trim();
+    if repo.is_empty() {
+        return Err("Repo is required.".to_string());
+    }
+    let title = input.title.trim();
+    if title.is_empty() {
+        return Err("Issue title is required.".to_string());
+    }
+    let state = input.state.trim().to_lowercase();
+    if !matches!(state.as_str(), "open" | "closed") {
+        return Err("Issue state must be `open` or `closed`.".to_string());
+    }
+
+    let labels = input
+        .labels
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .fold(Vec::new(), |mut acc, value| {
+            if !acc.contains(&value) {
+                acc.push(value);
+            }
+            acc
+        });
+    let assignees = input
+        .assignees
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .fold(Vec::new(), |mut acc, value| {
+            if !acc.contains(&value) {
+                acc.push(value);
+            }
+            acc
+        });
+
+    let previous = queries::get_github_issue(&db.0, repo, input.number)
+        .await
+        .map_err(|error| format!("load cached issue detail: {error}"))?;
+
+    let token = resolve_github_token(&db.0).await?;
+    let client = GithubClient::new(token);
+    let live_issue = client
+        .update_issue(
+            repo,
+            input.number,
+            &serde_json::json!({
+                "title": title,
+                "body": input.body,
+                "state": state,
+                "labels": labels,
+                "assignees": assignees,
+            }),
+        )
+        .await?;
+
+    let synced_at = Utc::now().to_rfc3339();
+    let cache_row = build_github_issue_cache_row(repo, &live_issue, &synced_at)?;
+    queries::upsert_github_issue(&db.0, &cache_row)
+        .await
+        .map_err(|error| format!("cache updated github issue: {error}"))?;
+    if let Ok(mut projection_rows) =
+        queries::get_teamforge_active_project_issue_projection(&db.0).await
+    {
+        if let Some(row) = projection_rows
+            .iter_mut()
+            .find(|row| row.repo == repo && row.number == input.number)
+        {
+            row.title = cache_row.title.clone();
+            row.state = cache_row.state.clone();
+            row.url = cache_row.url.clone();
+            row.milestone_number = cache_row.milestone_number;
+            row.labels_json = cache_row.labels_json.clone();
+            row.assignees_json = cache_row.assignee_logins_json.clone();
+            row.priority = cache_row.priority.clone();
+            row.track = cache_row.track.clone();
+            row.created_at = cache_row.created_at.clone();
+            row.updated_at = cache_row.updated_at.clone();
+            row.closed_at = cache_row.closed_at.clone();
+            row.last_synced_at = Some(synced_at.clone());
+            let _ =
+                queries::replace_teamforge_active_project_issue_projection(&db.0, &projection_rows)
+                    .await;
+        }
+    }
+
+    let event_type = if let Some(previous_issue) = previous.as_ref() {
+        let state_event_type =
+            event_type_for_issue(Some(previous_issue.state.as_str()), &live_issue.state);
+        if state_event_type == "github.issue.updated" {
+            if previous_issue.labels_json != cache_row.labels_json {
+                "github.issue.labels_changed"
+            } else if previous_issue.assignee_logins_json != cache_row.assignee_logins_json {
+                "github.issue.assignees_changed"
+            } else {
+                state_event_type
+            }
+        } else {
+            state_event_type
+        }
+    } else {
+        event_type_for_issue(None, &live_issue.state)
+    };
+    let payload_json = serde_json::to_string(&serde_json::json!({
+        "repo": repo,
+        "number": live_issue.number,
+        "title": live_issue.title,
+        "state": live_issue.state,
+        "url": live_issue.html_url,
+        "milestone_number": live_issue.milestone.as_ref().map(|milestone| milestone.number),
+        "milestone_title": live_issue.milestone.as_ref().map(|milestone| milestone.title.clone()),
+        "labels": labels_to_names(&live_issue.labels),
+        "assignees": assignees_to_logins(&live_issue.assignees),
+        "priority": &cache_row.priority,
+        "track": &cache_row.track,
+        "project_id": live_issue
+            .milestone
+            .as_ref()
+            .map(|milestone| github_project_id(repo, milestone.number)),
+    }))
+    .map_err(|error| format!("serialize github issue event payload: {error}"))?;
+
+    let occurred_at = live_issue
+        .updated_at
+        .clone()
+        .unwrap_or_else(|| synced_at.clone());
+    queries::upsert_ops_event(
+        &db.0,
+        &OpsEvent {
+            id: None,
+            sync_key: format!(
+                "manual:github-issue:{repo}:{}:{occurred_at}:{event_type}",
+                live_issue.number
+            ),
+            schema_version: "v1".to_string(),
+            source: "github".to_string(),
+            event_type: event_type.to_string(),
+            entity_type: "github_issue".to_string(),
+            entity_id: github_issue_id(repo, live_issue.number),
+            actor_employee_id: None,
+            actor_clockify_user_id: None,
+            actor_huly_person_id: None,
+            actor_slack_user_id: None,
+            occurred_at: occurred_at.clone(),
+            severity: "info".to_string(),
+            payload_json,
+            detected_at: synced_at,
+        },
+    )
+    .await
+    .map_err(|error| format!("record github issue update event: {error}"))?;
+
+    load_active_project_issue_detail_internal(&db.0, repo, input.number).await
+}
+
+#[tauri::command]
+pub async fn create_active_project_issue_comment(
+    db: State<'_, DbPool>,
+    input: CreateActiveProjectIssueCommentInput,
+) -> Result<ActiveProjectIssueCommentView, String> {
+    let repo = input.repo.trim();
+    if repo.is_empty() {
+        return Err("Repo is required.".to_string());
+    }
+    let body = input.body.trim();
+    if body.is_empty() {
+        return Err("Comment body is required.".to_string());
+    }
+
+    let token = resolve_github_token(&db.0).await?;
+    let client = GithubClient::new(token);
+    let comment = client
+        .create_issue_comment(repo, input.number, body)
+        .await?;
+    let occurred_at = comment
+        .updated_at
+        .clone()
+        .or(comment.created_at.clone())
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
+    let payload_json = serde_json::to_string(&serde_json::json!({
+        "repo": repo,
+        "number": input.number,
+        "commentId": comment.id,
+        "author": comment.user.as_ref().map(|user| user.login.clone()),
+        "url": comment.html_url,
+        "title": format!("Comment on {repo}#{}", input.number),
+    }))
+    .map_err(|error| format!("serialize github comment event payload: {error}"))?;
+    queries::upsert_ops_event(
+        &db.0,
+        &OpsEvent {
+            id: None,
+            sync_key: format!(
+                "manual:github-issue-comment:{repo}:{}:{}",
+                input.number, comment.id
+            ),
+            schema_version: "v1".to_string(),
+            source: "github".to_string(),
+            event_type: "github.issue.commented".to_string(),
+            entity_type: "github_issue".to_string(),
+            entity_id: github_issue_id(repo, input.number),
+            actor_employee_id: None,
+            actor_clockify_user_id: None,
+            actor_huly_person_id: None,
+            actor_slack_user_id: None,
+            occurred_at,
+            severity: "info".to_string(),
+            payload_json,
+            detected_at: Utc::now().to_rfc3339(),
+        },
+    )
+    .await
+    .map_err(|error| format!("record github comment event: {error}"))?;
+
+    Ok(map_issue_comment(comment))
 }
 
 async fn load_devices(pool: &sqlx::SqlitePool) -> Result<Vec<DeviceView>, String> {
@@ -10844,6 +11743,11 @@ struct CloudCredentialData {
     integrations: Option<CloudIntegrationConfig>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct GithubViewer {
+    login: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialSyncResult {
@@ -10861,6 +11765,181 @@ pub struct CloudIntegrationSyncResult {
     pub slack: Option<String>,
     pub github: Vec<GithubSyncReport>,
     pub errors: Vec<String>,
+}
+
+fn available_cloud_credential_sources(credentials: &CloudCredentials) -> Vec<String> {
+    let mut sources = Vec::new();
+    for (label, credential) in [
+        ("clockify", credentials.clockify.as_ref()),
+        ("huly", credentials.huly.as_ref()),
+        ("slack", credentials.slack.as_ref()),
+        ("github", credentials.github.as_ref()),
+    ] {
+        if credential
+            .map(|entry| {
+                entry.available
+                    && entry
+                        .token
+                        .as_ref()
+                        .map(|value| !value.trim().is_empty())
+                        .unwrap_or(false)
+            })
+            .unwrap_or(false)
+        {
+            sources.push(label.to_string());
+        }
+    }
+    sources
+}
+
+async fn probe_teamforge_worker_api_for_pool(
+    pool: &sqlx::SqlitePool,
+) -> Result<TeamforgeWorkerProbeResult, String> {
+    let base_url = queries::get_setting(pool, "cloud_credentials_base_url")
+        .await
+        .map_err(|e| format!("read cloud_credentials_base_url: {e}"))?
+        .unwrap_or_else(|| DEFAULT_WORKER_BASE_URL.to_string());
+    let audience = queries::get_setting(pool, "cloud_credentials_audience")
+        .await
+        .map_err(|e| format!("read cloud_credentials_audience: {e}"))?
+        .unwrap_or_else(|| DEFAULT_CREDENTIALS_AUDIENCE.to_string());
+    let access_token = queries::get_setting(pool, "cloud_credentials_access_token")
+        .await
+        .map_err(|e| format!("read cloud_credentials_access_token: {e}"))?
+        .ok_or("cloud credential access token is not configured")?;
+
+    let access_token = access_token.trim();
+    if access_token.is_empty() {
+        return Err("cloud credential access token is not configured".to_string());
+    }
+
+    let mut credentials_url =
+        reqwest::Url::parse(&(base_url.trim_end_matches('/').to_string() + "/v1/credentials"))
+            .map_err(|e| format!("invalid cloud base url: {e}"))?;
+    credentials_url
+        .query_pairs_mut()
+        .append_pair("audience", audience.trim());
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(credentials_url.clone())
+        .bearer_auth(access_token)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("probe TeamForge credentials route: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "TeamForge credentials route returned status {}",
+            response.status()
+        ));
+    }
+
+    let body: CloudCredentialResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("parse TeamForge credentials response: {e}"))?;
+    if !body.ok {
+        return Err("TeamForge credentials response returned ok=false".to_string());
+    }
+
+    let data = body
+        .data
+        .ok_or_else(|| "TeamForge credentials response was missing data".to_string())?;
+    let credential_sources = available_cloud_credential_sources(&data.credentials);
+
+    let project_graphs = teamforge_worker::fetch_teamforge_project_graphs(pool).await?;
+    let client_profiles = teamforge_worker::fetch_teamforge_client_profiles(pool).await?;
+    let onboarding_flows = teamforge_worker::fetch_teamforge_onboarding_flows(pool, None).await?;
+    let explicit_workspace_id = trimmed_setting_value(pool, "teamforge_workspace_id").await?;
+    let inferred_workspace_id = teamforge_worker::resolve_teamforge_workspace_id(pool)
+        .await
+        .ok()
+        .flatten();
+    let workspace_id = explicit_workspace_id.or(inferred_workspace_id);
+
+    Ok(TeamforgeWorkerProbeResult {
+        ready: true,
+        base_url,
+        workspace_id,
+        message: "TeamForge credentials and project routes are reachable.".to_string(),
+        credential_sources,
+        project_count: project_graphs.len() as u32,
+        client_profile_count: client_profiles.len() as u32,
+        onboarding_flow_count: onboarding_flows.len() as u32,
+    })
+}
+
+async fn test_github_connection_internal(token: String) -> Result<GithubApiProbeResult, String> {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return Err("GitHub token is required".to_string());
+    }
+
+    let response = reqwest::Client::new()
+        .get("https://api.github.com/user")
+        .bearer_auth(trimmed)
+        .header("User-Agent", "TeamForge")
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("github request failed: {e}"))?;
+
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| format!("read github response failed: {e}"))?;
+
+    if !status.is_success() {
+        return Err(format!(
+            "github returned {status}: {}",
+            &body[..body.len().min(500)]
+        ));
+    }
+
+    let viewer: GithubViewer =
+        serde_json::from_str(&body).map_err(|e| format!("parse github response failed: {e}"))?;
+    let scopes = headers
+        .get("x-oauth-scopes")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .split(',')
+                .map(|item| item.trim())
+                .filter(|item| !item.is_empty())
+                .map(|item| item.to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let rate_limit_remaining = headers
+        .get("x-ratelimit-remaining")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u32>().ok());
+
+    Ok(GithubApiProbeResult {
+        ready: true,
+        login: viewer.login.clone(),
+        message: format!("Connected to GitHub as {}.", viewer.login),
+        scopes,
+        rate_limit_remaining,
+    })
+}
+
+#[tauri::command]
+pub async fn probe_teamforge_worker_api(
+    db: State<'_, DbPool>,
+) -> Result<TeamforgeWorkerProbeResult, String> {
+    probe_teamforge_worker_api_for_pool(&db.0).await
+}
+
+#[tauri::command]
+pub async fn test_github_connection(token: String) -> Result<GithubApiProbeResult, String> {
+    test_github_connection_internal(token).await
 }
 
 #[tauri::command]
@@ -11263,8 +12342,12 @@ pub struct NotificationItem {
 pub async fn get_notification_feed(db: State<'_, DbPool>) -> Result<Vec<NotificationItem>, String> {
     let pool = &db.0;
     let today = chrono::Local::now().date_naive();
-    let yesterday = (today - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
-    let two_days_ago = (today - chrono::Duration::days(2)).format("%Y-%m-%d").to_string();
+    let yesterday = (today - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+    let two_days_ago = (today - chrono::Duration::days(2))
+        .format("%Y-%m-%d")
+        .to_string();
 
     let mut notifications: Vec<NotificationItem> = Vec::new();
 
@@ -11285,6 +12368,36 @@ pub async fn get_notification_feed(db: State<'_, DbPool>) -> Result<Vec<Notifica
             occurred_at: created_at.clone(),
             action_label: Some("REVIEW".to_string()),
             action_route: Some("/agents/queue".to_string()),
+        });
+    }
+
+    // 1b. TeamForge intake items needing founder attention
+    let intake_alerts: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT id, title, percolation_status, COALESCE(updated_at, created_at, '') AS occurred_at
+         FROM teamforge_intake_items
+         WHERE percolation_status IN ('awaiting_triage', 'route_failed')
+           AND LOWER(status) NOT IN ('done', 'archived')
+         ORDER BY updated_at DESC, created_at DESC
+         LIMIT 6",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for (id, title, percolation_status, occurred_at) in &intake_alerts {
+        let (severity, prefix) = if percolation_status == "route_failed" {
+            ("critical", "Route failure")
+        } else {
+            ("warning", "Needs triage")
+        };
+        notifications.push(NotificationItem {
+            key: format!("intake-{id}"),
+            source: "teamforge".to_string(),
+            severity: severity.to_string(),
+            title: format!("{prefix}: {title}"),
+            detail: Some(percolation_status.replace('_', " ").to_uppercase()),
+            occurred_at: occurred_at.clone(),
+            action_label: Some("OPEN INBOX".to_string()),
+            action_route: Some("/inbox".to_string()),
         });
     }
 
@@ -11311,7 +12424,11 @@ pub async fn get_notification_feed(db: State<'_, DbPool>) -> Result<Vec<Notifica
         notifications.push(NotificationItem {
             key: format!("missing-standup-{id}-{}", today),
             source: "slack".to_string(),
-            severity: if yesterday < two_days_ago { "critical".to_string() } else { "warning".to_string() },
+            severity: if yesterday < two_days_ago {
+                "critical".to_string()
+            } else {
+                "warning".to_string()
+            },
             title: format!("{name} — no standup"),
             detail: Some("Last 24h+ without standup post".to_string()),
             occurred_at: yesterday.clone(),
@@ -11376,12 +12493,11 @@ pub async fn get_notification_feed(db: State<'_, DbPool>) -> Result<Vec<Notifica
     }
 
     // Filter out dismissed notifications
-    let dismissed: Vec<(String,)> = sqlx::query_as(
-        "SELECT notification_key FROM notification_dismissals",
-    )
-    .fetch_all(pool)
-    .await
-    .unwrap_or_default();
+    let dismissed: Vec<(String,)> =
+        sqlx::query_as("SELECT notification_key FROM notification_dismissals")
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default();
     let dismissed_set: std::collections::HashSet<String> =
         dismissed.into_iter().map(|(k,)| k).collect();
 
@@ -11397,13 +12513,11 @@ pub async fn dismiss_notification(
     db: State<'_, DbPool>,
     notification_key: String,
 ) -> Result<(), String> {
-    sqlx::query(
-        "INSERT OR IGNORE INTO notification_dismissals (notification_key) VALUES (?1)",
-    )
-    .bind(&notification_key)
-    .execute(&db.0)
-    .await
-    .map_err(|e| format!("dismiss notification: {e}"))?;
+    sqlx::query("INSERT OR IGNORE INTO notification_dismissals (notification_key) VALUES (?1)")
+        .bind(&notification_key)
+        .execute(&db.0)
+        .await
+        .map_err(|e| format!("dismiss notification: {e}"))?;
     Ok(())
 }
 
@@ -11438,8 +12552,7 @@ pub async fn scaffold_project(
 
     // Create client directory if it doesn't exist
     if !client_dir.exists() {
-        std::fs::create_dir_all(&client_dir)
-            .map_err(|e| format!("create client dir: {e}"))?;
+        std::fs::create_dir_all(&client_dir).map_err(|e| format!("create client dir: {e}"))?;
     }
 
     // project-brief.md
@@ -11454,7 +12567,10 @@ pub async fn scaffold_project(
         );
         std::fs::write(&brief_path, brief_content)
             .map_err(|e| format!("write project-brief: {e}"))?;
-        files_created.push(format!("60-client-ecosystem/{}/project-brief.md", client_slug));
+        files_created.push(format!(
+            "60-client-ecosystem/{}/project-brief.md",
+            client_slug
+        ));
     }
 
     // client-profile.md
@@ -11469,7 +12585,10 @@ pub async fn scaffold_project(
         );
         std::fs::write(&profile_path, profile_content)
             .map_err(|e| format!("write client-profile: {e}"))?;
-        files_created.push(format!("60-client-ecosystem/{}/client-profile.md", client_slug));
+        files_created.push(format!(
+            "60-client-ecosystem/{}/client-profile.md",
+            client_slug
+        ));
     }
 
     // onboarding/client-onboarding-flow.md
@@ -11489,7 +12608,10 @@ pub async fn scaffold_project(
         );
         std::fs::write(&onboarding_path, onboarding_content)
             .map_err(|e| format!("write onboarding-flow: {e}"))?;
-        files_created.push(format!("60-client-ecosystem/{}/onboarding/client-onboarding-flow.md", client_slug));
+        files_created.push(format!(
+            "60-client-ecosystem/{}/onboarding/client-onboarding-flow.md",
+            client_slug
+        ));
     }
 
     let msg = if files_created.is_empty() {
@@ -12514,5 +13636,85 @@ mod tests {
         assert!(client_matches_device_name(Some("AXTECH"), "Axtech"));
         assert!(!client_matches_device_name(Some("SeedForge"), "ParkArea"));
         assert!(!client_matches_device_name(None, "ParkArea"));
+    }
+
+    #[test]
+    fn extract_attachment_urls_filters_non_attachments_and_deduplicates() {
+        let markdown = r#"
+See screenshot https://user-images.githubusercontent.com/seed/signal.png and
+again https://user-images.githubusercontent.com/seed/signal.png plus repo
+notes at https://github.com/thoughtseed/teamforge/issues/42 and archive
+https://example.com/spec.pdf
+"#;
+
+        let attachments = extract_attachment_urls(markdown, "issue_body");
+
+        assert_eq!(attachments.len(), 2);
+        assert_eq!(
+            attachments[0].url,
+            "https://user-images.githubusercontent.com/seed/signal.png"
+        );
+        assert_eq!(attachments[0].label, "signal.png");
+        assert_eq!(attachments[1].url, "https://example.com/spec.pdf");
+        assert_eq!(attachments[1].label, "spec.pdf");
+    }
+
+    #[test]
+    fn parse_github_issue_entity_id_decodes_teamforge_issue_ids() {
+        let parsed = parse_github_issue_entity_id("github:thoughtseed/team-forge:issue:42");
+
+        assert_eq!(parsed, Some(("thoughtseed/team-forge".to_string(), 42)));
+        assert_eq!(
+            parse_github_issue_entity_id("github:thoughtseed/team-forge"),
+            None
+        );
+        assert_eq!(
+            parse_github_issue_entity_id("github:thoughtseed/team-forge:issue:not-a-number"),
+            None
+        );
+    }
+
+    #[test]
+    fn build_github_issue_cache_row_preserves_priority_track_and_assignees() {
+        let issue = GithubIssue {
+            node_id: Some("node-1".to_string()),
+            number: 42,
+            title: "Ship track-backend launch surface".to_string(),
+            body: Some("Detailed body for the launch surface".to_string()),
+            state: "open".to_string(),
+            labels: vec![
+                crate::github::types::GithubLabel {
+                    name: "priority:p1".to_string(),
+                },
+                crate::github::types::GithubLabel {
+                    name: "track:backend".to_string(),
+                },
+            ],
+            assignees: vec![crate::github::types::GithubUser {
+                login: "ceo".to_string(),
+            }],
+            milestone: Some(crate::github::types::GithubIssueMilestone {
+                number: 7,
+                title: "Launch".to_string(),
+            }),
+            html_url: "https://github.com/thoughtseed/team-forge/issues/42".to_string(),
+            created_at: Some("2026-05-06T00:00:00Z".to_string()),
+            updated_at: Some("2026-05-06T01:00:00Z".to_string()),
+            closed_at: None,
+            pull_request: None,
+        };
+
+        let row =
+            build_github_issue_cache_row("thoughtseed/team-forge", &issue, "2026-05-06T01:00:00Z")
+                .expect("cache row");
+
+        assert_eq!(row.priority.as_deref(), Some("p1"));
+        assert_eq!(row.track.as_deref(), Some("backend"));
+        assert_eq!(row.milestone_number, Some(7));
+        assert_eq!(row.assignee_logins_json, r#"["ceo"]"#);
+        assert_eq!(
+            row.body_excerpt.as_deref(),
+            Some("Detailed body for the launch surface")
+        );
     }
 }

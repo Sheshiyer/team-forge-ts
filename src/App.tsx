@@ -5,6 +5,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { checkForUpdate, isUpdaterSupported } from "./lib/updater";
 import Overview from "./pages/Overview";
+import Inbox from "./pages/Inbox";
 import Timesheet from "./pages/Timesheet";
 import Projects from "./pages/Projects";
 import Sprints from "./pages/Sprints";
@@ -18,6 +19,8 @@ import Agents from "./pages/Agents";
 import Settings from "./pages/Settings";
 import Clients from "./pages/Clients";
 import Issues from "./pages/Issues";
+import Routines from "./pages/Routines";
+import Goals from "./pages/Goals";
 import Knowledge from "./pages/Knowledge";
 import Onboarding from "./pages/Onboarding";
 import Avatar from "./components/ui/Avatar";
@@ -34,6 +37,7 @@ const navSections = [
     color: "var(--lcars-orange)",
     items: [
       { path: "/", label: "Overview", icon: "◈" },
+      { path: "/inbox", label: "Inbox", icon: "✉" },
       { path: "/timesheet", label: "Timesheet", icon: "◷" },
       { path: "/projects", label: "Projects", icon: "▣" },
     ],
@@ -55,6 +59,8 @@ const navSections = [
     items: [
       { path: "/clients", label: "Clients", icon: "◇" },
       { path: "/issues", label: "Issues", icon: "⬡" },
+      { path: "/routines", label: "Routines", icon: "⟳" },
+      { path: "/goals", label: "Goals", icon: "◎" },
       { path: "/onboarding", label: "Onboarding", icon: "▷" },
       { path: "/knowledge", label: "Skills", icon: "◎" },
     ],
@@ -777,6 +783,7 @@ function App() {
         >
           <Routes>
             <Route path="/" element={<Overview />} />
+            <Route path="/inbox" element={<Inbox />} />
             <Route path="/timesheet" element={<Timesheet />} />
             <Route path="/projects" element={<Projects />} />
             <Route path="/sprints" element={<Sprints />} />
@@ -787,6 +794,8 @@ function App() {
             <Route path="/boards" element={<Boards />} />
             <Route path="/clients" element={<Clients />} />
             <Route path="/issues" element={<Issues />} />
+            <Route path="/routines" element={<Routines />} />
+            <Route path="/goals" element={<Goals />} />
             <Route path="/devices" element={<Navigate to="/issues" replace />} />
             <Route path="/knowledge" element={<Knowledge />} />
             <Route path="/onboarding" element={<Onboarding />} />

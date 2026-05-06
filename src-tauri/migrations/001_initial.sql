@@ -467,6 +467,44 @@ CREATE INDEX IF NOT EXISTS idx_agent_feed_severity_occurred
 CREATE INDEX IF NOT EXISTS idx_agent_feed_owner_occurred
     ON agent_feed(owner_hint, occurred_at DESC);
 
+CREATE TABLE IF NOT EXISTS teamforge_intake_items (
+    id TEXT PRIMARY KEY,
+    sync_key TEXT NOT NULL UNIQUE,
+    schema_version TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_ref TEXT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL,
+    priority TEXT NOT NULL,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    routing_target_agent TEXT,
+    routing_target_department TEXT,
+    routing_target_queue TEXT,
+    project_code TEXT,
+    project_id TEXT,
+    client_id TEXT,
+    founder_review_required INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT NOT NULL,
+    percolation_status TEXT NOT NULL,
+    downstream_system TEXT,
+    downstream_primary_ref TEXT,
+    downstream_secondary_ref TEXT,
+    percolation_error TEXT,
+    route_attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_route_attempt_at TEXT,
+    last_routed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_teamforge_intake_percolation_updated
+    ON teamforge_intake_items(percolation_status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_teamforge_intake_review_updated
+    ON teamforge_intake_items(founder_review_required, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_teamforge_intake_source_updated
+    ON teamforge_intake_items(source, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS presence (
     employee_id TEXT PRIMARY KEY REFERENCES employees(id),
     clockify_timer_active INTEGER NOT NULL DEFAULT 0,

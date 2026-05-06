@@ -17,11 +17,13 @@ import {
 import type {
   ClockifyWorkspace,
   Employee,
+  GitHubApiProbeResult,
   IdentityMapEntry,
   LocalWorkspaceStatus,
   LocalVaultSyncReport,
   PaperclipApiProbeResult,
   VaultDirectoryValidation,
+  TeamforgeWorkerProbeResult,
   SyncState,
 } from "../lib/types";
 
@@ -114,6 +116,26 @@ const collapsibleStyles: Record<string, React.CSSProperties> = {
   },
 };
 
+type IntegrationAuditStatus = "ready" | "missing" | "error";
+
+type IntegrationAuditEntry = {
+  id: string;
+  label: string;
+  status: IntegrationAuditStatus;
+  message: string;
+};
+
+function integrationAuditColor(status: IntegrationAuditStatus): string {
+  switch (status) {
+    case "ready":
+      return "var(--lcars-green)";
+    case "missing":
+      return "var(--lcars-orange)";
+    default:
+      return "var(--lcars-red)";
+  }
+}
+
 const DEFAULT_IGNORED_EMAILS = "thoughtseedlabs@gmail.com";
 const DEFAULT_HULY_ISSUES_INTERVAL_SECONDS = "600";
 const DEFAULT_HULY_PRESENCE_INTERVAL_SECONDS = "120";
@@ -204,6 +226,8 @@ function Settings() {
   const [githubToken, setGithubToken] = useState("");
   const [showGithubToken, setShowGithubToken] = useState(false);
   const [githubSyncing, setGithubSyncing] = useState(false);
+  const [githubApiChecking, setGithubApiChecking] = useState(false);
+  const [githubApiProbe, setGithubApiProbe] = useState<GitHubApiProbeResult | null>(null);
   const [githubMessage, setGithubMessage] = useState<string | null>(null);
 
   const [cloudCredentialSyncEnabled, setCloudCredentialSyncEnabled] =
@@ -214,6 +238,10 @@ function Settings() {
     useState(false);
   const [cloudSyncMessage, setCloudSyncMessage] = useState<string | null>(null);
   const [cloudSyncing, setCloudSyncing] = useState(false);
+  const [teamforgeWorkerChecking, setTeamforgeWorkerChecking] = useState(false);
+  const [teamforgeWorkerProbe, setTeamforgeWorkerProbe] =
+    useState<TeamforgeWorkerProbeResult | null>(null);
+  const [teamforgeWorkerMessage, setTeamforgeWorkerMessage] = useState<string | null>(null);
 
   const [localVaultRoot, setLocalVaultRoot] = useState("");
   const [paperclipScriptPath, setPaperclipScriptPath] = useState("");
@@ -239,6 +267,9 @@ function Settings() {
   const [paperclipApiChecking, setPaperclipApiChecking] = useState(false);
   const [paperclipApiProbe, setPaperclipApiProbe] = useState<PaperclipApiProbeResult | null>(null);
   const [paperclipApiMessage, setPaperclipApiMessage] = useState<string | null>(null);
+  const [integrationAuditRunning, setIntegrationAuditRunning] = useState(false);
+  const [integrationAuditEntries, setIntegrationAuditEntries] = useState<IntegrationAuditEntry[]>([]);
+  const [integrationAuditCheckedAt, setIntegrationAuditCheckedAt] = useState<string | null>(null);
 
   const [currentAppVersion, setCurrentAppVersion] = useState("--");
   const [availableUpdate, setAvailableUpdate] = useState<TauriUpdateHandle | null>(null);
@@ -336,6 +367,15 @@ function Settings() {
     identityReviewLoading ||
     slackIdentityReviewQueue.length > 0 ||
     Boolean(identityReviewMessage);
+  const integrationAuditReadyCount = integrationAuditEntries.filter(
+    (entry) => entry.status === "ready"
+  ).length;
+  const integrationAuditErrorCount = integrationAuditEntries.filter(
+    (entry) => entry.status === "error"
+  ).length;
+  const integrationAuditMissingCount = integrationAuditEntries.filter(
+    (entry) => entry.status === "missing"
+  ).length;
 
   const getIdentityQueueKey = (entry: IdentityMapEntry) =>
     `${entry.source}:${entry.externalId}`;
@@ -965,6 +1005,258 @@ function Settings() {
       setPaperclipApiMessage(`Error: ${String(err)}`);
     } finally {
       setPaperclipApiChecking(false);
+    }
+  };
+
+  const handleProbeTeamforgeWorker = async () => {
+    setTeamforgeWorkerChecking(true);
+    setTeamforgeWorkerMessage(null);
+    setTeamforgeWorkerProbe(null);
+    try {
+      await api.saveSetting(
+        "cloud_credentials_access_token",
+        cloudCredentialsAccessToken.trim()
+      );
+      await api.saveSetting("teamforge_workspace_id", teamforgeWorkspaceId.trim());
+      await loadSettings();
+      await loadLocalWorkspaceStatus();
+      const probe = await api.probeTeamforgeWorkerApi();
+      setTeamforgeWorkerProbe(probe);
+      setTeamforgeWorkerMessage(
+        `TeamForge API ready (${probe.projectCount} projects, ${probe.clientProfileCount} client profiles, ${probe.onboardingFlowCount} onboarding flows)`
+      );
+    } catch (err) {
+      setTeamforgeWorkerMessage(`Error: ${String(err)}`);
+    } finally {
+      setTeamforgeWorkerChecking(false);
+    }
+  };
+
+  const handleTestGithub = async () => {
+    if (!githubToken.trim()) return;
+    setGithubApiChecking(true);
+    setGithubApiProbe(null);
+    setGithubMessage(null);
+    try {
+      const probe = await api.testGitHubConnection(githubToken.trim());
+      setGithubApiProbe(probe);
+      setGithubMessage(
+        `GitHub API ready (${probe.login}${probe.rateLimitRemaining !== null ? ` • ${probe.rateLimitRemaining} remaining` : ""})`
+      );
+    } catch (err) {
+      setGithubMessage(`Error: ${String(err)}`);
+    } finally {
+      setGithubApiChecking(false);
+    }
+  };
+
+  const handleRunIntegrationAudit = async () => {
+    setIntegrationAuditRunning(true);
+    setIntegrationAuditEntries([]);
+    setIntegrationAuditCheckedAt(null);
+
+    const entries: IntegrationAuditEntry[] = [];
+
+    try {
+      if (!apiKey.trim()) {
+        entries.push({
+          id: "clockify",
+          label: "Clockify",
+          status: "missing",
+          message: "Clockify API key is not configured.",
+        });
+      } else {
+        try {
+          const user = await api.testClockifyConnection(apiKey.trim());
+          const workspaces = await api.getClockifyWorkspaces(apiKey.trim());
+          entries.push({
+            id: "clockify",
+            label: "Clockify",
+            status: "ready",
+            message: `Connected as ${user.name} with ${workspaces.length} workspaces visible.`,
+          });
+        } catch (error) {
+          entries.push({
+            id: "clockify",
+            label: "Clockify",
+            status: "error",
+            message: String(error),
+          });
+        }
+      }
+
+      if (!hulyToken.trim()) {
+        entries.push({
+          id: "huly",
+          label: "Huly",
+          status: "missing",
+          message: "Huly token is not configured.",
+        });
+      } else {
+        try {
+          const message = await api.testHulyConnection(hulyToken.trim());
+          entries.push({
+            id: "huly",
+            label: "Huly",
+            status: "ready",
+            message,
+          });
+        } catch (error) {
+          entries.push({
+            id: "huly",
+            label: "Huly",
+            status: "error",
+            message: String(error),
+          });
+        }
+      }
+
+      if (!trimmedSlackToken) {
+        entries.push({
+          id: "slack",
+          label: "Slack",
+          status: "missing",
+          message: "Slack bot token is not configured.",
+        });
+      } else {
+        try {
+          const message = await api.testSlackConnection(trimmedSlackToken);
+          entries.push({
+            id: "slack",
+            label: "Slack",
+            status: "ready",
+            message,
+          });
+        } catch (error) {
+          entries.push({
+            id: "slack",
+            label: "Slack",
+            status: "error",
+            message: String(error),
+          });
+        }
+      }
+
+      if (!githubToken.trim()) {
+        entries.push({
+          id: "github",
+          label: "GitHub",
+          status: "missing",
+          message: "GitHub token is not configured.",
+        });
+      } else {
+        try {
+          const probe = await api.testGitHubConnection(githubToken.trim());
+          entries.push({
+            id: "github",
+            label: "GitHub",
+            status: "ready",
+            message: probe.message,
+          });
+          setGithubApiProbe(probe);
+        } catch (error) {
+          entries.push({
+            id: "github",
+            label: "GitHub",
+            status: "error",
+            message: String(error),
+          });
+        }
+      }
+
+      if (!cloudCredentialsAccessToken.trim()) {
+        entries.push({
+          id: "teamforge-worker",
+          label: "TeamForge Worker",
+          status: "missing",
+          message: "Cloud access token is not configured.",
+        });
+      } else {
+        try {
+          await api.saveSetting(
+            "cloud_credentials_access_token",
+            cloudCredentialsAccessToken.trim()
+          );
+          await api.saveSetting("teamforge_workspace_id", teamforgeWorkspaceId.trim());
+          const probe = await api.probeTeamforgeWorkerApi();
+          entries.push({
+            id: "teamforge-worker",
+            label: "TeamForge Worker",
+            status: "ready",
+            message: probe.message,
+          });
+          setTeamforgeWorkerProbe(probe);
+        } catch (error) {
+          entries.push({
+            id: "teamforge-worker",
+            label: "TeamForge Worker",
+            status: "error",
+            message: String(error),
+          });
+        }
+      }
+
+      if (!paperclipApiConfigured) {
+        entries.push({
+          id: "paperclip",
+          label: "Paperclip",
+          status: "missing",
+          message: "Paperclip API URL/token is not configured.",
+        });
+      } else {
+        try {
+          await persistLocalWorkspaceSettings(false);
+          const probe = await api.probePaperclipApi();
+          entries.push({
+            id: "paperclip",
+            label: "Paperclip",
+            status: "ready",
+            message: probe.message,
+          });
+          setPaperclipApiProbe(probe);
+        } catch (error) {
+          entries.push({
+            id: "paperclip",
+            label: "Paperclip",
+            status: "error",
+            message: String(error),
+          });
+        }
+      }
+
+      if (!localVaultRoot.trim()) {
+        entries.push({
+          id: "vault",
+          label: "Vault",
+          status: "missing",
+          message: "Local Thoughtseed vault path is not configured.",
+        });
+      } else {
+        try {
+          const validation = await api.validateVaultDirectory(localVaultRoot.trim());
+          setVaultValidation(validation);
+          entries.push({
+            id: "vault",
+            label: "Vault",
+            status: validation.status === "ready" ? "ready" : "error",
+            message: validation.message,
+          });
+        } catch (error) {
+          entries.push({
+            id: "vault",
+            label: "Vault",
+            status: "error",
+            message: String(error),
+          });
+        }
+      }
+
+      setIntegrationAuditEntries(entries);
+      setIntegrationAuditCheckedAt(new Date().toISOString());
+      await loadSettings();
+      await loadLocalWorkspaceStatus();
+    } finally {
+      setIntegrationAuditRunning(false);
     }
   };
 
@@ -1661,11 +1953,21 @@ function Settings() {
             SAVE GITHUB SETTINGS
           </button>
           <button
-            onClick={handleGithubSync}
-            disabled={githubSyncing || !githubToken.trim()}
+            onClick={handleTestGithub}
+            disabled={githubApiChecking || !githubToken.trim()}
             style={{
               ...styles.ghostButton,
-              opacity: githubSyncing || !githubToken.trim() ? 0.5 : 1,
+              opacity: githubApiChecking || !githubToken.trim() ? 0.5 : 1,
+            }}
+          >
+            {githubApiChecking ? "CHECKING..." : "CHECK GITHUB TOKEN"}
+          </button>
+          <button
+            onClick={handleGithubSync}
+            disabled={githubSyncing || githubApiChecking || !githubToken.trim()}
+            style={{
+              ...styles.ghostButton,
+              opacity: githubSyncing || githubApiChecking || !githubToken.trim() ? 0.5 : 1,
             }}
           >
             {githubSyncing ? "SYNCING..." : "SYNC GITHUB PLANS"}
@@ -1683,6 +1985,24 @@ function Settings() {
             </span>
           )}
         </div>
+
+        {githubApiProbe && (
+          <div style={styles.statusBox}>
+            <div style={{ ...styles.statusTitle, color: "var(--lcars-green)" }}>
+              GITHUB API • READY
+            </div>
+            <div style={styles.statusBody}>{githubApiProbe.message.toUpperCase()}</div>
+            <div style={styles.helperText}>
+              LOGIN: {githubApiProbe.login}
+              {githubApiProbe.rateLimitRemaining !== null
+                ? ` • RATE LIMIT REMAINING: ${githubApiProbe.rateLimitRemaining}`
+                : ""}
+            </div>
+            <div style={styles.helperText}>
+              SCOPES: {githubApiProbe.scopes.length > 0 ? githubApiProbe.scopes.join(", ") : "NOT REPORTED"}
+            </div>
+          </div>
+        )}
       </CollapsibleCard>
 
       {/* Cloud Credential Sync */}
@@ -1750,35 +2070,71 @@ function Settings() {
             SAVE CLOUD SYNC SETTINGS
           </button>
           <button
-            onClick={handleSyncCloudCredentialsNow}
-            disabled={cloudSyncing || !cloudAccessTokenPresent}
+            onClick={handleProbeTeamforgeWorker}
+            disabled={teamforgeWorkerChecking || !cloudAccessTokenPresent}
             style={{
               ...styles.ghostButton,
-              opacity: cloudSyncing || !cloudAccessTokenPresent ? 0.5 : 1,
+              opacity: teamforgeWorkerChecking || !cloudAccessTokenPresent ? 0.5 : 1,
+            }}
+          >
+            {teamforgeWorkerChecking ? "CHECKING..." : "CHECK TEAMFORGE API"}
+          </button>
+          <button
+            onClick={handleSyncCloudCredentialsNow}
+            disabled={cloudSyncing || teamforgeWorkerChecking || !cloudAccessTokenPresent}
+            style={{
+              ...styles.ghostButton,
+              opacity: cloudSyncing || teamforgeWorkerChecking || !cloudAccessTokenPresent ? 0.5 : 1,
             }}
           >
             {cloudSyncing ? "SYNCING..." : "SYNC CLOUD INTEGRATIONS NOW"}
           </button>
-          {cloudSyncMessage && (
+          {(cloudSyncMessage || teamforgeWorkerMessage) && (
             <span
               style={{
                 ...styles.label,
-                color: cloudSyncMessage.startsWith("Error")
+                color: (teamforgeWorkerMessage || cloudSyncMessage || "").startsWith("Error")
                   ? "var(--lcars-red)"
                   : "var(--lcars-green)",
               }}
             >
-              {cloudSyncMessage.toUpperCase()}
+              {(teamforgeWorkerMessage || cloudSyncMessage || "").toUpperCase()}
             </span>
           )}
         </div>
+
+        {teamforgeWorkerProbe && (
+          <div style={styles.statusBox}>
+            <div style={{ ...styles.statusTitle, color: "var(--lcars-green)" }}>
+              TEAMFORGE WORKER • READY
+            </div>
+            <div style={styles.statusBody}>
+              {teamforgeWorkerProbe.message.toUpperCase()}
+            </div>
+            <div style={styles.helperText}>
+              Endpoint: {teamforgeWorkerProbe.baseUrl}
+            </div>
+            <div style={styles.helperText}>
+              Workspace: {teamforgeWorkerProbe.workspaceId || "UNSCOPED"} • Projects:{" "}
+              {teamforgeWorkerProbe.projectCount} • Client Profiles:{" "}
+              {teamforgeWorkerProbe.clientProfileCount} • Onboarding Flows:{" "}
+              {teamforgeWorkerProbe.onboardingFlowCount}
+            </div>
+            <div style={styles.helperText}>
+              Cloud credentials available:{" "}
+              {teamforgeWorkerProbe.credentialSources.length > 0
+                ? teamforgeWorkerProbe.credentialSources.join(", ")
+                : "NONE"}
+            </div>
+          </div>
+        )}
       </CollapsibleCard>
 
       {/* Local Workspace */}
       <CollapsibleCard
         title="DESKTOP WORKSPACE"
         borderColor="var(--lcars-orange)"
-        statusLabel={vaultConfigured && paperclipScriptConfigured ? "READY" : "NEEDS SETUP"}
+        statusLabel={vaultConfigured && paperclipScriptConfigured ? "CONFIGURED" : "NEEDS SETUP"}
         statusColor={vaultConfigured && paperclipScriptConfigured ? "var(--lcars-green)" : "var(--lcars-orange)"}
         defaultOpen
       >
@@ -1804,7 +2160,7 @@ function Settings() {
                   : "var(--lcars-orange)",
               }}
             >
-              {paperclipScriptConfigured ? "READY" : "MISSING"}
+              {paperclipScriptConfigured ? "CONFIGURED" : "MISSING"}
             </span>
           </div>
           <div style={styles.summaryItem}>
@@ -1817,7 +2173,7 @@ function Settings() {
                   : "var(--lcars-orange)",
               }}
             >
-              {paperclipUiConfigured ? "READY" : "MISSING"}
+              {paperclipUiConfigured ? "CONFIGURED" : "MISSING"}
             </span>
           </div>
           <div style={styles.summaryItem}>
@@ -1830,7 +2186,7 @@ function Settings() {
                   : "var(--lcars-orange)",
               }}
             >
-              {paperclipApiConfigured ? "READY" : "MISSING"}
+              {paperclipApiConfigured ? "CONFIGURED" : "MISSING"}
             </span>
           </div>
           <div style={styles.summaryItem}>
@@ -1871,7 +2227,7 @@ function Settings() {
                 color: founderSyncStatusColor,
               }}
             >
-              {founderSyncReady ? "READY" : "BLOCKED"}
+              {founderSyncReady ? "CONFIGURED" : "BLOCKED"}
             </span>
           </div>
         </div>
@@ -2097,7 +2453,7 @@ function Settings() {
         {localWorkspaceStatus && (
           <div style={styles.statusBox}>
             <div style={{ ...styles.statusTitle, color: founderSyncStatusColor }}>
-              TEAMFORGE LINK • {founderSyncReady ? "READY" : "BLOCKED"}
+              TEAMFORGE SYNC SETUP • {founderSyncReady ? "CONFIGURED" : "BLOCKED"}
             </div>
             <div style={styles.statusBody}>
               {localWorkspaceStatus.founderSyncMessage.toUpperCase()}
@@ -2109,7 +2465,7 @@ function Settings() {
               Paperclip API:{" "}
               {localWorkspaceStatus.paperclipApiUrl || "UNCONFIGURED"} •{" "}
               {localWorkspaceStatus.paperclipApiTokenConfigured
-                ? "TOKEN READY"
+                ? "TOKEN CONFIGURED"
                 : "TOKEN MISSING"}
             </div>
             <div style={styles.helperText}>
@@ -2210,6 +2566,96 @@ function Settings() {
             </div>
           </div>
         )}
+      </CollapsibleCard>
+
+      <CollapsibleCard
+        title="INTEGRATION AUDIT"
+        borderColor="var(--lcars-cyan)"
+        statusLabel={
+          integrationAuditEntries.length === 0
+            ? "NOT RUN"
+            : integrationAuditErrorCount > 0
+              ? "ISSUES FOUND"
+              : integrationAuditMissingCount > 0
+                ? "PARTIAL"
+                : "READY"
+        }
+        statusColor={
+          integrationAuditEntries.length === 0
+            ? "var(--lcars-lavender)"
+            : integrationAuditErrorCount > 0
+              ? "var(--lcars-red)"
+              : integrationAuditMissingCount > 0
+                ? "var(--lcars-orange)"
+                : "var(--lcars-green)"
+        }
+      >
+        <div style={styles.statusBox}>
+          <div style={styles.statusTitle}>PRE-RELEASE CONTRACT SWEEP</div>
+          <div style={styles.statusBody}>
+            RUNS THE SAVED OR IN-FORM INTEGRATION CHECKS SO CONFIGURED STATES DO
+            NOT GET CONFUSED WITH VERIFIED ROUTES.
+          </div>
+          <div style={styles.helperText}>
+            Covers Clockify, Huly, Slack, GitHub, TeamForge Worker, Paperclip,
+            and the local vault contract.
+          </div>
+        </div>
+
+        <div style={styles.buttonRow}>
+          <button
+            onClick={handleRunIntegrationAudit}
+            disabled={integrationAuditRunning}
+            style={{
+              ...styles.primaryButton,
+              opacity: integrationAuditRunning ? 0.5 : 1,
+            }}
+          >
+            {integrationAuditRunning ? "AUDITING..." : "RUN INTEGRATION AUDIT"}
+          </button>
+          {integrationAuditCheckedAt ? (
+            <span style={styles.label}>
+              LAST RUN {timeAgo(integrationAuditCheckedAt).toUpperCase()}
+            </span>
+          ) : null}
+        </div>
+
+        {integrationAuditEntries.length > 0 ? (
+          <div style={styles.statusBox}>
+            <div style={styles.statusTitle}>
+              {integrationAuditReadyCount} READY • {integrationAuditMissingCount} MISSING •{" "}
+              {integrationAuditErrorCount} ERROR
+            </div>
+            <div style={styles.columnList}>
+              {integrationAuditEntries.map((entry) => (
+                <div key={entry.id} style={styles.signalRow}>
+                  <div>
+                    <div
+                      style={{
+                        ...styles.rowTitle,
+                        color: integrationAuditColor(entry.status),
+                      }}
+                    >
+                      {entry.label.toUpperCase()}
+                    </div>
+                    <div style={styles.rowMeta}>{entry.message.toUpperCase()}</div>
+                  </div>
+                  <div style={styles.rowActions}>
+                    <span
+                      style={{
+                        ...styles.statusPill,
+                        borderColor: integrationAuditColor(entry.status),
+                        color: integrationAuditColor(entry.status),
+                      }}
+                    >
+                      {entry.status.toUpperCase()}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </CollapsibleCard>
 
       {/* Webhook Events */}

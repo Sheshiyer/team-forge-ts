@@ -2094,6 +2094,133 @@ pub async fn upsert_agent_feed_item(
     Ok(())
 }
 
+pub async fn upsert_teamforge_intake_item(
+    pool: &SqlitePool,
+    item: &TeamforgeIntakeItemRow,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO teamforge_intake_items (
+            id,
+            sync_key,
+            schema_version,
+            source,
+            source_ref,
+            title,
+            body,
+            status,
+            priority,
+            tags_json,
+            routing_target_agent,
+            routing_target_department,
+            routing_target_queue,
+            project_code,
+            project_id,
+            client_id,
+            founder_review_required,
+            created_by,
+            percolation_status,
+            downstream_system,
+            downstream_primary_ref,
+            downstream_secondary_ref,
+            percolation_error,
+            route_attempt_count,
+            last_route_attempt_at,
+            last_routed_at,
+            created_at,
+            updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
+        ON CONFLICT(id) DO UPDATE SET
+          sync_key = excluded.sync_key,
+          schema_version = excluded.schema_version,
+          source = excluded.source,
+          source_ref = excluded.source_ref,
+          title = excluded.title,
+          body = excluded.body,
+          status = excluded.status,
+          priority = excluded.priority,
+          tags_json = excluded.tags_json,
+          routing_target_agent = excluded.routing_target_agent,
+          routing_target_department = excluded.routing_target_department,
+          routing_target_queue = excluded.routing_target_queue,
+          project_code = excluded.project_code,
+          project_id = excluded.project_id,
+          client_id = excluded.client_id,
+          founder_review_required = excluded.founder_review_required,
+          created_by = excluded.created_by,
+          percolation_status = excluded.percolation_status,
+          downstream_system = excluded.downstream_system,
+          downstream_primary_ref = excluded.downstream_primary_ref,
+          downstream_secondary_ref = excluded.downstream_secondary_ref,
+          percolation_error = excluded.percolation_error,
+          route_attempt_count = excluded.route_attempt_count,
+          last_route_attempt_at = excluded.last_route_attempt_at,
+          last_routed_at = excluded.last_routed_at,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at",
+    )
+    .bind(&item.id)
+    .bind(&item.sync_key)
+    .bind(&item.schema_version)
+    .bind(&item.source)
+    .bind(&item.source_ref)
+    .bind(&item.title)
+    .bind(&item.body)
+    .bind(&item.status)
+    .bind(&item.priority)
+    .bind(&item.tags_json)
+    .bind(&item.routing_target_agent)
+    .bind(&item.routing_target_department)
+    .bind(&item.routing_target_queue)
+    .bind(&item.project_code)
+    .bind(&item.project_id)
+    .bind(&item.client_id)
+    .bind(item.founder_review_required)
+    .bind(&item.created_by)
+    .bind(&item.percolation_status)
+    .bind(&item.downstream_system)
+    .bind(&item.downstream_primary_ref)
+    .bind(&item.downstream_secondary_ref)
+    .bind(&item.percolation_error)
+    .bind(item.route_attempt_count)
+    .bind(&item.last_route_attempt_at)
+    .bind(&item.last_routed_at)
+    .bind(&item.created_at)
+    .bind(&item.updated_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_teamforge_intake_item(
+    pool: &SqlitePool,
+    item_id: &str,
+) -> Result<Option<TeamforgeIntakeItemRow>, sqlx::Error> {
+    sqlx::query_as::<_, TeamforgeIntakeItemRow>(
+        "SELECT *
+         FROM teamforge_intake_items
+         WHERE id = ?1",
+    )
+    .bind(item_id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn list_teamforge_intake_items(
+    pool: &SqlitePool,
+    limit: i64,
+) -> Result<Vec<TeamforgeIntakeItemRow>, sqlx::Error> {
+    sqlx::query_as::<_, TeamforgeIntakeItemRow>(
+        "SELECT *
+         FROM teamforge_intake_items
+         ORDER BY updated_at DESC, created_at DESC
+         LIMIT ?1",
+    )
+    .bind(limit.max(1))
+    .fetch_all(pool)
+    .await
+}
+
 pub async fn get_agent_feed(
     pool: &SqlitePool,
     limit: i64,
@@ -2349,10 +2476,7 @@ pub async fn get_relations_by_type(
     .await
 }
 
-pub async fn delete_entity_relation(
-    pool: &SqlitePool,
-    id: i64,
-) -> Result<bool, sqlx::Error> {
+pub async fn delete_entity_relation(pool: &SqlitePool, id: i64) -> Result<bool, sqlx::Error> {
     let result = sqlx::query("DELETE FROM entity_relations WHERE id = ?1")
         .bind(id)
         .execute(pool)

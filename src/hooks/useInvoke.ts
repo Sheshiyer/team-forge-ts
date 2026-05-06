@@ -4,6 +4,11 @@ import type {
   ClockifyWorkspace,
   OverviewData,
   FounderCommandCenterView,
+  TeamforgeIntakeCreateInput,
+  TeamforgeIntakeDetailView,
+  TeamforgeInboxView,
+  TeamforgeIntakeMutationResult,
+  TeamforgeIntakeUpdateInput,
   QuotaRow,
   TimeEntry,
   ProjectStats,
@@ -18,11 +23,16 @@ import type {
   VaultDirectoryValidation,
   LocalWorkspaceStatus,
   LocalVaultSyncReport,
+  TeamforgeWorkerProbeResult,
   PaperclipApiProbeResult,
   PaperclipAgentDetailView,
+  PaperclipAgentFileView,
   PaperclipEscalationInput,
   PaperclipEscalationResponse,
+  PaperclipFileSaveResult,
+  PaperclipGoalsView,
   PaperclipFounderQueueView,
+  PaperclipHermesSyncView,
   PaperclipLaunchResult,
   PaperclipApprovalQueueView,
   PaperclipApprovalResolveInput,
@@ -30,6 +40,7 @@ import type {
   PaperclipOrgView,
   PaperclipPersonalContext,
   PaperclipRoomDefinition,
+  PaperclipRoutinesView,
   PaperclipRuntimeOperationRequest,
   PaperclipRuntimeOperationResult,
   PaperclipRuntimeStatusView,
@@ -59,6 +70,10 @@ import type {
   NamingComplianceStats,
   IssueWithNaming,
   ActiveProjectIssueView,
+  ActiveProjectIssueCommentView,
+  ActiveProjectIssueDetailView,
+  CreateActiveProjectIssueCommentInput,
+  UpdateActiveProjectIssueInput,
   StandupReport,
   ClientView,
   ClientDetailView,
@@ -69,8 +84,11 @@ import type {
   OnboardingFlowView,
   CredentialSyncResult,
   CloudIntegrationSyncResult,
+  GitHubApiProbeResult,
   GitHubSyncReport,
   HermesDispatchResult,
+  HermesIntakeIngestResult,
+  HermesIntakeInput,
   EntityRelation,
   EntityRelationInput,
   IdentityMapEntry,
@@ -106,6 +124,8 @@ const invokeApi = {
     invoke<PaperclipStartupResult>("ensure_paperclip_runtime_started"),
   probePaperclipApi: () =>
     invoke<PaperclipApiProbeResult>("probe_paperclip_api"),
+  probeTeamforgeWorkerApi: () =>
+    invoke<TeamforgeWorkerProbeResult>("probe_teamforge_worker_api"),
   getPaperclipRuntimeSummary: () =>
     invoke<PaperclipRuntimeOverview>("get_paperclip_runtime_summary"),
   getPaperclipRuntimeStatus: () =>
@@ -136,12 +156,48 @@ const invokeApi = {
     invoke<PaperclipEscalationResponse>("create_paperclip_escalation", {
       input,
     }),
+  createTeamforgeIntakeItem: (input: TeamforgeIntakeCreateInput) =>
+    invoke<TeamforgeIntakeMutationResult>("create_teamforge_intake_item", {
+      input,
+    }),
+  routeTeamforgeIntakeItem: (itemId: string) =>
+    invoke<TeamforgeIntakeMutationResult>("route_teamforge_intake_item", {
+      itemId,
+    }),
+  updateTeamforgeIntakeItem: (input: TeamforgeIntakeUpdateInput) =>
+    invoke<TeamforgeIntakeMutationResult>("update_teamforge_intake_item", {
+      input,
+    }),
+  getTeamforgeInbox: () =>
+    invoke<TeamforgeInboxView>("get_teamforge_inbox"),
+  getTeamforgeIntakeDetail: (itemId: string) =>
+    invoke<TeamforgeIntakeDetailView>("get_teamforge_intake_detail", {
+      itemId,
+    }),
+  ingestHermesMessage: (input: HermesIntakeInput) =>
+    invoke<HermesIntakeIngestResult>("ingest_hermes_message", {
+      input,
+    }),
   getPaperclipOrgView: () =>
     invoke<PaperclipOrgView>("get_paperclip_org_view"),
   getPaperclipFounderQueue: () =>
     invoke<PaperclipFounderQueueView>("get_paperclip_founder_queue"),
   getPaperclipAgentDetail: (userId: string) =>
     invoke<PaperclipAgentDetailView>("get_paperclip_agent_detail", { userId }),
+  getPaperclipGoals: () =>
+    invoke<PaperclipGoalsView>("get_paperclip_goals"),
+  getPaperclipRoutines: () =>
+    invoke<PaperclipRoutinesView>("get_paperclip_routines"),
+  getPaperclipAgentTasksFile: (userId: string) =>
+    invoke<PaperclipAgentFileView>("get_paperclip_agent_tasks_file", { userId }),
+  savePaperclipAgentTasksFile: (userId: string, content: string) =>
+    invoke<PaperclipFileSaveResult>("save_paperclip_agent_tasks_file", { userId, content }),
+  getPaperclipAgentManifestFile: (userId: string) =>
+    invoke<PaperclipAgentFileView>("get_paperclip_agent_manifest_file", { userId }),
+  savePaperclipAgentManifestFile: (userId: string, content: string) =>
+    invoke<PaperclipFileSaveResult>("save_paperclip_agent_manifest_file", { userId, content }),
+  getPaperclipHermesSync: () =>
+    invoke<PaperclipHermesSyncView>("get_paperclip_hermes_sync"),
   getPaperclipApprovals: () =>
     invoke<PaperclipApprovalQueueView>("get_paperclip_approvals"),
   resolvePaperclipApproval: (taskId: string, input: PaperclipApprovalResolveInput) =>
@@ -216,6 +272,8 @@ const invokeApi = {
     invoke<string>("test_huly_connection", { token }),
   testSlackConnection: (token: string) =>
     invoke<string>("test_slack_connection", { token }),
+  testGitHubConnection: (token: string) =>
+    invoke<GitHubApiProbeResult>("test_github_connection", { token }),
   triggerHulySync: () => invoke<string>("trigger_huly_sync"),
   triggerSlackSync: () => invoke<string>("trigger_slack_sync"),
   getTeamSnapshot: () => invoke<TeamSnapshotView>("get_team_snapshot"),
@@ -254,6 +312,15 @@ const invokeApi = {
     invoke<ClientDetailView>("get_client_detail", { clientId }),
   getActiveProjectIssues: () =>
     invoke<ActiveProjectIssueView[]>("get_active_project_issues"),
+  getActiveProjectIssueDetail: (repo: string, number: number) =>
+    invoke<ActiveProjectIssueDetailView>("get_active_project_issue_detail", {
+      repo,
+      number,
+    }),
+  createActiveProjectIssueComment: (input: CreateActiveProjectIssueCommentInput) =>
+    invoke<ActiveProjectIssueCommentView>("create_active_project_issue_comment", { input }),
+  updateActiveProjectIssue: (input: UpdateActiveProjectIssueInput) =>
+    invoke<ActiveProjectIssueDetailView>("update_active_project_issue", { input }),
   getSprintDetail: (sprintId: string) =>
     invoke<SprintDetailView>("get_sprint_detail", { sprintId }),
   getMonthlyHours: () => invoke<MonthlyHoursView[]>("get_monthly_hours"),
@@ -269,6 +336,8 @@ const invokeApi = {
     invoke<GitHubSyncReport[]>("sync_github_plans"),
   dispatchHermesCommand: (command: string, args?: string[]) =>
     invoke<HermesDispatchResult>("dispatch_hermes_command", { command, args: args ?? [] }),
+  runHermesPollerOnce: () =>
+    invoke<HermesDispatchResult>("run_hermes_poller_once"),
   upsertRelation: (input: EntityRelationInput) =>
     invoke<EntityRelation>("upsert_relation", { input }),
   getEntityRelations: (entityType: string, entityId: string) =>

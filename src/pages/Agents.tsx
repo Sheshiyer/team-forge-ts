@@ -10,6 +10,7 @@ import type {
   PaperclipApprovalQueueView,
   PaperclipEscalationInput,
   PaperclipFounderQueueView,
+  PaperclipHermesSyncView,
   PaperclipOrgNodeView,
   PaperclipOrgView,
   PaperclipRuntimeOperationResult,
@@ -340,6 +341,144 @@ function AgentRoomList({ detail }: { detail: PaperclipAgentDetailView }) {
   );
 }
 
+function ProfileListCard({
+  title,
+  subtitle,
+  items,
+  emptyText,
+}: {
+  title: string;
+  subtitle?: string | null;
+  items: string[];
+  emptyText: string;
+}) {
+  return (
+    <div style={styles.profileCard}>
+      <div style={styles.summaryLabel}>{title}</div>
+      {subtitle ? <div style={styles.profileMeta}>{subtitle}</div> : null}
+      {items.length === 0 ? (
+        <div style={styles.profileBodyMuted}>{emptyText}</div>
+      ) : (
+        <div style={styles.profileList}>
+          {items.map((item) => (
+            <div key={item} style={styles.profileListItem}>
+              {item}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AgentOperatingProfilePanel({ detail }: { detail: PaperclipAgentDetailView }) {
+  const profile = detail.operatingProfile;
+  if (!profile) {
+    return (
+      <>
+        <div style={styles.subsectionTitle}>OPERATING PROFILE</div>
+        <div style={styles.emptyText}>LOCAL PAPERCLIP PROFILE FILES ARE NOT AVAILABLE FOR THIS AGENT.</div>
+      </>
+    );
+  }
+
+  const routineItems = profile.routines.map((routine) => {
+    const parts = [
+      routine.id,
+      routine.trigger ? `trigger ${routine.trigger}` : null,
+      routine.action ? `action ${routine.action}` : null,
+      routine.renderer ? `renderer ${routine.renderer}` : null,
+    ].filter(Boolean);
+    return parts.join(" · ");
+  });
+
+  const triggerItems = profile.triggers.map((trigger) => {
+    const parts = [
+      trigger.event,
+      trigger.interval ? `every ${trigger.interval}` : null,
+      trigger.action ? trigger.action : null,
+      trigger.filter ? `filter ${trigger.filter}` : null,
+    ].filter(Boolean);
+    return parts.join(" · ");
+  });
+
+  const commandItems = profile.commands.map((command) => {
+    const parts = [
+      `${command.platform} ${command.command}`,
+      command.description,
+    ].filter(Boolean);
+    return parts.join(" · ");
+  });
+
+  return (
+    <>
+      <div style={styles.subsectionTitle}>OPERATING PROFILE</div>
+      {profile.mission ? (
+        <div style={styles.profileCard}>
+          <div style={styles.summaryLabel}>MISSION</div>
+          <div style={styles.profileBody}>{profile.mission}</div>
+        </div>
+      ) : null}
+
+      <div style={styles.profileGrid}>
+        <ProfileListCard
+          title="OWNS"
+          subtitle={`${profile.responsibilities.length} RESPONSIBILITIES`}
+          items={profile.responsibilities}
+          emptyText="No explicit responsibility list."
+        />
+        <ProfileListCard
+          title="DOES NOT OWN"
+          subtitle={`${profile.boundaries.length} BOUNDARIES`}
+          items={profile.boundaries}
+          emptyText="No explicit boundary list."
+        />
+        <ProfileListCard
+          title="CONTEXT SURFACES"
+          subtitle={`${profile.contextSections.length} LIVE CONTEXT SECTIONS`}
+          items={profile.contextSections}
+          emptyText="No structured context sections."
+        />
+      </div>
+
+      <div style={styles.profileGrid}>
+        <ProfileListCard
+          title="ROUTINES"
+          subtitle={`${profile.routines.length} NATIVE ROUTINES`}
+          items={routineItems}
+          emptyText="No custom routines in the manifest."
+        />
+        <ProfileListCard
+          title="TRIGGERS"
+          subtitle={`${profile.triggers.length} EVENT TRIGGERS`}
+          items={triggerItems}
+          emptyText="No manifest triggers."
+        />
+        <ProfileListCard
+          title="COMMANDS"
+          subtitle={`${profile.commands.length} EXPORTED COMMANDS`}
+          items={commandItems}
+          emptyText="No platform commands exported."
+        />
+      </div>
+
+      <div style={styles.profileCard}>
+        <div style={styles.summaryLabel}>LOOP CONTRACT</div>
+        <div style={styles.profileMeta}>
+          {profile.loopInterval ? `CADENCE ${profile.loopInterval.toUpperCase()}` : "CADENCE NOT DECLARED"}
+          {profile.escalationTarget ? ` · ESCALATES TO ${profile.escalationTarget.toUpperCase()}` : ""}
+        </div>
+        <div style={styles.profileBodyMuted}>
+          READS: {profile.loopReads.length > 0 ? profile.loopReads.join(", ") : "none declared"}
+        </div>
+        <div style={styles.profileBodyMuted}>
+          WRITES: {profile.loopWrites.length > 0 ? profile.loopWrites.join(", ") : "none declared"}
+        </div>
+      </div>
+    </>
+  );
+}
+
 function AgentDetailPanel({
   detail,
   loading,
@@ -417,6 +556,7 @@ function AgentDetailPanel({
         </div>
       </div>
 
+      <AgentOperatingProfilePanel detail={detail} />
       <AgentTaskList detail={detail} />
       <AgentRoomList detail={detail} />
     </>
@@ -1553,6 +1693,22 @@ function AgentDetailRoute() {
           color="var(--lcars-green)"
           subtext={`${detail.escalationBacklogCount} ESCALATIONS`}
         />
+        <SummaryRail
+          label="ROUTINES"
+          value={String(detail.operatingProfile?.routines.length ?? 0)}
+          color="var(--lcars-orange)"
+          subtext={
+            detail.operatingProfile?.loopInterval
+              ? `LOOP ${detail.operatingProfile.loopInterval.toUpperCase()}`
+              : "NO LOOP CADENCE"
+          }
+        />
+        <SummaryRail
+          label="COMMANDS"
+          value={String(detail.operatingProfile?.commands.length ?? 0)}
+          color="var(--lcars-lavender)"
+          subtext={`${detail.operatingProfile?.contextSections.length ?? 0} CONTEXT SECTIONS`}
+        />
       </div>
 
       <div style={styles.mainGrid}>
@@ -1568,6 +1724,20 @@ function AgentDetailRoute() {
               </button>
               <button type="button" onClick={() => navigate("/agents/org")} style={styles.ghostButton}>
                 OPEN ORG
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate(`/goals?agent=${encodeURIComponent(detail.user.userId)}`)}
+                style={styles.ghostButton}
+              >
+                OPEN GOALS
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate(`/routines?agent=${encodeURIComponent(detail.user.userId)}`)}
+                style={styles.ghostButton}
+              >
+                OPEN ROUTINES
               </button>
               <button type="button" onClick={() => navigate("/agents/queue")} style={styles.ghostButton}>
                 OPEN QUEUE
@@ -1613,6 +1783,9 @@ function AgentsHermesRoute() {
   const [dispatching, setDispatching] = useState<string | null>(null);
   const [results, setResults] = useState<Array<{ command: string; output: string; success: boolean; timestamp: Date }>>([]);
   const [error, setError] = useState<string | null>(null);
+  const [syncView, setSyncView] = useState<PaperclipHermesSyncView | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncLoading, setSyncLoading] = useState(true);
 
   const dispatch = useCallback(async (command: string) => {
     setDispatching(command);
@@ -1630,6 +1803,44 @@ function AgentsHermesRoute() {
     }
   }, [api]);
 
+  const loadSync = useCallback(async () => {
+    try {
+      const view = await api.getPaperclipHermesSync();
+      setSyncView(view);
+      setSyncError(null);
+    } catch (e) {
+      setSyncView(null);
+      setSyncError(String(e));
+    } finally {
+      setSyncLoading(false);
+    }
+  }, [api]);
+
+  useEffect(() => {
+    void loadSync();
+    const interval = setInterval(() => {
+      void loadSync();
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [loadSync]);
+
+  const pollOnce = useCallback(async () => {
+    setDispatching("poll_once");
+    setError(null);
+    try {
+      const result = await api.runHermesPollerOnce();
+      setResults((prev) => [
+        { command: result.command, output: result.output, success: result.success, timestamp: new Date() },
+        ...prev,
+      ].slice(0, 20));
+      await loadSync();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDispatching(null);
+    }
+  }, [api, loadSync]);
+
   return (
     <div style={{ padding: "16px 0" }}>
       <div style={hermesStyles.header}>
@@ -1637,7 +1848,40 @@ function AgentsHermesRoute() {
         <span style={hermesStyles.headerLabel}>HERMES AGENT • TELEGRAM BRIDGE</span>
       </div>
 
+      <div style={hermesStyles.summaryGrid}>
+        <div style={hermesStyles.summaryCard}>
+          <div style={hermesStyles.summaryLabel}>STATUS</div>
+          <div style={hermesStyles.summaryValue}>{syncView?.statusLine?.toUpperCase() || "NO STATUS"}</div>
+        </div>
+        <div style={hermesStyles.summaryCard}>
+          <div style={hermesStyles.summaryLabel}>PENDING REQUESTS</div>
+          <div style={hermesStyles.summaryValue}>{String(syncView?.pendingRequests.length ?? 0)}</div>
+        </div>
+        <div style={hermesStyles.summaryCard}>
+          <div style={hermesStyles.summaryLabel}>OUTBOUND QUEUE</div>
+          <div style={hermesStyles.summaryValue}>{String(syncView?.outboundQueue.length ?? 0)}</div>
+        </div>
+        <div style={hermesStyles.summaryCard}>
+          <div style={hermesStyles.summaryLabel}>LOOP ERRORS</div>
+          <div style={hermesStyles.summaryValue}>{String(syncView?.loopErrors.length ?? 0)}</div>
+        </div>
+      </div>
+
       <div style={hermesStyles.commandGrid}>
+        <button
+          type="button"
+          style={{
+            ...hermesStyles.commandButton,
+            opacity: dispatching && dispatching !== "poll_once" ? 0.5 : 1,
+          }}
+          disabled={dispatching !== null}
+          onClick={() => void pollOnce()}
+        >
+          <div style={hermesStyles.commandLabel}>
+            {dispatching === "poll_once" ? "⏳" : "▸"} POLL ONCE
+          </div>
+          <div style={hermesStyles.commandDesc}>Run the Telegram poller once and refresh Hermes logs</div>
+        </button>
         {HERMES_COMMANDS.map(cmd => (
           <button
             key={cmd.id}
@@ -1662,6 +1906,79 @@ function AgentsHermesRoute() {
           {error}
         </div>
       )}
+
+      {syncError && (
+        <div style={hermesStyles.errorBox}>
+          {syncError}
+        </div>
+      )}
+
+      {syncLoading ? (
+        <SkeletonCard />
+      ) : syncView ? (
+        <div style={hermesStyles.liveGrid}>
+          <div style={hermesStyles.liveCard}>
+            <div style={hermesStyles.outputHeader}>PENDING DELIVERY REQUESTS</div>
+            {syncView.pendingRequests.length === 0 ? (
+              <div style={hermesStyles.emptyState}>No pending Hermes inbox requests.</div>
+            ) : (
+              syncView.pendingRequests.map((item) => (
+                <div key={item} style={hermesStyles.liveRow}>{item}</div>
+              ))
+            )}
+          </div>
+
+          <div style={hermesStyles.liveCard}>
+            <div style={hermesStyles.outputHeader}>OUTBOUND QUEUE</div>
+            {syncView.outboundQueue.length === 0 ? (
+              <div style={hermesStyles.emptyState}>No outbound queue items.</div>
+            ) : (
+              syncView.outboundQueue.map((item) => (
+                <div key={item} style={hermesStyles.liveRow}>{item}</div>
+              ))
+            )}
+          </div>
+
+          <div style={hermesStyles.liveCard}>
+            <div style={hermesStyles.outputHeader}>RECENT DELIVERIES</div>
+            {syncView.recentDeliveries.length === 0 ? (
+              <div style={hermesStyles.emptyState}>No delivery log entries yet.</div>
+            ) : (
+              syncView.recentDeliveries.map((entry) => (
+                <div key={`${entry.occurredAt}-${entry.summary}`} style={hermesStyles.liveRow}>
+                  <div style={hermesStyles.outputMeta}>
+                    <span>{entry.channel.toUpperCase()}</span>
+                    <span style={hermesStyles.outputTime}>{entry.occurredAt || "NO TIME"}</span>
+                  </div>
+                  <div>{entry.summary}</div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div style={hermesStyles.liveCard}>
+            <div style={hermesStyles.outputHeader}>POLLER LOG</div>
+            {syncView.recentPollerEvents.length === 0 ? (
+              <div style={hermesStyles.emptyState}>No poller events captured yet.</div>
+            ) : (
+              syncView.recentPollerEvents.map((line) => (
+                <div key={line} style={hermesStyles.liveRow}>{line}</div>
+              ))
+            )}
+          </div>
+
+          <div style={hermesStyles.liveCard}>
+            <div style={hermesStyles.outputHeader}>LOOP ERRORS</div>
+            {syncView.loopErrors.length === 0 ? (
+              <div style={hermesStyles.emptyState}>No loop errors in Hermes context.</div>
+            ) : (
+              syncView.loopErrors.map((line) => (
+                <div key={line} style={{ ...hermesStyles.liveRow, color: "var(--lcars-red)" }}>{line}</div>
+              ))
+            )}
+          </div>
+        </div>
+      ) : null}
 
       <div style={hermesStyles.outputSection}>
         <div style={hermesStyles.outputHeader}>DISPATCH LOG</div>
@@ -1713,6 +2030,32 @@ const hermesStyles: Record<string, CSSProperties> = {
     gap: 10,
     marginBottom: 20,
   },
+  summaryGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gap: 10,
+    marginBottom: 20,
+  },
+  summaryCard: {
+    background: "rgba(255, 153, 0, 0.06)",
+    border: "1px solid rgba(255, 153, 0, 0.18)",
+    borderLeft: "4px solid var(--lcars-orange)",
+    borderRadius: 6,
+    padding: "12px 14px",
+  },
+  summaryLabel: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 10,
+    color: "var(--lcars-lavender)",
+    letterSpacing: 1.2,
+    marginBottom: 6,
+  },
+  summaryValue: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 12,
+    color: "var(--lcars-tan)",
+    lineHeight: 1.5,
+  },
   commandButton: {
     background: "rgba(255, 153, 0, 0.08)",
     border: "1px solid var(--lcars-orange)",
@@ -1747,6 +2090,27 @@ const hermesStyles: Record<string, CSSProperties> = {
   outputSection: {
     borderTop: "1px solid rgba(255,153,0,0.2)",
     paddingTop: 12,
+  },
+  liveGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+    gap: 12,
+    marginBottom: 20,
+  },
+  liveCard: {
+    background: "rgba(0,0,0,0.15)",
+    borderRadius: 6,
+    padding: "12px 14px",
+    border: "1px solid rgba(255,153,0,0.1)",
+  },
+  liveRow: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: 11,
+    color: "var(--lcars-tan)",
+    lineHeight: 1.6,
+    padding: "6px 0",
+    borderBottom: "1px solid rgba(255,153,0,0.08)",
+    whiteSpace: "pre-wrap" as const,
   },
   outputHeader: {
     fontFamily: "'JetBrains Mono', monospace",
@@ -1995,6 +2359,46 @@ const styles: Record<string, CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: 10,
+  },
+  profileGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: 10,
+  },
+  profileCard: {
+    ...lcarsPageStyles.subtleCard,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    padding: "12px 14px",
+  },
+  profileBody: {
+    color: "var(--lcars-tan)",
+    fontSize: 12,
+    lineHeight: 1.7,
+  },
+  profileBodyMuted: {
+    color: "var(--lcars-lavender)",
+    fontSize: 11,
+    lineHeight: 1.6,
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  profileMeta: {
+    color: "var(--lcars-cyan)",
+    fontSize: 10,
+    letterSpacing: "1px",
+    fontFamily: "'Orbitron', sans-serif",
+  },
+  profileList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  },
+  profileListItem: {
+    color: "var(--lcars-tan)",
+    fontSize: 11,
+    lineHeight: 1.6,
+    fontFamily: "'JetBrains Mono', monospace",
   },
   listRowButton: {
     display: "flex",

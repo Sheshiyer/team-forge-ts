@@ -2,6 +2,64 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.2.6 - 2026-05-06
+
+This release turns TeamForge into a much stronger day-to-day Paperclip control
+plane and closes the main workflow gaps that were still forcing context
+switches across separate UIs before the next OTA line.
+
+### Added
+
+- TeamForge-native Paperclip workflow parity surfaces:
+  - dedicated `Inbox`, `Goals`, and `Routines` routes
+  - Hermes live-sync visibility inside `/agents/hermes`
+  - direct Paperclip source-file editing for agent `TASKS.md` and
+    `MANIFEST.yaml`
+- Richer issue workflow controls:
+  - live GitHub comments in `Issues`
+  - attachment extraction from issue bodies and comments
+  - TeamForge-owned sub-issue relationships
+  - live GitHub issue property editing for title, body, state, labels, and
+    assignees
+- Canonical intake expansion:
+  - founder intake console on Overview
+  - TeamForge-native Inbox triage flow
+  - issue-intake composer directly inside the `Issues` route
+
+### Changed
+
+- `Agents` now exposes Hermes delivery health and a `POLL ONCE` action instead
+  of treating Hermes as a hidden background bridge.
+- `Issues` now behaves like a control surface rather than a cache-only view:
+  manual GitHub issue edits immediately refresh TeamForge detail/projection
+  state and write local timeline events.
+- Intake surfaces now preserve and surface linked GitHub issue provenance more
+  clearly:
+  - Overview and Inbox show source refs directly
+  - Overview and Inbox can open linked issues inside TeamForge
+  - `Issues` preserves selected issue context in the URL via `issue=`
+- Release metadata is now at `0.2.6` across the frontend package, Tauri config,
+  Rust crate, and local Cargo lock.
+
+### Fixed
+
+- Fixed a false-green Paperclip integration class where Settings could show
+  healthy while the `Agents` runtime route contract was missing.
+- Fixed a Hermes delivery-log parser bug that decoded bracketed channel entries
+  as `unknown`.
+- Fixed stale active-issue ordering after local issue mutations.
+- Fixed issue-follow-up intake autofill so TeamForge no longer invents a
+  possibly wrong `projectCode` from a display name.
+
+### Verification
+
+- `pnpm build`
+- `cargo fmt --manifest-path src-tauri/Cargo.toml`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+- `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+- `cargo test --manifest-path src-tauri/Cargo.toml commands::tests -- --nocapture`
+- `git diff --check`
+
 ## v0.2.0 - 2026-05-05
 
 Closes Phase 1 of v0.2 Foundation Closeout (issue #45). Productizes the

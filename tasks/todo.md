@@ -70,6 +70,381 @@ the GitHub Actions release pipeline.
 
 ## Review
 
+- Wave 1 shipped as the intake backbone for TeamForge:
+  - added a canonical local `teamforge_intake_items` table with source,
+    status, priority, routing hints, founder-review flag, route-attempt
+    metadata, downstream refs, and percolation status
+  - added a dedicated backend intake module in
+    `src-tauri/src/intake.rs` that:
+    - validates and normalizes one canonical TeamForge intake object
+    - persists it locally before any downstream mutation
+    - emits canonical intake lifecycle events into `ops_events`
+    - routes non-held items into the existing Paperclip escalation API
+    - records success/failure/percolation state for founder review
+  - extended `FounderCommandCenterView` with an `intake_console` read model so
+    Overview can load a founder-facing intake queue in the same command-center
+    payload instead of stitching together separate calls
+  - added new Tauri commands:
+    - `create_teamforge_intake_item`
+    - `route_teamforge_intake_item`
+  - added a new Overview founder intake console that now lets the founder:
+    - create a TeamForge issue/intake item from the main dashboard
+    - target an agent / department / queue / project code
+    - hold an item in founder triage instead of routing immediately
+    - retry or route held/failed items from the same screen
+    - inspect percolation buckets for awaiting triage, pending route, routing
+      failures, and successful Paperclip delivery
+- Important behavior change:
+  - TeamForge now always writes the canonical intake row first
+  - Paperclip is now the downstream route target for this wave, not the only
+    place the work starts existing
+  - if Paperclip routing fails, the issue no longer disappears; it stays
+    visible in Overview with failure state and retry control
+- Scope intentionally deferred to later waves:
+  - Hermes intake parsing and auto-classification
+  - dedicated Inbox route
+  - issue-detail parity, comments/activity, and properties editor
+  - Goals / Routines standalone routes and deeper agent operating controls
+- Verification:
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `pnpm build`
+  - `cargo test --manifest-path src-tauri/Cargo.toml intake::tests -- --nocapture`
+  - `git diff --check`
+  - attempted a browser-only Vite smoke, but that route is not a valid acceptance
+    environment for TeamForge because startup depends on the Tauri bridge
+    (`invoke` / event listeners); a live desktop/Tauri visual pass is still
+    pending if we want screenshot-level proof
+
+# Task Plan
+
+## Goal
+
+Execute the next roadmap wave after the intake backbone: normalize Hermes
+messages into the canonical intake envelope, add a dedicated TeamForge Inbox
+route as the founder triage surface, and upgrade issue/intake detail surfaces
+from table row expansion to a real detail workflow.
+
+## Plan
+
+- [ ] Add a Hermes intake parser/ingest path that accepts raw message text,
+      classifies it into the canonical intake contract, and either holds it for
+      founder review or routes it automatically when confidence is high.
+- [ ] Add backend inbox/detail read models so TeamForge can show canonical
+      intake items with timeline/audit history and editable routing metadata.
+- [ ] Add a dedicated `/inbox` route in TeamForge for founder triage and Hermes
+      intake, backed by the canonical intake model rather than a separate UI.
+- [ ] Upgrade issue surfaces toward detail parity by replacing the current
+      simple row expansion with a proper detail panel and richer metadata view.
+- [ ] Verify the new flow end to end:
+      `raw Hermes-style message -> normalized intake item -> Inbox detail -> route/retry visibility`.
+
+## Review
+
+- Wave 2 shipped as the Hermes + Inbox + detail-surface pass:
+  - backend:
+    - extended `src-tauri/src/intake.rs` with:
+      - Hermes message normalization + ingest into the canonical intake envelope
+      - editable intake update flow
+      - inbox read model
+      - intake detail view with timeline/audit history from `ops_events`
+    - added Tauri commands for:
+      - `get_teamforge_inbox`
+      - `get_teamforge_intake_detail`
+      - `update_teamforge_intake_item`
+      - `ingest_hermes_message`
+    - extended notification feed so `awaiting_triage` and `route_failed`
+      intake items now push the founder toward `/inbox`
+  - frontend:
+    - added a dedicated `/inbox` route that now acts as the founder triage
+      surface for:
+      - Hermes raw-message intake
+      - canonical intake queue review
+      - routing retry / route-now actions
+      - editable issue/intake properties
+      - intake event timeline
+    - added the Inbox route to the main shell nav
+    - updated Overview so the founder intake console can jump straight into
+      Inbox
+    - upgraded `Issues` from row expansion to a real detail panel backed by a
+      new issue-detail command and GitHub issue ops timeline data
+- Structured-flow impact:
+  - TeamForge can now accept a raw Hermes-style message, normalize it into the
+    canonical intake contract, hold it for review when ambiguous, and show the
+    full routing/timeline state in a dedicated founder Inbox route
+  - the issue surface now behaves more like a work console and less like a
+    passive grouped table
+- Scope still deferred beyond this wave:
+  - comments / attachments parity for issue detail
+  - sub-issue relationships
+  - dedicated Goals and Routines routes
+  - richer Hermes live sync beyond manual/raw-message ingest
+- Verification:
+  - `pnpm build`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml intake::tests -- --nocapture`
+  - `git diff --check`
+  - desktop/Tauri visual proof is still pending; browser-only Vite preview is
+    still non-canonical for this app because startup depends on Tauri bridge
+    APIs
+
+# Task Plan
+
+## Goal
+
+Execute the next parity wave after Inbox: add dedicated TeamForge `Goals` and
+`Routines` routes that absorb Paperclip's native agent work and automation
+surfaces into TeamForge, using the local Paperclip repo plus live runtime
+context as the source of truth.
+
+## Plan
+
+- [x] Extend the Paperclip backend read model so TeamForge can derive:
+      - per-agent goal packs from live personal-context tasks plus local
+        `TASKS.md` standing responsibilities and task-file sections
+      - per-agent routine packs from `MANIFEST.yaml` routines, triggers,
+        commands, and loop contract metadata
+- [x] Add new Tauri commands and typed frontend contracts for
+      `get_paperclip_goals` and `get_paperclip_routines`.
+- [x] Add standalone `/goals` and `/routines` routes to the TeamForge shell
+      with summary rails, filters, and detail panes so the founder can inspect
+      agent work and automation patterns without opening Paperclip.
+- [x] Link the new views back into existing TeamForge operations:
+      - open agent detail
+      - jump to project issues when a goal is project-bound
+      - jump to Inbox when a goal needs intake/founder routing follow-up
+- [x] Verify the new surfaces end to end:
+      `local Paperclip repo + live runtime context -> TeamForge Goals/Routines pages -> agent/detail navigation`.
+
+## Review
+
+- Wave 3 shipped as the Goals + Routines parity pass:
+  - backend:
+    - extended `src-tauri/src/paperclip.rs` with:
+      - local `TASKS.md` parsing for live work-file sections and standing
+        responsibilities
+      - goal read models that merge runtime personal-context tasks with local
+        Paperclip task-board responsibilities
+      - routine read models derived from `MANIFEST.yaml` routines, event
+        triggers, commands, and loop contract metadata
+    - added new Tauri commands for:
+      - `get_paperclip_goals`
+      - `get_paperclip_routines`
+    - added focused parser/read-model tests around wrapped bullets, task-file
+      metadata parsing, and loop-contract extraction
+  - frontend:
+    - added standalone `/goals` and `/routines` routes to the TeamForge shell
+    - added nav entries so these surfaces sit alongside Issues instead of
+      hiding inside the agent detail page
+    - built founder-facing summary rails, filters, list/detail panes, and
+      cross-links into:
+      - agent detail
+      - Inbox
+      - project issues
+    - linked dedicated agent detail pages back out to the new Goals/Routines
+      routes for per-agent review
+- Structured-flow impact:
+  - TeamForge now carries the first full founder-readable view of Paperclip
+    agent work intent:
+    - live queue items
+    - standing responsibilities
+    - native routines
+    - triggers
+    - exported commands
+    - loop cadence / read-write contract
+  - this moves TeamForge closer to being the primary Paperclip control plane
+    instead of a runtime-only side dashboard
+- Scope still deferred beyond this wave:
+  - issue comments / attachments parity
+  - sub-issue relationships
+  - deeper live Hermes sync beyond raw-message ingest
+  - direct editing/mutation of Paperclip goals or routines from TeamForge
+    rather than read/triage/navigation only
+  - desktop/Tauri screenshot-level visual verification for the new routes
+- Verification:
+  - `pnpm build`
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+  - `git diff --check`
+
+# Task Plan
+
+## Goal
+
+Execute the next workflow-parity wave after Goals/Routines so TeamForge can
+manage deeper Paperclip/GitHub workflows without falling back to other UIs:
+issue comments and attachments, sub-issue relationships, richer Hermes live
+sync, and direct editing of Paperclip goals/routines.
+
+## Plan
+
+- [x] Extend issue detail so TeamForge can load live GitHub comments and
+      attachment links, and allow commenting from the TeamForge issue surface.
+- [x] Use `entity_relations` as the canonical TeamForge sub-issue graph for
+      GitHub issues, with add/remove controls and parent/child rendering in the
+      issue detail workflow.
+- [x] Add a Hermes live-sync read model from the local Paperclip repo
+      (`INBOX.md`, `TASKS.md`, `CONTEXT.md`, delivery log, poller log) plus a
+      `poll once` action so TeamForge can inspect Hermes bridge health and
+      inbound/outbound flow directly.
+- [x] Add direct TeamForge edits for Paperclip-managed goals and routines by
+      mutating the local source-of-truth files:
+      - `TASKS.md` local/standing goal items
+      - `MANIFEST.yaml` custom routines
+- [x] Verify the wave end to end:
+      `TeamForge issue detail comments/sub-issues + Hermes live sync + Paperclip goal/routine edits`.
+
+## Review
+
+- Workflow-parity wave shipped across the native TeamForge surfaces:
+  - `Issues` now loads live GitHub issue bodies/comments when credentials are
+    available, extracts attachment links from body/comments, and posts comments
+    back to GitHub from TeamForge.
+  - `Issues` now treats `entity_relations` as the TeamForge-owned sub-issue
+    graph for GitHub issues, with parent/child rendering plus add/remove
+    controls.
+  - `/agents/hermes` now exposes a live sync view from the local Paperclip repo
+    (`INBOX.md`, `TASKS.md`, `CONTEXT.md`, delivery log, poller log) and adds a
+    `POLL ONCE` action that executes the repo-owned Hermes poller wrapper.
+  - `Goals` and `Routines` now support direct source-of-truth editing by
+    loading and saving local Paperclip `TASKS.md` and `MANIFEST.yaml` files for
+    the selected agent.
+- Verification passed:
+  - `pnpm build`
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+  - `cargo test --manifest-path src-tauri/Cargo.toml commands::tests -- --nocapture`
+  - `git diff --check`
+- Focused regression hardening added in Rust tests:
+  - GitHub attachment extraction and TeamForge GitHub-issue entity parsing
+  - Hermes delivery-log parsing and log tail behavior
+- Verification caught and fixed a real Hermes parser defect:
+  - bracketed delivery log lines were initially decoding the channel as
+    `unknown`; the parser now walks the second bracketed segment correctly.
+
+# Task Plan
+
+## Goal
+
+Execute the next issue-control wave so the `Issues` route becomes a real
+TeamForge control surface, not just a read/comment view:
+- edit live GitHub-backed issue properties from TeamForge
+- create new canonical TeamForge intake items directly from `Issues`
+
+## Plan
+
+- [x] Add a GitHub-backed issue update command that mutates title, body, state,
+      labels, and assignees, then refreshes TeamForge cache/timeline data.
+- [x] Add an issue properties editor in `Issues` detail for those live fields,
+      including priority/track via label editing.
+- [x] Add a canonical TeamForge issue composer to the `Issues` route that
+      writes the existing intake envelope instead of creating local-only UI
+      state.
+- [x] Verify the new control path end to end:
+      `edit issue from TeamForge + create new issue intake from Issues`.
+
+## Review
+
+- `Issues` is now a real control surface instead of a read-only projection:
+  - TeamForge can patch live GitHub issue title/body/state/labels/assignees
+    from the issue detail pane.
+  - priority and track are editable from TeamForge through explicit
+    `priority:*` and `track:*` label controls.
+  - the `Issues` route now has its own canonical TeamForge intake composer, so
+    founders can open new issue/request work from the issue workflow itself and
+    still land on the shared intake/percolation path.
+- Backend hardening in this wave:
+  - the new GitHub update command refreshes the local GitHub cache and records
+    a fresh `ops_events` row so TeamForge timeline/detail surfaces stay useful
+    immediately after a manual mutation.
+  - active issue detail now overlays cached/live GitHub fields onto the
+    TeamForge projection, which prevents the detail pane from looking stale
+    after a successful update while the broader worker projection catches up.
+- Verification passed:
+  - `pnpm build`
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml commands::tests -- --nocapture`
+  - `git diff --check`
+- Added regression coverage for the new GitHub update/cache path:
+  - `build_github_issue_cache_row` now has a focused test proving
+    priority/track/milestone/assignee extraction.
+
+# Task Plan
+
+## Goal
+
+Run a final release-hardening gap pass across the Paperclip parity, intake, and
+issue-control work so the next GitHub OTA push is not carrying obvious
+workflow, UX, or verification holes.
+
+## Plan
+
+- [ ] Identify 5 to 10 concrete remaining gaps from the current shipped
+      TeamForge surfaces and release path, using source inspection plus a live
+      surface audit where possible.
+- [ ] Fix the highest-value gaps directly in the app/backend instead of only
+      documenting them.
+- [ ] Re-run the release-facing verification gates and record the exact fixed
+      gaps, plus any residual blockers that still require manual/credential
+      follow-up before tagging and pushing.
+
+## Review
+
+- Fixed release-facing gaps across the newly added parity/intake/issue-control
+  surfaces:
+  - `Gap 1` manual GitHub issue edits updated detail but could leave the active
+    issue projection stale on reload; `update_active_project_issue` now updates
+    the TeamForge active-issue projection cache immediately.
+  - `Gap 2` GitHub comments posted from TeamForge did not write a native
+    timeline/activity event; comment posts now record `github.issue.commented`
+    in `ops_events`.
+  - `Gap 3` the `Issues` route did not preserve the selected issue in the URL,
+    so cross-route linking and page refresh could lose context; it now uses the
+    `issue=` search param as the canonical selection key.
+  - `Gap 4` Overview intake rows had no direct drill-down into the TeamForge
+    `Issues` control surface when an item referenced a GitHub issue; they now
+    expose `OPEN ISSUE`.
+  - `Gap 5` Inbox intake review likewise had no direct issue drill-down; the
+    detail surface now exposes `OPEN ISSUE` when a linked GitHub ref exists.
+  - `Gap 6` intake provenance was too implicit on Overview/Inbox rows; source
+    refs are now rendered directly in the triage surfaces.
+  - `Gap 7` `USE SELECTED ISSUE CONTEXT` on the `Issues` intake composer was
+    incorrectly stuffing `projectName` into `projectCode`; it now preloads
+    title/body/queue context without inventing a possibly wrong project code.
+  - `Gap 8` the local `Issues` list could keep stale ordering after a manual
+    edit until a full reload; the route now re-sorts immediately after local
+    updates.
+- Verification passed:
+  - `pnpm build`
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+  - `cargo test --manifest-path src-tauri/Cargo.toml commands::tests -- --nocapture`
+  - `git diff --check`
+- Residual manual blockers before the OTA tag push:
+  - do one live desktop/Tauri click-through on the updated routes
+  - confirm live GitHub credentials are valid for real issue mutation/comment
+  - bump release metadata/tag and run the GitHub OTA workflow
+
+# Task Plan
+
+## Goal
+
+Publish the current TeamForge parity + intake + issue-control tranche as
+`v0.2.6` through the existing GitHub OTA workflow.
+
+## Plan
+
+- [ ] Bump release metadata and release-facing docs for `0.2.6`.
+- [ ] Re-run the release-facing verification suite on the bumped version.
+- [ ] Commit the current tranche on `main`, create/push the `v0.2.6` tag, and
+      trigger the GitHub OTA workflow.
+- [ ] Watch the GitHub release workflow and record the outcome here.
+
+## Review
+
 - In progress.
 
 # Task Plan
@@ -905,6 +1280,82 @@ machine-local in Settings.
   - `cargo check --manifest-path src-tauri/Cargo.toml`
   - `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
   - `git diff --check`
+
+# Task Plan
+
+## Goal
+
+Execute Wave 1 of the Paperclip parity / structured intake roadmap by making
+TeamForge capable of creating one canonical intake item, persisting it locally
+with routing state, percolating it into Paperclip through the existing bridge,
+and surfacing that end-to-end state on Overview.
+
+## Plan
+
+- [ ] Freeze the Wave 1 implementation slice around one TeamForge-created
+      intake path and avoid reopening later Hermes/Goals/Routines work inside
+      this pass.
+- [ ] Add a canonical intake contract with source, status, priority, routing
+      hints, founder review flag, sync key, and downstream routing state.
+- [ ] Persist intake items locally and emit canonical intake lifecycle events
+      into `ops_events` so existing feed/audit infrastructure can consume them.
+- [ ] Add a backend create/read path that fans a TeamForge intake item into the
+      Paperclip escalation API and records success/failure/percolation state.
+- [ ] Extend Overview with a founder intake command strip plus queue rails for
+      awaiting triage, routing failures, founder review, and successful
+      percolation.
+- [ ] Verify the full Wave 1 proof path:
+      `new issue in TeamForge -> intake row -> routing state -> Paperclip bridge visibility`
+      and record the result here.
+
+## Review
+
+- In progress.
+
+# Task Plan
+
+## Goal
+
+Create an execution-grade TeamForge/Paperclip parity and structured-intake
+checklist that covers not only issues, sub-issues, and activity, but also
+company/workspace context, org view, goals, routines, inbox flows, and the
+critical ability to create a new issue in TeamForge or Hermes and have it
+percolate into the right downstream systems.
+
+## Plan
+
+- [x] Load the requested `swarm-architect` planning skill and its relevant
+      planning/verification playbooks.
+- [x] Ground the checklist in the current TeamForge routes, Paperclip bridge,
+      and existing founder-console architecture docs.
+- [x] Produce a 30-40 item phased checklist with explicit intake/unification
+      coverage, not just issue-detail parity.
+- [x] Save the checklist as a repo planning artifact that can drive later
+      execution and GitHub issue mapping.
+
+## Review
+
+- Created
+  `docs/plans/2026-05-06-teamforge-paperclip-parity-intake-checklist.md`.
+- The checklist uses a phased founder-command-center framing instead of a
+  narrow issue-page framing.
+- It explicitly covers:
+  - canonical intake contract
+  - TeamForge-created issues
+  - Hermes-originated requests
+  - overview command-center rails
+  - company/workspace summary
+  - org view
+  - founder inbox
+  - agent inbox
+  - issue detail parity
+  - goals
+  - routines
+  - activity/history
+  - end-to-end percolation and release gates
+- The current document contains 40 checklist items, staying within the
+  requested 30-40 range while still preserving the structured intake and
+  workflow parity split needed for execution.
 - Remaining caveat:
   - I verified the startup path through build/test coverage and the typed boot
     wiring, but I did not open a packaged TeamForge window in this pass to
@@ -6497,3 +6948,259 @@ appears in the app.
     - macOS Accessibility scripting is disabled on this machine, so automated
       navigation to the `Clients`, `Projects`, and `Onboarding` routes could not
       be completed even though screen capture works
+
+# Task Plan
+
+## Goal
+
+Diagnose and fix the TeamForge `Agents` tab regression where the Paperclip
+runtime shell stays stuck and reports the runtime status endpoint as missing,
+even though the Paperclip UI and other linked scripts/settings appear healthy.
+
+## Plan
+
+- [x] Reproduce the `Agents` tab failure through the live local app/browser and
+      capture the exact failing requests or command errors.
+- [x] Trace the `Agents` runtime-status flow across React, the Tauri Paperclip
+      command layer, and the local adapter/runtime configuration to find the
+      contract mismatch or stale path.
+- [x] Implement the minimal fix so the `Agents` runtime view refreshes from the
+      configured local Paperclip runtime instead of staying stuck.
+- [x] Re-run targeted verification for the route/command path and record the
+      outcome plus any remaining caveats here.
+
+## Review
+
+- Root cause:
+  - the installed/local TeamForge path was talking to the fallback
+    `paperclip-runtime-adapter.mjs`, not a sibling `server.mjs` inside the
+    Thoughtseed Paperclip repo
+  - that fallback adapter only exposed the older `/api/users` and
+    `/api/telemetry` surface, so Settings could still show green while the
+    default `Agents` runtime screen failed on `GET /api/runtime/status` with
+    `404 route_not_found`
+  - the sibling Paperclip repo configured on this machine currently contains
+    `scripts/forge-aura-adapter/README.md` but not the shipped `server.mjs`
+    file the earlier phase notes assumed, so TeamForge always fell back to the
+    bundled/repo adapter path
+- Implemented fix:
+  - added phase-3 runtime endpoints to
+    `scripts/paperclip-runtime-adapter.mjs`:
+    - `GET /api/runtime/status`
+    - `POST /api/runtime/warm-start`
+    - `POST /api/runtime/refresh-stale`
+    - `POST /api/runtime/maintain-heartbeat`
+  - the fallback adapter now derives runtime status from live telemetry and
+    uses the real Thoughtseed repo scripts for maintenance actions:
+    - `scripts/babysitter.sh start`
+    - `scripts/loop-runner.sh run --once --agent <id>`
+    - `scripts/health-check.sh --fix`
+  - tightened `src-tauri/src/paperclip.rs` API probing so the TeamForge
+    Settings/API health check only reports success when the runtime route the
+    `Agents` shell depends on is also reachable
+- Verification:
+  - live reproduction on the existing local instance:
+    - `curl -i -H 'Authorization: Bearer …' http://127.0.0.1:3101/api/runtime/status`
+      returned `HTTP/1.1 404 Not Found`
+  - contract verification on a fresh patched adapter instance:
+    - `PORT=3109 PAPERCLIP_API_TOKEN=test-token REPO_ROOT=/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-paperclip node scripts/paperclip-runtime-adapter.mjs`
+    - `GET http://127.0.0.1:3109/api/runtime/status`
+      returned healthy runtime JSON for all 6 agents
+    - `POST /api/runtime/refresh-stale` with `{"dryRun":true}`
+      returned the typed runtime operation payload TeamForge expects
+    - `POST /api/runtime/maintain-heartbeat` with `{"dryRun":true}`
+      returned the typed maintenance payload TeamForge expects
+  - repo verification:
+    - `node --check scripts/paperclip-runtime-adapter.mjs`
+    - `pnpm build`
+    - `cargo check --manifest-path src-tauri/Cargo.toml`
+    - `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+    - `git diff --check`
+- Remaining caveat:
+  - the already-running desktop app / local adapter process on `127.0.0.1:3101`
+    will keep serving the old route set until the TeamForge app or adapter is
+    restarted from code that includes this patch; the repo fix is verified, but
+    I did not produce a fresh signed desktop bundle in this pass
+
+# Task Plan
+
+## Goal
+
+Run a pre-release audit across all TeamForge integrations to catch the same
+class of false-green / partial-contract failures as the Paperclip `Agents`
+regression, then fix the highest-risk gaps before the next release push.
+
+## Plan
+
+- [x] Inventory each integration boundary TeamForge owns or surfaces:
+      Paperclip, Worker/Cloudflare, vault parity, Clockify, Huly, Slack,
+      GitHub, and Hermes/Telegram where applicable.
+- [x] Compare each integration's displayed health/config state against the
+      actual commands, pages, and backend routes the app depends on.
+- [x] Reproduce or statically prove any gaps where the app can show ready while
+      deeper routes or actions are missing, stale, or unverified.
+- [x] Implement the highest-signal fixes, prioritizing contract probes,
+      fallback adapters, and release verification gaps over cosmetic status.
+- [x] Record the audited surfaces, shipped fixes, and any residual release
+      blockers in this file.
+
+## Review
+
+- Audited surfaces and gaps:
+  - Paperclip local runtime:
+    - fixed the false-green route contract by requiring
+      `GET /api/runtime/status` in the backend probe and by adding the missing
+      runtime endpoints to the fallback adapter
+  - TeamForge Worker / cloud credential sync:
+    - found the desktop summary could imply readiness from saved config alone
+      even though no live Worker/API contract was being checked
+    - added an explicit Worker probe that validates `/v1/credentials` plus the
+      `project-mappings`, `client-profiles`, and `onboarding-flows` reads the
+      app depends on
+  - GitHub:
+    - found there was no live token validation path at all, so a stale or
+      revoked token could look configured until a later feature failed
+    - added a direct GitHub API probe against `GET /user`
+  - Desktop workspace / Paperclip setup summaries:
+    - found multiple status pills said `READY` when the app only knew the
+      paths, URLs, or token strings were present
+    - changed those config-only states to `CONFIGURED` so the UI no longer
+      overstates live readiness
+  - Clockify / Slack / Huly:
+    - these already had dedicated test commands, but they were isolated per
+      card and not part of one pre-release sweep
+    - added a single Integration Audit panel in Settings that runs the
+      available deep checks in one pass
+- Shipped fixes:
+  - backend:
+    - added `probe_teamforge_worker_api` and `test_github_connection` Tauri
+      commands
+    - added typed probe results for Worker and GitHub
+    - kept the deeper Worker probe explicit instead of turning the lightweight
+      workspace summary load into network-dependent health checks on every open
+  - frontend:
+    - added GitHub token check UI with login, scopes, and rate-limit feedback
+    - added TeamForge Worker API check UI with credential-source and dataset
+      counts
+    - added a release-oriented `Integration Audit` card that runs the main
+      available probes in one sweep
+    - relabeled config-only summaries from `READY` to `CONFIGURED`
+- Live verification and findings:
+  - TeamForge Worker:
+    - `GET /v1/credentials?audience=teamforge-desktop` returned `ok: true`
+      with credential sources for `clockify`, `github`, `huly`, and `slack`
+    - `GET /v1/project-mappings` returned `projectCount: 17`
+    - `GET /v1/client-profiles` returned `clientProfileCount: 12`
+    - `GET /v1/onboarding-flows` returned `onboardingFlowCount: 2`
+  - Clockify:
+    - live token read succeeded for user `Thought Seed`
+  - Slack:
+    - `auth.test` succeeded for user `heyclaw` in team `Thoughtseed Labs`
+  - GitHub:
+    - the saved token currently fails live validation with `401 Bad credentials`
+    - this is a real release blocker for GitHub-linked workflows, not just a
+      missing UI probe
+  - Paperclip:
+    - the repo fix is verified, but the currently running local adapter / app
+      instance must still be restarted so `127.0.0.1:3101` serves the patched
+      runtime route set instead of the old `404` surface
+  - Huly / Hermes:
+    - no equivalent false-green contract gap was found in the code paths
+      reviewed here, but they still depend on running the new Settings audit /
+      targeted connection test in the refreshed app build for final operator
+      confirmation
+- Verification:
+  - `node --check scripts/paperclip-runtime-adapter.mjs`
+  - `pnpm build`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+  - `git diff --check`
+
+# Task Plan
+
+## Goal
+
+Turn TeamForge into the primary operating console for Thoughtseed Paperclip so
+the native Paperclip UI becomes optional for normal review and management
+workflows, while still remaining available as a debug / fallback surface.
+
+## Plan
+
+- [x] Inventory the native Paperclip surfaces TeamForge must absorb first:
+      `Issues`, `Goals`, `Routines`, `Agents`, activity/history, and issue
+      property management.
+- [x] Inspect the sibling Thoughtseed Paperclip repo and map the real data
+      model plus route/contract shape TeamForge can reuse instead of
+      re-inventing.
+- [x] Compare those native Paperclip workflows against the current TeamForge
+      `Agents` implementation and identify the highest-value parity gaps.
+- [x] Implement the first parity slice with the best founder/operator leverage,
+      prioritizing extracted read models and management actions over visual
+      mimicry.
+- [x] Verify the new TeamForge surface against the native Paperclip source and
+      record the remaining parity roadmap here.
+
+## Review
+
+- Native Paperclip surface audit:
+  - the current TeamForge bridge already covered runtime telemetry, org view,
+    founder queue, approvals, escalations, rooms, and per-agent task detail
+  - the richer operator model the user wants is not primarily in the runtime
+    API; it lives in the local Paperclip repo under each agent's:
+    - `MANIFEST.yaml`
+    - `IDENTITY.md`
+    - `CONTEXT.md`
+  - that means TeamForge can absorb a meaningful part of the native dashboard
+    workflow by merging API state with local Paperclip source-of-truth files,
+    instead of trying to mirror a second UI blindly
+  - I did not find a checked-in Paperclip web UI app in the Thoughtseed repo
+    tree that matches the screenshot, so this slice targets the stable runtime
+    and local agent contract that we do own on disk
+- First parity slice shipped:
+  - extended `PaperclipAgentDetailView` with an `operating_profile` assembled
+    from the local Paperclip repo
+  - parsed and surfaced in TeamForge:
+    - mission / identity summary
+    - explicit ownership responsibilities
+    - explicit non-ownership boundaries
+    - context section headings from the agent's live `CONTEXT.md`
+    - custom routines from `MANIFEST.yaml`
+    - event triggers from `MANIFEST.yaml`
+    - exported platform commands
+    - loop cadence, read/write surfaces, and escalation target
+  - integrated that profile directly into the existing TeamForge `Agents`
+    detail view, so the app now shows runtime state plus operating profile in a
+    single surface instead of requiring the separate Paperclip dashboard just
+    to understand what an agent does
+  - added top-level summary rails for routine count, loop cadence, command
+    count, and available context sections
+- Founder/operator leverage from this slice:
+  - each agent now reads more like an operator you can supervise, not just a
+    background process you can ping
+  - TeamForge can now explain:
+    - what the agent is for
+    - what it owns
+    - what it explicitly should not own
+    - which routines and triggers drive it
+    - which surfaces it reads and writes each loop
+  - this creates the base contract needed before adding deeper in-app
+    management for `Goals`, `Routines`, and `Issues`
+- Remaining parity roadmap:
+  - native Paperclip issue detail parity:
+    - comments / activity timeline
+    - editable properties (status, priority, labels, assignee, project)
+    - attachments / linked documents
+    - sub-issue relationships
+  - standalone TeamForge views for:
+    - `Goals`
+    - `Routines`
+    - richer `Issues`
+  - management actions:
+    - edit agent goals/routines from TeamForge
+    - route or reassign work without leaving TeamForge
+    - change issue/task state from the TeamForge agent workspace
+- Verification:
+  - `pnpm build`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+  - `git diff --check`

@@ -25,6 +25,9 @@ const PROJECTS_DIR = path.join(REPO_ROOT, "config", "projects");
 const MEMORY_DIR = path.join(REPO_ROOT, "MEMORY");
 const VAULT_DIR = path.join(REPO_ROOT, "vault");
 const ESCALATIONS_DIR = path.join(VAULT_DIR, "leadership", "escalations");
+const BABYSITTER_SCRIPT = path.join(REPO_ROOT, "scripts", "babysitter.sh");
+const LOOP_RUNNER_SCRIPT = path.join(REPO_ROOT, "scripts", "loop-runner.sh");
+const HEALTH_CHECK_SCRIPT = path.join(REPO_ROOT, "scripts", "health-check.sh");
 const REQUIRED_AGENT_FILES = [
   "TASKS.md",
   "CONTEXT.md",
@@ -663,6 +666,286 @@ async function loadRooms(userId, projectCatalog, agentsById) {
   return rooms;
 }
 
+function uniqueAgentIds(agentIds) {
+  return [...new Set((Array.isArray(agentIds) ? agentIds : []).map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function buildRuntimeStatusSummary(telemetry) {
+  const summary = {
+    healthy: 0,
+    degraded: 0,
+    uninitialized: 0,
+    stale: 0,
+    missingFileAgents: 0,
+    total: telemetry.length,
+  };
+
+  for (const item of telemetry) {
+    if (item.missingFiles > 0) {
+      summary.missingFileAgents += 1;
+    }
+
+    if (item.uninitialized || item.missingFiles > 0) {
+      summary.uninitialized += 1;
+      continue;
+    }
+    if (item.stale) {
+      summary.stale += 1;
+      continue;
+    }
+    if (item.degraded) {
+      summary.degraded += 1;
+      continue;
+    }
+    summary.healthy += 1;
+  }
+
+  return summary;
+}
+
+function buildRuntimeStatusView(telemetry) {
+  return {
+    checkedAt: new Date().toISOString(),
+    summary: buildRuntimeStatusSummary(telemetry),
+    agents: telemetry,
+  };
+}
+
+function selectRuntimeTargets(telemetry, requestedAgents, options = {}) {
+  const explicitIds = uniqueAgentIds(requestedAgents);
+  const telemetryById = new Map(telemetry.map((item) => [item.userId, item]));
+  if (explicitIds.length > 0) {
+    return explicitIds.map((userId) => telemetryById.get(userId)).filter(Boolean);
+  }
+
+  const includeNoCycle = options.includeNoCycle === true;
+  return telemetry.filter((item) => item.stale || (includeNoCycle && (item.uninitialized || item.missingFiles > 0)));
+}
+
+function buildRefreshTargets(telemetry, targetedAgents) {
+  return {
+    stale: telemetry.filter((item) => item.stale).length,
+    uninitialized: telemetry.filter((item) => item.uninitialized || item.missingFiles > 0).length,
+    refreshCandidates: targetedAgents.length,
+  };
+}
+
+async function runShellScript(scriptPath, args = [], { timeoutMs = 120000 } = {}) {
+  if (!existsSync(scriptPath)) {
+    return {
+      ok: false,
+      code: null,
+      output: `Required script missing: ${scriptPath}`,
+    };
+  }
+
+  return await new Promise((resolve) => {
+    const child = spawn("bash", [scriptPath, ...args], {
+      cwd: REPO_ROOT,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish({
+        ok: false,
+        code: null,
+        output: [stdout.trim(), stderr.trim(), `Timed out after ${timeoutMs}ms.`]
+          .filter(Boolean)
+          .join("\n"),
+      });
+    }, timeoutMs);
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      finish({
+        ok: false,
+        code: null,
+        output: [stdout.trim(), stderr.trim(), String(error)].filter(Boolean).join("\n"),
+      });
+    });
+    child.on("close", (code) => {
+      finish({
+        ok: code === 0,
+        code,
+        output: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n"),
+      });
+    });
+  });
+}
+
+async function loadRuntimeStatus(projectCatalog, agents, agentsById) {
+  const telemetry = await loadTelemetry(projectCatalog, agents, agentsById);
+  return {
+    telemetry,
+    view: buildRuntimeStatusView(telemetry),
+  };
+}
+
+async function refreshAgents(agentIds) {
+  const refreshedAgents = [];
+  let failures = 0;
+  const outputChunks = [];
+
+  for (const agentId of agentIds) {
+    const result = await runShellScript(LOOP_RUNNER_SCRIPT, ["run", "--once", "--agent", agentId], {
+      timeoutMs: 180000,
+    });
+    outputChunks.push(`=== ${agentId} ===`);
+    if (result.output) {
+      outputChunks.push(result.output);
+    }
+    if (result.ok) {
+      refreshedAgents.push(agentId);
+    } else {
+      failures += 1;
+    }
+  }
+
+  return {
+    refreshedAgents,
+    failures,
+    output: outputChunks.join("\n").trim() || null,
+  };
+}
+
+async function handleRuntimeOperation(operation, request, projectCatalog, agents, agentsById) {
+  const dryRun = request?.dryRun === true || DRY_RUN;
+  const includeNoCycle =
+    request?.includeNoCycle === true || operation === "maintain-heartbeat";
+  const initial = await loadRuntimeStatus(projectCatalog, agents, agentsById);
+  const targetedItems = selectRuntimeTargets(initial.telemetry, request?.agents, {
+    includeNoCycle,
+  });
+  const targetedAgents = targetedItems.map((item) => item.userId);
+  const initialRefreshTargets = buildRefreshTargets(initial.telemetry, targetedItems);
+
+  let status = "ok";
+  let message = "Operation completed.";
+  let output = null;
+  let refreshedAgents = [];
+  let failures = 0;
+
+  if (operation === "warm-start") {
+    message = "Paperclip babysitter start requested.";
+    if (!dryRun) {
+      const result = await runShellScript(BABYSITTER_SCRIPT, ["start"], { timeoutMs: 30000 });
+      output = result.output;
+      if (!result.ok) {
+        status = "failed";
+        message = "Paperclip warm start failed.";
+        failures = 1;
+      }
+    } else {
+      message = "Dry run: would request a Paperclip warm start.";
+    }
+  } else if (operation === "refresh-stale") {
+    if (targetedAgents.length === 0) {
+      message = "No stale agents required refresh.";
+    } else if (dryRun) {
+      message = `Dry run: would refresh ${targetedAgents.length} agent${targetedAgents.length === 1 ? "" : "s"}.`;
+    } else {
+      const result = await refreshAgents(targetedAgents);
+      refreshedAgents = result.refreshedAgents;
+      failures = result.failures;
+      output = result.output;
+      if (failures > 0 && refreshedAgents.length === 0) {
+        status = "failed";
+        message = "Paperclip stale refresh failed.";
+      } else if (failures > 0) {
+        status = "degraded";
+        message = `Refreshed ${refreshedAgents.length} of ${targetedAgents.length} targeted agents.`;
+      } else {
+        message = `Refreshed ${refreshedAgents.length} agent${refreshedAgents.length === 1 ? "" : "s"}.`;
+      }
+    }
+  } else if (operation === "maintain-heartbeat") {
+    const outputChunks = [];
+    if (dryRun) {
+      message = `Dry run: would repair heartbeat files and refresh ${targetedAgents.length} agent${targetedAgents.length === 1 ? "" : "s"}.`;
+    } else {
+      const fixResult = await runShellScript(HEALTH_CHECK_SCRIPT, ["--fix"], { timeoutMs: 30000 });
+      if (fixResult.output) {
+        outputChunks.push("=== health-check --fix ===");
+        outputChunks.push(fixResult.output);
+      }
+      if (!fixResult.ok) {
+        status = "failed";
+        message = "Paperclip heartbeat maintenance failed during health check.";
+        failures += 1;
+      }
+
+      if (status !== "failed" && targetedAgents.length > 0 && request?.converge !== false) {
+        const refreshResult = await refreshAgents(targetedAgents);
+        refreshedAgents = refreshResult.refreshedAgents;
+        failures += refreshResult.failures;
+        if (refreshResult.output) {
+          outputChunks.push(refreshResult.output);
+        }
+      }
+
+      output = outputChunks.join("\n").trim() || null;
+      if (status !== "failed") {
+        if (failures > 0 && refreshedAgents.length === 0 && targetedAgents.length > 0) {
+          status = "failed";
+          message = "Paperclip heartbeat maintenance could not refresh the targeted agents.";
+        } else if (failures > 0) {
+          status = "degraded";
+          message = `Heartbeat maintenance refreshed ${refreshedAgents.length} of ${targetedAgents.length} targeted agents.`;
+        } else if (targetedAgents.length > 0) {
+          message = `Heartbeat maintenance refreshed ${refreshedAgents.length} agent${refreshedAgents.length === 1 ? "" : "s"}.`;
+        } else {
+          message = "Heartbeat maintenance completed.";
+        }
+      }
+    }
+  } else {
+    status = "failed";
+    message = `Unsupported runtime operation: ${operation}`;
+    failures = 1;
+  }
+
+  const final = await loadRuntimeStatus(projectCatalog, agents, agentsById);
+  const finalTargetedItems = selectRuntimeTargets(final.telemetry, request?.agents, {
+    includeNoCycle,
+  });
+  const finalRefreshTargets = buildRefreshTargets(final.telemetry, finalTargetedItems);
+
+  return {
+    operation,
+    status,
+    message,
+    dryRun: Boolean(dryRun),
+    output,
+    targetedAgents,
+    refreshedAgents,
+    refreshedCount: refreshedAgents.length,
+    failures,
+    initialSummary: initial.view.summary,
+    finalSummary: final.view.summary,
+    initialRefreshTargets,
+    finalRefreshTargets,
+    runtimeStatus: final.view,
+  };
+}
+
 async function readBody(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
@@ -741,6 +1024,11 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, await loadTelemetry(projectCatalog, agents, agentsById));
       return;
     }
+    if (method === "GET" && pathname === "/api/runtime/status") {
+      const runtime = await loadRuntimeStatus(projectCatalog, agents, agentsById);
+      json(res, 200, runtime.view);
+      return;
+    }
     if (method === "GET" && pathname.startsWith("/api/personal/")) {
       const userId = decodeURIComponent(pathname.slice("/api/personal/".length)).trim();
       const personal = await loadPersonalContext(userId, projectCatalog, agentsById);
@@ -773,6 +1061,24 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       json(res, 200, { userId: match.userId, userName: match.userName });
+      return;
+    }
+    if (method === "POST" && pathname === "/api/runtime/warm-start") {
+      const bodyText = await readBody(req);
+      const body = bodyText ? JSON.parse(bodyText) : {};
+      json(res, 200, await handleRuntimeOperation("warm-start", body, projectCatalog, agents, agentsById));
+      return;
+    }
+    if (method === "POST" && pathname === "/api/runtime/refresh-stale") {
+      const bodyText = await readBody(req);
+      const body = bodyText ? JSON.parse(bodyText) : {};
+      json(res, 200, await handleRuntimeOperation("refresh-stale", body, projectCatalog, agents, agentsById));
+      return;
+    }
+    if (method === "POST" && pathname === "/api/runtime/maintain-heartbeat") {
+      const bodyText = await readBody(req);
+      const body = bodyText ? JSON.parse(bodyText) : {};
+      json(res, 200, await handleRuntimeOperation("maintain-heartbeat", body, projectCatalog, agents, agentsById));
       return;
     }
     if (method === "POST" && pathname === "/api/escalations") {

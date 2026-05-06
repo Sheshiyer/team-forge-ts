@@ -79,6 +79,143 @@ export interface FounderNeedsReviewView {
   items: FounderNeedsReviewItemView[];
 }
 
+export interface TeamforgeIntakeRoutingHintInput {
+  targetAgent: string | null;
+  targetDepartment: string | null;
+  targetQueue: string | null;
+  projectCode: string | null;
+  projectId: string | null;
+  clientId: string | null;
+  founderReviewRequired: boolean | null;
+}
+
+export interface TeamforgeIntakeCreateInput {
+  title: string;
+  body: string;
+  source: string | null;
+  sourceRef: string | null;
+  status: string | null;
+  priority: string | null;
+  tags: string[];
+  createdBy: string | null;
+  routing: TeamforgeIntakeRoutingHintInput;
+}
+
+export interface TeamforgeIntakeUpdateInput {
+  id: string;
+  title: string;
+  body: string;
+  sourceRef: string | null;
+  status: string;
+  priority: string;
+  tags: string[];
+  routing: TeamforgeIntakeRoutingHintInput;
+}
+
+export interface TeamforgeIntakeItemView {
+  id: string;
+  syncKey: string;
+  source: string;
+  sourceRef: string | null;
+  title: string;
+  body: string;
+  status: string;
+  priority: string;
+  tags: string[];
+  routingTargetAgent: string | null;
+  routingTargetDepartment: string | null;
+  routingTargetQueue: string | null;
+  routingLabel: string | null;
+  projectCode: string | null;
+  projectId: string | null;
+  clientId: string | null;
+  founderReviewRequired: boolean;
+  createdBy: string;
+  percolationStatus: string;
+  downstreamSystem: string | null;
+  downstreamPrimaryRef: string | null;
+  downstreamSecondaryRef: string | null;
+  percolationError: string | null;
+  routeAttemptCount: number;
+  lastRouteAttemptAt: string | null;
+  lastRoutedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TeamforgeIntakeTimelineEventView {
+  key: string;
+  eventType: string;
+  label: string;
+  severity: string;
+  occurredAt: string;
+  detectedAt: string;
+  detail: string;
+}
+
+export interface TeamforgeIntakeDetailView {
+  item: TeamforgeIntakeItemView;
+  timeline: TeamforgeIntakeTimelineEventView[];
+}
+
+export interface TeamforgeIntakeMutationResult {
+  action: string;
+  message: string;
+  item: TeamforgeIntakeItemView;
+}
+
+export interface FounderIntakeSummaryView {
+  totalOpen: number;
+  awaitingTriageCount: number;
+  founderReviewCount: number;
+  pendingRouteCount: number;
+  routeFailedCount: number;
+  percolatedCount: number;
+}
+
+export interface FounderIntakeSectionView {
+  key: string;
+  label: string;
+  count: number;
+  items: TeamforgeIntakeItemView[];
+}
+
+export interface FounderIntakeConsoleView {
+  summary: FounderIntakeSummaryView;
+  sections: FounderIntakeSectionView[];
+  error: string | null;
+}
+
+export interface TeamforgeInboxView {
+  summary: FounderIntakeSummaryView;
+  items: TeamforgeIntakeItemView[];
+  error: string | null;
+}
+
+export interface HermesIntakeInput {
+  message: string;
+  sourceRef: string | null;
+  sender: string | null;
+  autoRoute: boolean | null;
+}
+
+export interface HermesIntakeNormalizationView {
+  title: string;
+  body: string;
+  status: string;
+  priority: string;
+  tags: string[];
+  routing: TeamforgeIntakeRoutingHintInput;
+  confidence: number;
+  rationale: string[];
+  founderReviewRequired: boolean;
+}
+
+export interface HermesIntakeIngestResult {
+  normalization: HermesIntakeNormalizationView;
+  created: TeamforgeIntakeMutationResult;
+}
+
 export interface VaultPortfolioSurface {
   id: string;
   projectId: string | null;
@@ -124,6 +261,7 @@ export interface FounderCommandCenterView {
   whiteLabelable: VaultPortfolioSurface[];
   needsReview: FounderNeedsReviewView;
   researchHub: VaultResearchHubSummary;
+  intakeConsole: FounderIntakeConsoleView;
   paperclipRuntime: PaperclipRuntimeOverview | null;
   paperclipError: string | null;
   vaultError: string | null;
@@ -469,6 +607,43 @@ export interface PaperclipRoomDefinition {
   clientId: string | null;
 }
 
+export interface PaperclipAgentProfileRoutine {
+  id: string;
+  trigger: string | null;
+  action: string | null;
+  scope: string | null;
+  renderer: string | null;
+  outputPath: string | null;
+  platforms: string[];
+}
+
+export interface PaperclipAgentProfileTrigger {
+  event: string;
+  interval: string | null;
+  action: string | null;
+  filter: string | null;
+}
+
+export interface PaperclipAgentProfileCommand {
+  platform: string;
+  command: string;
+  description: string | null;
+}
+
+export interface PaperclipAgentOperatingProfile {
+  mission: string | null;
+  responsibilities: string[];
+  boundaries: string[];
+  contextSections: string[];
+  routines: PaperclipAgentProfileRoutine[];
+  triggers: PaperclipAgentProfileTrigger[];
+  loopInterval: string | null;
+  loopReads: string[];
+  loopWrites: string[];
+  escalationTarget: string | null;
+  commands: PaperclipAgentProfileCommand[];
+}
+
 export interface PaperclipEscalationInput {
   title: string;
   body: string;
@@ -551,6 +726,25 @@ export interface PaperclipApiProbeResult {
   telemetryCount: number;
 }
 
+export interface TeamforgeWorkerProbeResult {
+  ready: boolean;
+  baseUrl: string;
+  workspaceId: string | null;
+  message: string;
+  credentialSources: string[];
+  projectCount: number;
+  clientProfileCount: number;
+  onboardingFlowCount: number;
+}
+
+export interface GitHubApiProbeResult {
+  ready: boolean;
+  login: string;
+  message: string;
+  scopes: string[];
+  rateLimitRemaining: number | null;
+}
+
 export interface PaperclipOrgNodeView {
   user: PaperclipUser;
   telemetry: PaperclipTelemetryItem | null;
@@ -611,6 +805,136 @@ export interface PaperclipAgentDetailView {
   activeTaskCount: number;
   escalationBacklogCount: number;
   projectRoomCount: number;
+  operatingProfile: PaperclipAgentOperatingProfile | null;
+}
+
+export interface PaperclipGoalSummaryView {
+  totalGoals: number;
+  activeGoals: number;
+  blockedGoals: number;
+  completedGoals: number;
+  standingGoals: number;
+  agentsWithWork: number;
+  totalAgents: number;
+}
+
+export interface PaperclipGoalItemView {
+  key: string;
+  title: string;
+  status: string;
+  priority: string | null;
+  tags: string[];
+  detail: string | null;
+  sourceKind: string;
+  sourceLabel: string;
+  section: string;
+  taskId: string | null;
+  sourceRef: string | null;
+  projectCode: string | null;
+  projectId: string | null;
+  clientId: string | null;
+  updatedAt: string | null;
+  userId: string;
+  userName: string;
+  department: string | null;
+  role: string | null;
+  currentKrebs: string | null;
+  mission: string | null;
+  escalationTagged: boolean;
+}
+
+export interface PaperclipGoalsAgentView {
+  user: PaperclipUser;
+  telemetry: PaperclipTelemetryItem | null;
+  mission: string | null;
+  currentKrebs: string | null;
+  latestHeartbeatAt: string | null;
+  activeCount: number;
+  blockedCount: number;
+  completedCount: number;
+  standingCount: number;
+  goals: PaperclipGoalItemView[];
+}
+
+export interface PaperclipGoalsView {
+  generatedAt: string;
+  summary: PaperclipGoalSummaryView;
+  agents: PaperclipGoalsAgentView[];
+}
+
+export interface PaperclipRoutineSummaryView {
+  totalAgents: number;
+  automatedAgents: number;
+  totalCustomRoutines: number;
+  totalEventTriggers: number;
+  totalCommands: number;
+}
+
+export interface PaperclipRoutineItemView {
+  key: string;
+  kind: string;
+  label: string;
+  detail: string | null;
+  trigger: string | null;
+  action: string | null;
+  filter: string | null;
+  interval: string | null;
+  scope: string | null;
+  renderer: string | null;
+  outputPath: string | null;
+  platforms: string[];
+}
+
+export interface PaperclipRoutinesAgentView {
+  user: PaperclipUser;
+  telemetry: PaperclipTelemetryItem | null;
+  mission: string | null;
+  currentKrebs: string | null;
+  loopInterval: string | null;
+  loopReads: string[];
+  loopWrites: string[];
+  escalationTarget: string | null;
+  customRoutineCount: number;
+  triggerCount: number;
+  commandCount: number;
+  items: PaperclipRoutineItemView[];
+}
+
+export interface PaperclipRoutinesView {
+  generatedAt: string;
+  summary: PaperclipRoutineSummaryView;
+  agents: PaperclipRoutinesAgentView[];
+}
+
+export interface PaperclipAgentFileView {
+  userId: string;
+  fileName: string;
+  filePath: string;
+  content: string;
+  updatedAt: string;
+}
+
+export interface PaperclipFileSaveResult {
+  userId: string;
+  fileName: string;
+  filePath: string;
+  savedAt: string;
+}
+
+export interface PaperclipHermesDeliveryEntryView {
+  occurredAt: string | null;
+  channel: string;
+  summary: string;
+}
+
+export interface PaperclipHermesSyncView {
+  generatedAt: string;
+  statusLine: string | null;
+  pendingRequests: string[];
+  outboundQueue: string[];
+  loopErrors: string[];
+  recentDeliveries: PaperclipHermesDeliveryEntryView[];
+  recentPollerEvents: string[];
 }
 
 export interface PaperclipApprovalItemView {
@@ -1278,6 +1602,70 @@ export interface ActiveProjectIssueView {
   createdAt: string | null;
   updatedAt: string | null;
   closedAt: string | null;
+}
+
+export interface IssueTimelineEventView {
+  key: string;
+  eventType: string;
+  label: string;
+  severity: string;
+  occurredAt: string;
+  detail: string;
+}
+
+export interface ActiveProjectIssueAttachmentView {
+  url: string;
+  label: string;
+  source: string;
+}
+
+export interface ActiveProjectIssueCommentView {
+  id: number;
+  authorLogin: string | null;
+  body: string;
+  url: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  attachments: ActiveProjectIssueAttachmentView[];
+}
+
+export interface ActiveProjectIssueRelatedView {
+  relationId: number;
+  direction: string;
+  entityId: string;
+  repo: string;
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+}
+
+export interface CreateActiveProjectIssueCommentInput {
+  repo: string;
+  number: number;
+  body: string;
+}
+
+export interface UpdateActiveProjectIssueInput {
+  repo: string;
+  number: number;
+  title: string;
+  body: string;
+  state: string;
+  labels: string[];
+  assignees: string[];
+}
+
+export interface ActiveProjectIssueDetailView {
+  issue: ActiveProjectIssueView;
+  bodyExcerpt: string | null;
+  bodyMarkdown: string | null;
+  bodyAttachments: ActiveProjectIssueAttachmentView[];
+  comments: ActiveProjectIssueCommentView[];
+  liveDataError: string | null;
+  parentIssues: ActiveProjectIssueRelatedView[];
+  subIssues: ActiveProjectIssueRelatedView[];
+  timeline: IssueTimelineEventView[];
 }
 
 // ── Sprint ceremonies (#8) ───────────────────────────────────────

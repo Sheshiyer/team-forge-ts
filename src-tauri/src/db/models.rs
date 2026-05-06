@@ -466,6 +466,39 @@ pub struct AgentFeedItem {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
+pub struct TeamforgeIntakeItemRow {
+    pub id: String,
+    pub sync_key: String,
+    pub schema_version: String,
+    pub source: String,
+    pub source_ref: Option<String>,
+    pub title: String,
+    pub body: String,
+    pub status: String,
+    pub priority: String,
+    pub tags_json: String,
+    pub routing_target_agent: Option<String>,
+    pub routing_target_department: Option<String>,
+    pub routing_target_queue: Option<String>,
+    pub project_code: Option<String>,
+    pub project_id: Option<String>,
+    pub client_id: Option<String>,
+    pub founder_review_required: bool,
+    pub created_by: String,
+    pub percolation_status: String,
+    pub downstream_system: Option<String>,
+    pub downstream_primary_ref: Option<String>,
+    pub downstream_secondary_ref: Option<String>,
+    pub percolation_error: Option<String>,
+    pub route_attempt_count: i64,
+    pub last_route_attempt_at: Option<String>,
+    pub last_routed_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
 pub struct Presence {
     pub employee_id: String,
     pub clockify_timer_active: bool,

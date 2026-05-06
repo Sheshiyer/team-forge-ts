@@ -37,6 +37,16 @@ pub struct GithubIssue {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct GithubIssueComment {
+    pub id: i64,
+    pub body: Option<String>,
+    pub html_url: String,
+    pub user: Option<GithubUser>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct GithubPullRequestRef {
     #[serde(rename = "ref")]
     pub ref_name: String,

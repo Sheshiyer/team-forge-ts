@@ -3,6 +3,7 @@ mod commands;
 mod db;
 mod github;
 mod huly;
+mod intake;
 mod ops;
 mod paperclip;
 mod slack;
@@ -119,15 +120,30 @@ pub fn run() {
             commands::get_paperclip_personal_context,
             commands::get_paperclip_rooms,
             commands::create_paperclip_escalation,
+            commands::create_teamforge_intake_item,
+            commands::route_teamforge_intake_item,
+            commands::update_teamforge_intake_item,
+            commands::get_teamforge_inbox,
+            commands::get_teamforge_intake_detail,
+            commands::ingest_hermes_message,
             commands::get_paperclip_org_view,
             commands::get_paperclip_founder_queue,
             commands::get_paperclip_agent_detail,
+            commands::get_paperclip_goals,
+            commands::get_paperclip_routines,
+            commands::get_paperclip_agent_tasks_file,
+            commands::save_paperclip_agent_tasks_file,
+            commands::get_paperclip_agent_manifest_file,
+            commands::save_paperclip_agent_manifest_file,
+            commands::get_paperclip_hermes_sync,
             commands::get_paperclip_runtime_status,
             commands::run_paperclip_warm_start,
             commands::run_paperclip_refresh_stale,
             commands::run_paperclip_maintain_heartbeat,
             commands::get_paperclip_approvals,
             commands::resolve_paperclip_approval,
+            commands::create_active_project_issue_comment,
+            commands::update_active_project_issue,
             commands::open_vault_relative_path,
             commands::list_vault_entries,
             commands::read_vault_file,
@@ -161,9 +177,11 @@ pub fn run() {
             commands::start_background_sync,
             commands::test_huly_connection,
             commands::test_slack_connection,
+            commands::test_github_connection,
             commands::trigger_huly_sync,
             commands::trigger_slack_sync,
             commands::dispatch_hermes_command,
+            commands::run_hermes_poller_once,
             commands::get_notification_feed,
             commands::dismiss_notification,
             commands::scaffold_project,
@@ -199,12 +217,14 @@ pub fn run() {
             commands::get_clients,
             commands::get_client_detail,
             commands::get_active_project_issues,
+            commands::get_active_project_issue_detail,
             commands::get_sprint_detail,
             commands::get_monthly_hours,
             commands::get_skills_matrix,
             commands::get_onboarding_flows,
             commands::sync_cloud_credentials,
             commands::sync_cloud_integrations,
+            commands::probe_teamforge_worker_api,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
