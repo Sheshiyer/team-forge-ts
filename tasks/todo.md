@@ -437,15 +437,36 @@ Publish the current TeamForge parity + intake + issue-control tranche as
 
 ## Plan
 
-- [ ] Bump release metadata and release-facing docs for `0.2.6`.
-- [ ] Re-run the release-facing verification suite on the bumped version.
-- [ ] Commit the current tranche on `main`, create/push the `v0.2.6` tag, and
+- [x] Bump release metadata and release-facing docs for `0.2.6`.
+- [x] Re-run the release-facing verification suite on the bumped version.
+- [x] Commit the current tranche on `main`, create/push the `v0.2.6` tag, and
       trigger the GitHub OTA workflow.
-- [ ] Watch the GitHub release workflow and record the outcome here.
+- [x] Watch the GitHub release workflow and record the outcome here.
 
 ## Review
 
-- In progress.
+- Release metadata updated for `0.2.6` in:
+  - `package.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/tauri.conf.json`
+  - `src-tauri/Cargo.lock`
+  - `CHANGELOG.md`
+  - `README.md`
+- Re-ran release-facing verification after the version bump:
+  - `pnpm build`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `cargo test --manifest-path src-tauri/Cargo.toml paperclip::tests -- --nocapture`
+  - `cargo test --manifest-path src-tauri/Cargo.toml commands::tests -- --nocapture`
+  - `git diff --check`
+- Published the tranche to GitHub:
+  - commit `b39ae70` on `main`
+  - tag `v0.2.6`
+- GitHub Actions OTA workflow:
+  - run: [Build & Release #25451615469](https://github.com/Sheshiyer/team-forge-ts/actions/runs/25451615469)
+  - final status: `completed`, `success`
+  - duration: `12m52s`
+- Result: both Apple Silicon and Intel Tauri builds completed and both OTA
+  publish steps succeeded for `v0.2.6`.
 
 # Task Plan
 
