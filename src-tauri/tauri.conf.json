@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' http://127.0.0.1:3101 http://127.0.0.1:3131 https://teamforge-api.sheshnarayan-iyer.workers.dev; img-src 'self' data: blob: https:; font-src 'self' https://fonts.gstatic.com; form-action 'none'; frame-ancestors 'none'; base-uri 'self'"
     }
   },
   "bundle": {
