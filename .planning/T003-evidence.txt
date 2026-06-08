@@ -1,0 +1,172 @@
+T-003 Evidence File
+===================
+Worktree: /Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/team-forge-ts-T-003
+Branch: p1-w3-verification/T-003
+Date: 2026-06-08
+Executor: claude-code
+
+Adaptation note: The plan 01-03-PLAN.md was written for v0.1.28 → v0.2.0.
+The repo is already at v0.2.6. Version bump tasks are SKIPPED.
+The #[ignore]-gated test `rust_parity_diff_against_real_vault` already exists
+in `src-tauri/src/vault/parity.rs` (lines 2986-3053) from a prior wave.
+
+---
+
+TASK 1: #[ignore]-gated test verification
+-----------------------------------------
+The test `rust_parity_diff_against_real_vault` is already present in
+`src-tauri/src/vault/parity.rs` at lines 2986-3053.
+
+Verification that it is registered and listable:
+
+Command:
+  cargo test --manifest-path src-tauri/Cargo.toml vault::parity::tests::rust_parity_diff_against_real_vault -- --list
+
+Output:
+  vault::parity::tests::rust_parity_diff_against_real_vault: test
+  1 test, 0 benchmarks
+
+Exit code: 0
+
+Total tests in vault::parity::tests module: 15 (14 active + 1 ignored)
+Confirmed by: cargo test --lib vault::parity::tests -- --list | grep -c 'test$' → 15
+
+---
+
+TASK 2: Tier 1 verification commands
+--------------------------------------
+
+Step 1: cargo fmt --check
+Command: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+Exit code: 0
+Output: (none — clean)
+
+Step 2: cargo check
+Command: cargo check --manifest-path src-tauri/Cargo.toml
+Exit code: 0
+Output summary: 0 errors, 2 pre-existing dead_code warnings
+  warning: enum `ProjectCode` is never used
+    --> src/huly/naming.rs:16:10
+  warning: enum `TypeCode` is never used
+    --> src/huly/naming.rs:29:10
+  warning: `team-forge-ts` (lib) generated 2 warnings
+
+Step 3: cargo test --lib
+Command: cargo test --manifest-path src-tauri/Cargo.toml --lib
+Exit code: 0
+Output summary:
+  running 75 tests
+  test result: ok. 71 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+Breakdown of ignored tests:
+  - commands::tests::apply_live_huly_workspace_normalization ... ignored
+  - commands::tests::inspect_live_huly_org_state ... ignored
+  - commands::tests::preview_live_huly_workspace_normalization ... ignored
+  - vault::parity::tests::rust_parity_diff_against_real_vault ... ignored
+
+Step 4: pnpm build
+Command: pnpm build (via npx pnpm build after pnpm install)
+Exit code: 0
+Output summary:
+  > tsc && vite build
+  vite v6.4.1 building for production...
+  ✓ 80 modules transformed.
+  ✓ built in 609ms
+  Warnings: chunk size >500 kB (pre-existing, not a failure)
+
+Step 5: git diff --check
+Command: git diff --check
+Exit code: 0
+Output: (none — clean)
+
+---
+
+TASK 3: Manual checkpoint procedures (documented for human releaser)
+--------------------------------------------------------------------
+
+Tier 2 — Clean-PATH .app run (cannot be automated)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1. Build the .app bundle:
+   cargo tauri build --bundles app
+
+2. Confirm bundle version is 0.2.6:
+   /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
+     src-tauri/target/release/bundle/macos/TeamForge.app/Contents/Info.plist
+
+3. Strip Node from PATH in a NEW terminal:
+   PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '/node\|/nvm\|/homebrew/bin\|/.local/share/mise' | paste -sd:)
+   which node   # must return empty
+
+4. Launch via LaunchServices:
+   open src-tauri/target/release/bundle/macos/TeamForge.app
+
+5. In TeamForge: Settings → Local Workspace → "Sync vault"
+   - founder_sync_ready must show green
+   - sync must complete without error toast
+   - Last synced timestamp must update
+
+6. Optional SQLite check:
+   sqlite3 ~/Library/Application\ Support/com.thoughtseed.teamforge/teamforge.db \
+     "SELECT key, value FROM settings WHERE key = 'vault_sync_runtime';"
+   Expected: no row (default rust) or value = "rust"
+
+7. Bundle inspection (Tier 4):
+   find src-tauri/target/release/bundle/macos/TeamForge.app -name "*.mjs"
+   Expected: finds teamforge-vault-parity.mjs
+
+Tier 3 — Node-vs-Rust parity diff (cannot be automated)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1. Set env vars:
+   export THOUGHTSEED_VAULT_ROOT=/path/to/your/thoughtseed-labs
+   export TF_WORKSPACE_ID=ws-xxxxxxxx
+
+2. Run Node baseline:
+   node scripts/teamforge-vault-parity.mjs \
+     --local-only --apply=false \
+     --vault-root "$THOUGHTSEED_VAULT_ROOT" \
+     --workspace-id "$TF_WORKSPACE_ID" \
+     --report /tmp/node-report.json
+
+3. Run Rust path via #[ignore] test:
+   TEAMFORGE_VAULT_ROOT="$THOUGHTSEED_VAULT_ROOT" \
+   TEAMFORGE_WORKSPACE_ID="$TF_WORKSPACE_ID" \
+   TEAMFORGE_RUST_PARITY_REPORT_PATH=/tmp/rust-report.json \
+   cargo test --manifest-path src-tauri/Cargo.toml \
+     vault::parity::tests::rust_parity_diff_against_real_vault \
+     -- --ignored --nocapture
+
+4. Normalize and diff:
+   jq -S 'walk(if type == "array" then sort_by(tostring) else . end)
+          | del(.. | .lastModifiedAt? // empty)
+          | del(.. | .filePath? // empty)
+          | del(.. | .reportPath? // empty)' /tmp/node-report.json > /tmp/node-norm.json
+
+   jq -S 'walk(if type == "array" then sort_by(tostring) else . end)
+          | del(.. | .lastModifiedAt? // empty)
+          | del(.. | .filePath? // empty)
+          | del(.. | .reportPath? // empty)' /tmp/rust-report.json > /tmp/rust-norm.json
+
+   diff /tmp/node-norm.json /tmp/rust-norm.json
+
+   Best: zero diff.
+   Acceptable: known-deferred fields (TF-46) or int-vs-string.
+   Block ship: counts disagree; *Failures arrays diverge; mode missing.
+
+---
+
+TASK 4: Artifacts written
+-------------------------
+- .planning/phases/01-founder-sync-hardening/01-VERIFICATION.md
+- CHANGELOG.md — v0.2.7 entry added at top
+
+---
+
+SUMMARY
+-------
+- All automated Tier 1 tasks: PASSED
+- cargo test --lib: 71 passed, 0 failed, 4 ignored
+- Compile warnings: 2 pre-existing dead_code warnings (src/huly/naming.rs)
+- #[ignore] test registration: CONFIRMED
+- Tier 2 (clean-PATH .app run): PENDING HUMAN EXECUTION
+- Tier 3 (Node-vs-Rust parity diff): PENDING HUMAN EXECUTION
+- No blockers found.

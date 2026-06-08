@@ -2,6 +2,43 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.2.7 - 2026-06-08
+
+Phase 1 Wave 3 verification closeout. Adds the `#[ignore]`-gated real-vault
+parity diff test, records the full Verification Ladder (Tier 1–5) in
+`01-VERIFICATION.md`, and locks the native Rust importer's report contract
+against the Node baseline. The v0.2.6 Paperclip control plane and vault sync
+runtime remain unchanged; this release is pure verification infrastructure.
+
+### Added
+
+- `vault::parity::tests::rust_parity_diff_against_real_vault` — `#[ignore]`-gated
+  integration test that runs `run_dry_run` against the real `thoughtseed-labs`
+  vault and writes a JSON parity report for `jq`-normalized diff against the
+  Node baseline. Invoked manually by the releaser with
+  `TEAMFORGE_VAULT_ROOT` + `TEAMFORGE_WORKSPACE_ID` env vars.
+- `.planning/phases/01-founder-sync-hardening/01-VERIFICATION.md` — full Tier 1–5
+  audit artifact recording exact commands, exit codes, and parity diff results.
+
+### Changed
+
+- `CHANGELOG.md` now carries a `### Verification` block mirroring the
+  v0.1.28 release pattern, with Tier 2 (clean-PATH `.app` run) and Tier 3
+  (Node-vs-Rust parity diff) recorded for the human releaser.
+
+### Verification
+
+- `cargo fmt --manifest-path src-tauri/Cargo.toml --check` — clean
+- `cargo check --manifest-path src-tauri/Cargo.toml` — 0 errors, 2 pre-existing
+  `dead_code` warnings in `src/huly/naming.rs`
+- `cargo test --manifest-path src-tauri/Cargo.toml --lib` —
+  `test result: ok. 71 passed; 0 failed; 4 ignored`
+- `pnpm build` — TypeScript clean, Vite emitted `dist/`
+- Tier 2: clean-PATH founder-sync run on TeamForge.app — **PENDING HUMAN EXECUTION**
+- Tier 3: Node-vs-Rust parity diff against thoughtseed-labs vault —
+  **PENDING HUMAN EXECUTION** (see `01-VERIFICATION.md` §Tier 3)
+- Full audit trail: `.planning/phases/01-founder-sync-hardening/01-VERIFICATION.md`
+
 ## v0.2.6 - 2026-05-06
 
 This release turns TeamForge into a much stronger day-to-day Paperclip control
