@@ -11,6 +11,7 @@ use tauri::path::BaseDirectory;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_opener::OpenerExt;
 
 use crate::clockify::client::ClockifyClient;
 use crate::clockify::sync::ClockifySyncEngine;
@@ -2420,10 +2421,9 @@ pub async fn open_paperclip_ui(
     }
 
     let normalized_url = parsed.to_string();
-    #[allow(deprecated)]
     app_handle
-        .shell()
-        .open(normalized_url.clone(), None)
+        .opener()
+        .open_url(&normalized_url, None::<&str>)
         .map_err(|error| format!("open Paperclip UI: {error}"))?;
 
     Ok(PaperclipUiOpenResult {
@@ -2817,10 +2817,9 @@ pub async fn open_vault_relative_path(
     }
 
     let canonical_string = canonical_target.to_string_lossy().to_string();
-    #[allow(deprecated)]
     app_handle
-        .shell()
-        .open(canonical_string.clone(), None)
+        .opener()
+        .open_path(&canonical_string, None::<&str>)
         .map_err(|error| format!("open vault path: {error}"))?;
 
     Ok(canonical_string)

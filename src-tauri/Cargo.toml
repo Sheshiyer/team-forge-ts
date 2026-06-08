@@ -23,5 +23,6 @@ chrono = { version = "0.4", features = ["serde"] }
 tauri-plugin-notification = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-opener = "2"
 gray_matter = { version = "0.3", default-features = false, features = ["yaml"] }
 serde_yaml = "0.9"
