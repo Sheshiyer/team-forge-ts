@@ -517,6 +517,221 @@ impl HulyClient {
             self.workspace_id, email
         ))
     }
+
+    // ── Relation API (Phase 3: Huly Relation Types) ──────────────
+
+    /// Create a relation between two Huly entities.
+    /// Returns the relation document ID.
+    pub async fn create_relation(
+        &self,
+        actor_social_id: &str,
+        relation_type: &super::relations::HulyRelationType,
+        source_id: &str,
+        source_class: &str,
+        target_id: &str,
+        target_class: &str,
+        metadata: Option<serde_json::Value>,
+    ) -> Result<String, String> {
+        let attributes = json!({
+            "type": relation_type.label(),
+            "sourceId": source_id,
+            "sourceClass": source_class,
+            "targetId": target_id,
+            "targetClass": target_class,
+            "metadata": metadata,
+        });
+
+        self.create_doc(
+            actor_social_id,
+            relation_type.huly_class(),
+            CORE_SPACE_TX,
+            attributes,
+            None,
+        )
+        .await
+    }
+
+    /// Find relations matching a query filter.
+    pub async fn find_relations(
+        &self,
+        query: &super::relations::RelationQuery,
+    ) -> Result<Vec<super::relations::HulyRelation>, String> {
+        let mut mongo_query = serde_json::Map::new();
+
+        if let Some(source_id) = &query.source_id {
+            mongo_query.insert("sourceId".to_string(), json!(source_id));
+        }
+        if let Some(target_id) = &query.target_id {
+            mongo_query.insert("targetId".to_string(), json!(target_id));
+        }
+        if let Some(relation_type) = &query.relation_type {
+            mongo_query.insert("type".to_string(), json!(relation_type.label()));
+        }
+
+        let docs = self
+            .find_all(
+                "tracker:class:IssueRelation",
+                json!(mongo_query),
+                Some(500),
+            )
+            .await?;
+
+        let mut relations = Vec::with_capacity(docs.len());
+        for doc in docs {
+            match serde_json::from_value::<super::relations::HulyRelation>(doc) {
+                Ok(r) => relations.push(r),
+                Err(e) => eprintln!("[huly] warning: could not parse relation: {e}"),
+            }
+        }
+        Ok(relations)
+    }
+
+    /// Delete a relation by its document ID.
+    pub async fn delete_relation(
+        &self,
+        actor_social_id: &str,
+        relation_id: &str,
+    ) -> Result<(), String> {
+        let tx = json!({
+            "_id": generate_huly_id(),
+            "_class": CORE_CLASS_TX_UPDATE_DOC,
+            "space": CORE_SPACE_TX,
+            "modifiedBy": actor_social_id,
+            "modifiedOn": current_millis(),
+            "objectId": relation_id,
+            "objectClass": "tracker:class:IssueRelation",
+            "objectSpace": CORE_SPACE_TX,
+            "operations": { "$set": { "archived": true } },
+            "retrieve": false,
+        });
+
+        self.post_tx_value(&tx).await?;
+        Ok(())
+    }
+
+    /// Build a relation summary for a given entity.
+    /// Queries all relations where this entity is source or target,
+    /// then groups them by type for frontend consumption.
+    pub async fn get_relation_summary(
+        &self,
+        entity_id: &str,
+        entity_class: &str,
+    ) -> Result<super::relations::HulyRelationSummary, String> {
+        let mut summary =
+            super::relations::HulyRelationSummary::empty(entity_id.to_string(), entity_class.to_string());
+
+        // Fetch all relations where this entity is the source
+        let source_query = super::relations::RelationQuery {
+            source_id: Some(entity_id.to_string()),
+            ..Default::default()
+        };
+        let source_relations = self.find_relations(&source_query).await?;
+
+        // Fetch all relations where this entity is the target
+        let target_query = super::relations::RelationQuery {
+            target_id: Some(entity_id.to_string()),
+            ..Default::default()
+        };
+        let target_relations = self.find_relations(&target_query).await?;
+
+        for r in source_relations {
+            match r.relation_type {
+                super::relations::HulyRelationType::Blocks => summary.blocks.push(r.target_id),
+                super::relations::HulyRelationType::RelatesTo => summary.relates_to.push(r.target_id),
+                super::relations::HulyRelationType::Duplicates => summary.duplicates.push(r.target_id),
+                super::relations::HulyRelationType::CreatesResource => {
+                    summary.creates_resources.push(r.target_id)
+                }
+                super::relations::HulyRelationType::DocumentsIn => {
+                    summary.documents_in.push(r.target_id)
+                }
+                super::relations::HulyRelationType::InvolvesDevice => {
+                    summary.involves_devices.push(r.target_id)
+                }
+                super::relations::HulyRelationType::PartOfSprint => {
+                    summary.part_of_sprints.push(r.target_id)
+                }
+                super::relations::HulyRelationType::ClientAssignment => {
+                    summary.client_assignments.push(r.target_id)
+                }
+            }
+        }
+
+        for r in target_relations {
+            match r.relation_type {
+                super::relations::HulyRelationType::Blocks => {
+                    summary.blocked_by.push(r.source_id)
+                }
+                super::relations::HulyRelationType::RelatesTo => {
+                    summary.relates_to.push(r.source_id)
+                }
+                super::relations::HulyRelationType::Duplicates => {
+                    summary.duplicates.push(r.source_id)
+                }
+                _ => {} // Other types are directional; target-side doesn't imply reverse
+            }
+        }
+
+        Ok(summary)
+    }
+
+    /// Build a dependency chain (transitive closure of Blocks relations).
+    /// Used by the Insights page for blocked-task views.
+    pub async fn get_dependency_chain(
+        &self,
+        root_issue_id: &str,
+        max_depth: u32,
+    ) -> Result<super::relations::HulyDependencyChain, String> {
+        let mut chain = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = vec![(root_issue_id.to_string(), 0u32)];
+
+        while let Some((issue_id, depth)) = queue.pop() {
+            if depth > max_depth || !visited.insert(issue_id.clone()) {
+                continue;
+            }
+
+            // Find what blocks this issue
+            let query = super::relations::RelationQuery {
+                target_id: Some(issue_id.clone()),
+                relation_type: Some(super::relations::HulyRelationType::Blocks),
+                ..Default::default()
+            };
+            let relations = self.find_relations(&query).await?;
+            let blocked_by: Vec<String> =
+                relations.into_iter().map(|r| r.source_id).collect();
+
+            // Fetch issue title for display
+            let title = if let Ok(issues) = self
+                .find_all_typed::<super::types::HulyIssue>(
+                    "tracker:class:Issue",
+                    json!({ "_id": issue_id }),
+                    Some(1),
+                )
+                .await
+            {
+                issues.first().and_then(|i| i.title.clone())
+            } else {
+                None
+            };
+
+            chain.push(super::relations::ChainLink {
+                issue_id: issue_id.clone(),
+                title,
+                depth,
+                blocked_by: blocked_by.clone(),
+            });
+
+            for blocker in blocked_by {
+                queue.push((blocker, depth + 1));
+            }
+        }
+
+        Ok(super::relations::HulyDependencyChain {
+            root_issue_id: root_issue_id.to_string(),
+            chain,
+        })
+    }
 }
 
 // ─── Minimal base64 decoder (no extra crate needed) ────────────

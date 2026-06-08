@@ -26,6 +26,7 @@ use crate::github::types::{
     track_from_issue, GithubIssue, GithubIssueComment,
 };
 use crate::huly::client::HulyClient;
+use crate::huly::relations::{HulyRelationType, HulyRelation, HulyRelationSummary, HulyDependencyChain, RelationQuery};
 use crate::huly::sync::HulySyncEngine;
 use crate::huly::types::{
     HulyAccountInfo, HulyBoard, HulyBoardCard, HulyCalendarEvent, HulyChannel, HulyDepartment,
@@ -6473,6 +6474,122 @@ pub async fn apply_huly_workspace_normalization(
     db: State<'_, DbPool>,
 ) -> Result<HulyWorkspaceNormalizationReport, String> {
     run_huly_workspace_normalization(&db.0, false).await
+}
+
+// ─── Huly Relation Commands (Phase 3: DATA-01) ────────────────
+
+/// Create a relation between two Huly entities.
+#[tauri::command]
+pub async fn create_huly_relation(
+    db: State<'_, DbPool>,
+    relation_type: String,
+    source_id: String,
+    source_class: String,
+    target_id: String,
+    target_class: String,
+    metadata: Option<serde_json::Value>,
+) -> Result<String, String> {
+    let pool = &db.0;
+    let client = get_huly_client(pool).await?;
+
+    let rt = parse_relation_type(&relation_type)?;
+    let account = client.get_account_info().await?;
+    let actor = resolve_huly_actor_social_id(&account)
+        .ok_or_else(|| "Could not resolve Huly actor social ID".to_string())?;
+
+    client
+        .create_relation(&actor, &rt, &source_id, &source_class, &target_id, &target_class, metadata)
+        .await
+}
+
+/// Find relations matching a query filter.
+#[tauri::command]
+pub async fn find_huly_relations(
+    db: State<'_, DbPool>,
+    source_id: Option<String>,
+    target_id: Option<String>,
+    relation_type: Option<String>,
+) -> Result<Vec<HulyRelation>, String> {
+    let pool = &db.0;
+    let client = get_huly_client(pool).await?;
+
+    let rt = relation_type
+        .as_deref()
+        .map(parse_relation_type)
+        .transpose()?;
+
+    let query = RelationQuery {
+        source_id,
+        target_id,
+        relation_type: rt,
+    };
+
+    client.find_relations(&query).await
+}
+
+/// Delete a relation by its document ID.
+#[tauri::command]
+pub async fn delete_huly_relation(
+    db: State<'_, DbPool>,
+    relation_id: String,
+) -> Result<(), String> {
+    let pool = &db.0;
+    let client = get_huly_client(pool).await?;
+
+    let account = client.get_account_info().await?;
+    let actor = resolve_huly_actor_social_id(&account)
+        .ok_or_else(|| "Could not resolve Huly actor social ID".to_string())?;
+
+    client.delete_relation(&actor, &relation_id).await
+}
+
+/// Get a relation summary for a given entity (grouped by type).
+#[tauri::command]
+pub async fn get_huly_relation_summary(
+    db: State<'_, DbPool>,
+    entity_id: String,
+    entity_class: String,
+) -> Result<HulyRelationSummary, String> {
+    let pool = &db.0;
+    let client = get_huly_client(pool).await?;
+    client.get_relation_summary(&entity_id, &entity_class).await
+}
+
+/// Get a dependency chain (transitive closure of Blocks relations).
+#[tauri::command]
+pub async fn get_huly_dependency_chain(
+    db: State<'_, DbPool>,
+    root_issue_id: String,
+    max_depth: Option<u32>,
+) -> Result<HulyDependencyChain, String> {
+    let pool = &db.0;
+    let client = get_huly_client(pool).await?;
+    client
+        .get_dependency_chain(&root_issue_id, max_depth.unwrap_or(5))
+        .await
+}
+
+/// Parse a relation type string into the enum.
+fn parse_relation_type(s: &str) -> Result<HulyRelationType, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "blocks" => Ok(HulyRelationType::Blocks),
+        "relatesto" | "relates_to" | "relates to" => Ok(HulyRelationType::RelatesTo),
+        "duplicates" => Ok(HulyRelationType::Duplicates),
+        "createsresource" | "creates_resource" | "creates resource" => {
+            Ok(HulyRelationType::CreatesResource)
+        }
+        "documentsin" | "documents_in" | "documents in" => Ok(HulyRelationType::DocumentsIn),
+        "involvesdevice" | "involves_device" | "involves device" => {
+            Ok(HulyRelationType::InvolvesDevice)
+        }
+        "partofsprint" | "part_of_sprint" | "part of sprint" => {
+            Ok(HulyRelationType::PartOfSprint)
+        }
+        "clientassignment" | "client_assignment" | "client assignment" => {
+            Ok(HulyRelationType::ClientAssignment)
+        }
+        _ => Err(format!("Unknown relation type: {s}")),
+    }
 }
 
 /// Format a millisecond epoch timestamp to ISO date string.
