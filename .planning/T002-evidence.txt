@@ -1,0 +1,170 @@
+# T-002 Evidence — Rust shell call audit and capability narrowing
+
+## Worktree
+/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/team-forge-ts-T-002
+Branch: p1-w1-tauri-security/T-002
+
+## Summary
+- **8 shell calls found** in `src-tauri/src/commands/mod.rs`
+- **6 new capabilities created**
+- **1 pre-existing capability** (`paperclip-singleton.json` from T-001)
+- **All Rust shell calls bypass capability ACL** (confirmed T-001 discovery #4)
+- **cargo check: PASS** (2 pre-existing dead_code warnings only)
+
+---
+
+## Shell calls found
+
+### 1. `detect_node_runtime_version` — node --version
+- **File:** `src-tauri/src/commands/mod.rs`
+- **Line:** 1767-1771
+- **Command:** `app_handle.shell().command(&resolve_node_binary()).args(["--version"]).output()`
+- **Purpose:** Detect Node.js runtime version for vault sync readiness check
+- **Binary resolved:** `node` (fallback) or absolute path from `extra_bin_directories()`
+- **Capability:** `node-runtime-check.json` (NEW)
+- **Scoped?** NO — Rust `ShellExt` bypasses ACL. Capability documents intended scope for JS-side.
+
+### 2. `launch_paperclip_script_internal` — dynamic script spawn
+- **File:** `src-tauri/src/commands/mod.rs`
+- **Line:** 2268-2278
+- **Command:** `app_handle.shell().command(&command_path).spawn()`
+- **Purpose:** Launch arbitrary Paperclip script (direct or via `/bin/zsh` interpreter)
+- **Interpreter:** `/bin/zsh` for `.sh`/`.bash`/`.zsh`/`.command`; otherwise direct execution
+- **Capability:** `paperclip-singleton.json` (EXISTING from T-001)
+- **Scoped?** PARTIALLY — `paperclip-singleton.json` scopes `shell:allow-execute` and `shell:allow-spawn` to `launch-thoughtseed-paperclip.sh` only. The Rust function can launch ANY script path passed by the operator. This is accepted under the singleton constraint (one shared Paperclip instance; operator surface only).
+
+### 3. `launch_paperclip_adapter_internal` — node adapter spawn
+- **File:** `src-tauri/src/commands/mod.rs`
+- **Line:** 2315-2325
+- **Command:** `app_handle.shell().command(&node_binary).args([script_string]).env(...).spawn()`
+- **Purpose:** Spawn Paperclip runtime adapter (node script that bridges to Paperclip API)
+- **Script resolved:** `paperclip-runtime-adapter.mjs` (bundled resource or repo path)
+- **Capability:** `paperclip-adapter.json` (NEW)
+- **Scoped?** NO — Rust `ShellExt` bypasses ACL. Capability documents intended scope for JS-side.
+
+### 4. `open_paperclip_ui` — shell().open() for URLs
+- **File:** `src-tauri/src/commands/mod.rs`
+- **Line:** 2425-2426
+- **Command:** `app_handle.shell().open(normalized_url.clone(), None)`
+- **Purpose:** Open Paperclip UI URL in default browser
+- **URL scheme:** `http` or `https` only (validated via `reqwest::Url` parse)
+- **Capability:** `external-links.json` (NEW)
+- **Scoped?** NO — Rust `ShellExt` bypasses ACL. `tauri.conf.json` has `plugins.shell.open: true` with default regex `^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+`. This allows http/https/mailto/tel. Narrowing to `^https?://.+` is a T-003 candidate.
+
+### 5. `open_vault_relative_path` — shell().open() for local files
+- **File:** `src-tauri/src/commands/mod.rs`
+- **Line:** 2822-2823
+- **Command:** `app_handle.shell().open(canonical_string.clone(), None)`
+- **Purpose:** Open vault file/folder in default macOS app (Finder, editor, etc.)
+- **Path validation:** Canonicalized and checked to stay inside `vault_root`
+- **Capability:** `external-links.json` (NEW, shared with #4)
+- **Scoped?** NO — Rust `ShellExt` bypasses ACL. The default `shell.open` regex does NOT match `file://` paths, so JS-side `shell.open` for local files would be denied. Rust bypasses this.
+
+### 6. `sync_local_vault_to_teamforge` — node vault parity sync
+- **File:** `src-tauri/src/commands/mod.rs`
+- **Line:** 3013-3032
+- **Command:** `app_handle.shell().command(&resolve_node_binary()).args([script_path, "--apply", "--vault-root", ...]).env(...).output()`
+- **Purpose:** Run TeamForge vault parity sync via node script (`teamforge-vault-parity.mjs`)
+- **Runtime choice:** `"rust"` (default) or `"node"` (legacy). This shell call only fires when `"node"` is selected.
+- **Capability:** `vault-sync-node.json` (NEW)
+- **Scoped?** NO — Rust `ShellExt` bypasses ACL. Capability documents intended scope for JS-side.
+
+### 7. `dispatch_hermes_command` — bash dispatcher
+- **File:** `src-tauri/src/commands/mod.rs`
+- **Line:** 4905-4913
+- **Command:** `app_handle.shell().command(&resolve_bash_binary()).args(&shell_args).env(...).output()`
+- **Purpose:** Dispatch Hermes Telegram commands via `scripts/hermes-tg-dispatcher.sh`
+- **Args:** `[script_path, cmd_trimmed, ...extra_args]` — dynamic operator-provided command + args
+- **Capability:** `hermes-dispatcher.json` (NEW)
+- **Scoped?** NO — Rust `ShellExt` bypasses ACL. Capability documents intended scope for JS-side.
+
+### 8. `run_hermes_poller_once` — bash poller
+- **File:** `src-tauri/src/commands/mod.rs`
+- **Line:** 4965-4972
+- **Command:** `app_handle.shell().command(&resolve_bash_binary()).args([script_path, "--once"]).current_dir(working_dir).env(...).output()`
+- **Purpose:** Run Hermes Telegram poller once via `scripts/hermes-tg-poller.sh`
+- **Capability:** `hermes-poller.json` (NEW)
+- **Scoped?** NO — Rust `ShellExt` bypasses ACL. Capability documents intended scope for JS-side.
+
+---
+
+## New capabilities created
+
+| Capability | Permission | Scoped to | Purpose |
+|---|---|---|---|
+| `node-runtime-check.json` | `shell:allow-execute` | `node --version` | Runtime version detection |
+| `paperclip-adapter.json` | `shell:allow-spawn` | `node` (any args) | Paperclip adapter spawn |
+| `vault-sync-node.json` | `shell:allow-execute` | `node` (any args) | Vault parity sync (node path) |
+| `hermes-dispatcher.json` | `shell:allow-execute` | `bash` (any args) | Hermes TG dispatcher |
+| `hermes-poller.json` | `shell:allow-execute` | `bash` (any args) | Hermes TG poller |
+| `external-links.json` | `shell:allow-open` | N/A (see note) | External URLs + local paths |
+
+**Note on `external-links.json`:** `shell:allow-open` does not support capability-level URL scoping in Tauri v2 shell plugin. URL validation is controlled by `tauri.conf.json > plugins.shell.open` regex. The current config is `open: true` (default regex allows http/https/mailto/tel).
+
+---
+
+## What remains unscoped and why
+
+1. **All Rust `ShellExt` calls bypass capability ACL.** This is a Tauri v2 runtime behavior, not a configuration gap. The capabilities created in T-002 document the intended security contract and protect JS-side `@tauri-apps/plugin-shell` IPC, but Rust `app_handle.shell().command(...)` and `.shell().open(...)` execute without capability validation.
+
+2. **`launch_paperclip_script_internal` can launch arbitrary scripts.** The `paperclip-singleton.json` capability scopes to `launch-thoughtseed-paperclip.sh` only, but the Rust function accepts any `script_path` parameter and uses `/bin/zsh` as interpreter for shell scripts. This is accepted because:
+   - TeamForge is operator surface only (bridge B)
+   - The singleton constraint means one shared Paperclip instance for all orgs
+   - No per-org capabilities are created
+   - Paperclip is NOT converted to a Tauri sidecar
+
+3. **`cmd` path resolution mismatch.** `resolve_node_binary()` and `resolve_bash_binary()` may return absolute paths (`/opt/homebrew/bin/node`, `/bin/bash`). The capabilities use bare command names (`node`, `bash`) which only match the fallback case. For JS-side scoped calls to work, the command name in the capability would need to match the resolved path exactly, or the JS call would need to use the capability `name` (not the binary path). This is a known limitation documented in T-001 discovery #7.
+
+4. **`shell:allow-open` URL scoping is in `tauri.conf.json`, not capabilities.** The current `tauri.conf.json` has `plugins.shell.open: true` with the permissive default regex. Narrowing this regex (e.g., to `^https?://.+`) is a T-003 candidate.
+
+---
+
+## cargo check result
+
+```
+$ cargo check
+warning: enum `ProjectCode` is never used
+warning: enum `TypeCode` is never used
+warning: `team-forge-ts` (lib) generated 2 warnings
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.33s
+```
+
+**Result: PASS** — No compile errors. The 2 warnings are pre-existing dead_code warnings in `src/huly/naming.rs` and are unrelated to capabilities.
+
+---
+
+## default.json unchanged
+
+Per T-001 discovery #1, capability identifiers are NOT permissions. Adding capability names to `default.json` `permissions` fails `cargo check`. Separate capability files that share `"windows": ["main"]` are merged automatically — no cross-reference needed. `default.json` was left unchanged.
+
+---
+
+## Edge cases and follow-up (T-003+)
+
+1. **T-003: Narrow `tauri.conf.json` `shell.open` regex.** Change `plugins.shell.open` from `true` to a custom regex that only allows `http://` and `https://` (e.g., `"^https?://.+"`). This would scope JS-side `shell.open` to web URLs only. Local file opens would need a separate `file://` regex or migration to `tauri-plugin-opener`.
+
+2. **T-003: Rust-side shell enforcement.** Investigate whether Tauri v2 shell plugin can be patched or configured to enforce capability scopes for `ShellExt` Rust calls. If not, consider wrapping all Rust shell calls in a custom validation layer that checks against the same capability JSONs at runtime.
+
+3. **T-003: `launch_paperclip_script_internal` script path validation.** The function currently resolves any user-provided script path. Consider adding an allowlist check against known Paperclip scripts (`launch-thoughtseed-paperclip.sh`, `paperclip-runtime-adapter.mjs`, etc.) before spawning.
+
+4. **T-003: `resolve_node_binary()` / `resolve_bash_binary()` capability alignment.** If JS-side scoped shell calls are ever needed, the capability `cmd` fields must match the resolved absolute paths. Consider using `$RESOURCE` or `$HOME` variables in capabilities, or standardizing on bare command names with PATH augmentation.
+
+5. **T-003: Remove `#[allow(deprecated)]` on `shell().open()`.** The Tauri shell `open` API is deprecated since v2.1.0 in favor of `tauri-plugin-opener`. Migrating would also change the scoping model (opener plugin uses its own permission/scope system).
+
+---
+
+## Files modified
+
+- `src-tauri/capabilities/node-runtime-check.json` (NEW)
+- `src-tauri/capabilities/paperclip-adapter.json` (NEW)
+- `src-tauri/capabilities/vault-sync-node.json` (NEW)
+- `src-tauri/capabilities/hermes-dispatcher.json` (NEW)
+- `src-tauri/capabilities/hermes-poller.json` (NEW)
+- `src-tauri/capabilities/external-links.json` (NEW)
+- `.planning/T002-evidence.txt` (NEW)
+
+## Files unchanged
+
+- `src-tauri/capabilities/default.json` (no capability identifiers added per T-001 discovery)
+- `src-tauri/capabilities/paperclip-singleton.json` (preserved from T-001)
+- `src-tauri/tauri.conf.json` (shell.open regex not narrowed in this task)

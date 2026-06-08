@@ -1,0 +1,29 @@
+{
+  "identifier": "paperclip-singleton",
+  "description": "Narrow capability for the singleton shared Paperclip instance (one instance for the entire Thoughtseed ecosystem, multiple orgs inside it). Only allows the known launch script with discrete actions (start/status/health/stop). No per-org or Tauri sidecar conversion. TeamForge is operator surface only (bridge B).",
+  "windows": ["main"],
+  "permissions": [
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "launch-thoughtseed-paperclip",
+          "cmd": "launch-thoughtseed-paperclip.sh",
+          "args": true,
+          "sidecar": false
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "launch-thoughtseed-paperclip",
+          "cmd": "launch-thoughtseed-paperclip.sh",
+          "args": true,
+          "sidecar": false
+        }
+      ]
+    }
+  ]
+}

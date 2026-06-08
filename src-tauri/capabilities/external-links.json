@@ -1,0 +1,8 @@
+{
+  "identifier": "external-links",
+  "description": "Narrow capability for opening external URLs (Paperclip UI) and local vault paths. URL validation is enforced via tauri.conf.json plugins.shell.open regex. Rust ShellExt bypasses this ACL; this scopes JS-side calls only. TeamForge is operator surface only.",
+  "windows": ["main"],
+  "permissions": [
+    "shell:allow-open"
+  ]
+}

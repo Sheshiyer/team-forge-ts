@@ -1,0 +1,18 @@
+{
+  "identifier": "vault-sync-node",
+  "description": "Narrow capability for TeamForge vault parity sync via node script (teamforge-vault-parity.mjs). Rust ShellExt bypasses this ACL; this scopes JS-side calls only. TeamForge is operator surface only.",
+  "windows": ["main"],
+  "permissions": [
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "vault-parity-sync",
+          "cmd": "node",
+          "args": true,
+          "sidecar": false
+        }
+      ]
+    }
+  ]
+}

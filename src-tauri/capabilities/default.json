@@ -1,12 +1,10 @@
 {
   "identifier": "default",
-  "description": "Default capability for the main window",
+  "description": "Default capability for the main window (narrowed for T-001: singleton Paperclip only)",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "dialog:default",
-    "shell:allow-execute",
-    "shell:allow-open",
     "notification:default",
     "process:default",
     "updater:default"
