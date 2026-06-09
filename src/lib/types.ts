@@ -1786,6 +1786,93 @@ export interface OnboardingTaskView {
   notes: string | null;
 }
 
+// ── Client Onboarding (Phase 4: CLIENT-01) ───────────────────────
+
+export type OnboardingStepState = "not-started" | "in-progress" | "done";
+
+export interface ClientOnboardingTemplateStep {
+  stepId: string;
+  sortOrder: number;
+  title: string;
+  description: string | null;
+  estimatedDays: number | null;
+  required: boolean;
+  autoTrigger: string | null;
+}
+
+export interface ClientOnboardingTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  steps: ClientOnboardingTemplateStep[];
+  createdAt: string;
+  updatedAt: string;
+  isDefault: boolean;
+}
+
+export interface ClientOnboardingTemplateSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  stepCount: number;
+  isDefault: boolean;
+  updatedAt: string;
+}
+
+export interface ClientOnboardingFlowStep {
+  stepId: string;
+  title: string;
+  state: OnboardingStepState;
+  startedAt: string | null;
+  completedAt: string | null;
+  notes: string | null;
+  assignedTo: string | null;
+}
+
+export interface ClientOnboardingFlow {
+  id: string;
+  clientId: string;
+  clientName: string;
+  templateId: string;
+  templateName: string;
+  steps: ClientOnboardingFlowStep[];
+  status: string;
+  startedAt: string;
+  completedAt: string | null;
+  assignedTo: string | null;
+  notes: string | null;
+}
+
+export interface ClientOnboardingFlowSummary {
+  id: string;
+  clientId: string;
+  clientName: string;
+  templateName: string;
+  status: string;
+  progressPercent: number;
+  stepsDone: number;
+  stepsTotal: number;
+  startedAt: string;
+  completedAt: string | null;
+  assignedTo: string | null;
+}
+
+export interface CreateClientOnboardingFlowInput {
+  clientId: string;
+  clientName: string;
+  templateId: string;
+  assignedTo: string | null;
+  notes: string | null;
+}
+
+export interface UpdateOnboardingStepInput {
+  flowId: string;
+  stepId: string;
+  state: OnboardingStepState;
+  notes: string | null;
+  assignedTo: string | null;
+}
+
 // ── Cloud credential sync ────────────────────────────────────────
 
 export interface CredentialSyncResult {
