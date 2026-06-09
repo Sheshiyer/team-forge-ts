@@ -1145,3 +1145,56 @@ pub struct EntityRelationInput {
     pub source_system: Option<String>,
     pub metadata: Option<String>,
 }
+
+// ─── Client Onboarding (Phase 4: CLIENT-01) ──────────────────────
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ClientOnboardingTemplateRow {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub step_count: i64,
+    pub is_default: i64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ClientOnboardingTemplateDetailRow {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub steps_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub is_default: i64,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ClientOnboardingFlowRow {
+    pub id: String,
+    pub client_id: String,
+    pub client_name: String,
+    pub template_name: String,
+    pub status: String,
+    pub progress_percent: f64,
+    pub steps_done: i64,
+    pub steps_total: i64,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub assigned_to: Option<String>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ClientOnboardingFlowDetailRow {
+    pub id: String,
+    pub client_id: String,
+    pub client_name: String,
+    pub template_id: String,
+    pub template_name: String,
+    pub steps_json: String,
+    pub status: String,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub assigned_to: Option<String>,
+    pub notes: Option<String>,
+}

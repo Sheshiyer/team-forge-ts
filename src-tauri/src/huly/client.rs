@@ -763,7 +763,7 @@ fn huly_random_segment() -> &'static str {
     })
 }
 
-fn generate_huly_id() -> String {
+pub fn generate_huly_id() -> String {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
     let seconds = SystemTime::now()

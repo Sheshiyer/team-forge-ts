@@ -1225,6 +1225,344 @@ pub async fn upsert_github_repo_config(
     Ok(())
 }
 
+// ─── Client Onboarding Queries (Phase 4: CLIENT-01) ───────────
+
+pub async fn get_client_onboarding_templates(
+    pool: &SqlitePool,
+) -> Result<Vec<crate::onboarding::ClientOnboardingTemplateSummary>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, ClientOnboardingTemplateRow>(
+        r#"
+        SELECT id, name, description, step_count, is_default, updated_at
+        FROM client_onboarding_templates
+        ORDER BY is_default DESC, updated_at DESC
+        "#
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| crate::onboarding::ClientOnboardingTemplateSummary {
+            id: r.id,
+            name: r.name,
+            description: r.description,
+            step_count: r.step_count as u32,
+            is_default: r.is_default != 0,
+            updated_at: r.updated_at,
+        })
+        .collect())
+}
+
+pub async fn get_client_onboarding_template(
+    pool: &SqlitePool,
+    template_id: &str,
+) -> Result<Option<crate::onboarding::ClientOnboardingTemplate>, sqlx::Error> {
+    let row = sqlx::query_as::<_, ClientOnboardingTemplateDetailRow>(
+        r#"
+        SELECT id, name, description, steps_json, created_at, updated_at, is_default
+        FROM client_onboarding_templates
+        WHERE id = ?1
+        "#,
+    )
+    .bind(template_id)
+    .fetch_optional(pool)
+    .await?;
+
+    match row {
+        Some(r) => {
+            let steps: Vec<crate::onboarding::ClientOnboardingTemplateStep> =
+                serde_json::from_str(&r.steps_json).unwrap_or_default();
+            Ok(Some(crate::onboarding::ClientOnboardingTemplate {
+                id: r.id,
+                name: r.name,
+                description: r.description,
+                steps,
+                created_at: r.created_at,
+                updated_at: r.updated_at,
+                is_default: r.is_default != 0,
+            }))
+        }
+        None => Ok(None),
+    }
+}
+
+pub async fn insert_client_onboarding_template(
+    pool: &SqlitePool,
+    template: &crate::onboarding::ClientOnboardingTemplate,
+) -> Result<(), sqlx::Error> {
+    let steps_json = serde_json::to_string(&template.steps).unwrap_or_default();
+    sqlx::query(
+        r#"
+        INSERT INTO client_onboarding_templates (id, name, description, steps_json, step_count, created_at, updated_at, is_default)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          description = excluded.description,
+          steps_json = excluded.steps_json,
+          step_count = excluded.step_count,
+          updated_at = excluded.updated_at,
+          is_default = excluded.is_default
+        "#,
+    )
+    .bind(&template.id)
+    .bind(&template.name)
+    .bind(&template.description)
+    .bind(&steps_json)
+    .bind(template.steps.len() as i64)
+    .bind(&template.created_at)
+    .bind(&template.updated_at)
+    .bind(if template.is_default { 1 } else { 0 })
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_client_onboarding_flows(
+    pool: &SqlitePool,
+) -> Result<Vec<crate::onboarding::ClientOnboardingFlowSummary>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, ClientOnboardingFlowRow>(
+        r#"
+        SELECT id, client_id, client_name, template_name, status, progress_percent, steps_done, steps_total, started_at, completed_at, assigned_to
+        FROM client_onboarding_flows
+        ORDER BY started_at DESC
+        "#
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| crate::onboarding::ClientOnboardingFlowSummary {
+            id: r.id,
+            client_id: r.client_id,
+            client_name: r.client_name,
+            template_name: r.template_name,
+            status: r.status,
+            progress_percent: r.progress_percent,
+            steps_done: r.steps_done as u32,
+            steps_total: r.steps_total as u32,
+            started_at: r.started_at,
+            completed_at: r.completed_at,
+            assigned_to: r.assigned_to,
+        })
+        .collect())
+}
+
+pub async fn get_client_onboarding_flow(
+    pool: &SqlitePool,
+    flow_id: &str,
+) -> Result<Option<crate::onboarding::ClientOnboardingFlow>, sqlx::Error> {
+    let row = sqlx::query_as::<_, ClientOnboardingFlowDetailRow>(
+        r#"
+        SELECT id, client_id, client_name, template_id, template_name, steps_json, status, started_at, completed_at, assigned_to, notes
+        FROM client_onboarding_flows
+        WHERE id = ?1
+        "#,
+    )
+    .bind(flow_id)
+    .fetch_optional(pool)
+    .await?;
+
+    match row {
+        Some(r) => {
+            let steps: Vec<crate::onboarding::ClientOnboardingFlowStep> =
+                serde_json::from_str(&r.steps_json).unwrap_or_default();
+            let status = crate::onboarding::ClientOnboardingFlowStatus::from_label(&r.status)
+                .unwrap_or(crate::onboarding::ClientOnboardingFlowStatus::NotStarted);
+            Ok(Some(crate::onboarding::ClientOnboardingFlow {
+                id: r.id,
+                client_id: r.client_id,
+                client_name: r.client_name,
+                template_id: r.template_id,
+                template_name: r.template_name,
+                steps,
+                status,
+                started_at: r.started_at,
+                completed_at: r.completed_at,
+                assigned_to: r.assigned_to,
+                notes: r.notes,
+            }))
+        }
+        None => Ok(None),
+    }
+}
+
+pub async fn insert_client_onboarding_flow(
+    pool: &SqlitePool,
+    flow: &crate::onboarding::ClientOnboardingFlow,
+) -> Result<(), sqlx::Error> {
+    let steps_json = serde_json::to_string(&flow.steps).unwrap_or_default();
+    let steps_done = flow.steps.iter().filter(|s| s.state.is_done()).count() as i64;
+    let steps_total = flow.steps.len() as i64;
+    let progress_percent = if steps_total > 0 {
+        (steps_done as f64 / steps_total as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    sqlx::query(
+        r#"
+        INSERT INTO client_onboarding_flows (id, client_id, client_name, template_id, template_name, steps_json, status, progress_percent, steps_done, steps_total, started_at, completed_at, assigned_to, notes)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+        "#,
+    )
+    .bind(&flow.id)
+    .bind(&flow.client_id)
+    .bind(&flow.client_name)
+    .bind(&flow.template_id)
+    .bind(&flow.template_name)
+    .bind(&steps_json)
+    .bind(flow.status.label())
+    .bind(progress_percent)
+    .bind(steps_done)
+    .bind(steps_total)
+    .bind(&flow.started_at)
+    .bind(&flow.completed_at)
+    .bind(&flow.assigned_to)
+    .bind(&flow.notes)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_client_onboarding_step(
+    pool: &SqlitePool,
+    flow_id: &str,
+    step_id: &str,
+    state: crate::onboarding::OnboardingStepState,
+    now: &str,
+    notes: Option<&str>,
+    assigned_to: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    // Load flow, update step, save back
+    let flow_row = sqlx::query_as::<_, ClientOnboardingFlowDetailRow>(
+        r#"
+        SELECT id, client_id, client_name, template_id, template_name, steps_json, status, started_at, completed_at, assigned_to, notes
+        FROM client_onboarding_flows
+        WHERE id = ?1
+        "#,
+    )
+    .bind(flow_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(row) = flow_row else {
+        return Ok(());
+    };
+
+    let mut steps: Vec<crate::onboarding::ClientOnboardingFlowStep> =
+        serde_json::from_str(&row.steps_json).unwrap_or_default();
+
+    for step in &mut steps {
+        if step.step_id == step_id {
+            step.state = state;
+            if state.is_active() && step.started_at.is_none() {
+                step.started_at = Some(now.to_string());
+            }
+            if state.is_done() {
+                step.completed_at = Some(now.to_string());
+            }
+            if let Some(n) = notes {
+                step.notes = Some(n.to_string());
+            }
+            if let Some(a) = assigned_to {
+                step.assigned_to = Some(a.to_string());
+            }
+        }
+    }
+
+    let steps_json = serde_json::to_string(&steps).unwrap_or_default();
+    let steps_done = steps.iter().filter(|s| s.state.is_done()).count() as i64;
+    let steps_total = steps.len() as i64;
+
+    sqlx::query(
+        r#"
+        UPDATE client_onboarding_flows
+        SET steps_json = ?1, steps_done = ?2, steps_total = ?3, updated_at = ?4
+        WHERE id = ?5
+        "#,
+    )
+    .bind(&steps_json)
+    .bind(steps_done)
+    .bind(steps_total)
+    .bind(now)
+    .bind(flow_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn recompute_client_onboarding_flow_status(
+    pool: &SqlitePool,
+    flow_id: &str,
+) -> Result<(), sqlx::Error> {
+    let row = sqlx::query_as::<_, ClientOnboardingFlowDetailRow>(
+        r#"
+        SELECT id, client_id, client_name, template_id, template_name, steps_json, status, started_at, completed_at, assigned_to, notes
+        FROM client_onboarding_flows
+        WHERE id = ?1
+        "#,
+    )
+    .bind(flow_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(r) = row else { return Ok(()) };
+
+    let steps: Vec<crate::onboarding::ClientOnboardingFlowStep> =
+        serde_json::from_str(&r.steps_json).unwrap_or_default();
+
+    let steps_done = steps.iter().filter(|s| s.state.is_done()).count() as i64;
+    let steps_total = steps.len() as i64;
+    let progress_percent = if steps_total > 0 {
+        (steps_done as f64 / steps_total as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let new_status = if steps_done == 0 {
+        "not-started"
+    } else if steps_done == steps_total {
+        "completed"
+    } else {
+        let has_stalled = steps.iter().any(|s| {
+            s.state == crate::onboarding::OnboardingStepState::NotStarted
+                && s.started_at.is_some()
+        });
+        if has_stalled {
+            "stalled"
+        } else {
+            "in-progress"
+        }
+    };
+
+    let completed_at = if new_status == "completed" {
+        Some(chrono::Utc::now().to_rfc3339())
+    } else {
+        r.completed_at
+    };
+
+    sqlx::query(
+        r#"
+        UPDATE client_onboarding_flows
+        SET status = ?1, progress_percent = ?2, steps_done = ?3, steps_total = ?4, completed_at = ?5, updated_at = ?6
+        WHERE id = ?7
+        "#,
+    )
+    .bind(new_status)
+    .bind(progress_percent)
+    .bind(steps_done)
+    .bind(steps_total)
+    .bind(&completed_at)
+    .bind(chrono::Utc::now().to_rfc3339())
+    .bind(flow_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 pub async fn ensure_default_github_repo_config(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let existing: Option<String> =

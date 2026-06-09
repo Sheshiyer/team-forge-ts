@@ -82,6 +82,13 @@ import type {
   SkillsMatrixCell,
   OnboardingAudience,
   OnboardingFlowView,
+  ClientOnboardingTemplateSummary,
+  ClientOnboardingTemplate,
+  ClientOnboardingTemplateStep,
+  ClientOnboardingFlowSummary,
+  ClientOnboardingFlow,
+  CreateClientOnboardingFlowInput,
+  UpdateOnboardingStepInput,
   CredentialSyncResult,
   CloudIntegrationSyncResult,
   GitHubApiProbeResult,
@@ -328,6 +335,20 @@ const invokeApi = {
     invoke<SkillsMatrixCell[]>("get_skills_matrix"),
   getOnboardingFlows: () =>
     invoke<OnboardingFlowView[]>("get_onboarding_flows"),
+  getClientOnboardingTemplates: () =>
+    invoke<ClientOnboardingTemplateSummary[]>("get_client_onboarding_templates"),
+  getClientOnboardingTemplate: (templateId: string) =>
+    invoke<ClientOnboardingTemplate | null>("get_client_onboarding_template", { templateId }),
+  createClientOnboardingTemplate: (name: string, description: string | null, steps: ClientOnboardingTemplateStep[], isDefault?: boolean) =>
+    invoke<string>("create_client_onboarding_template", { name, description, steps, isDefault: isDefault ?? false }),
+  getClientOnboardingFlows: () =>
+    invoke<ClientOnboardingFlowSummary[]>("get_client_onboarding_flows"),
+  getClientOnboardingFlow: (flowId: string) =>
+    invoke<ClientOnboardingFlow | null>("get_client_onboarding_flow", { flowId }),
+  createClientOnboardingFlow: (input: CreateClientOnboardingFlowInput) =>
+    invoke<string>("create_client_onboarding_flow", { input }),
+  updateClientOnboardingStep: (input: UpdateOnboardingStepInput) =>
+    invoke<void>("update_client_onboarding_step", { input }),
   syncCloudCredentials: () =>
     invoke<CredentialSyncResult>("sync_cloud_credentials"),
   syncCloudIntegrations: () =>

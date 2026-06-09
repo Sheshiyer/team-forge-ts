@@ -25,7 +25,7 @@ use crate::github::types::{
     issue_body_excerpt, labels_to_names, normalize_github_repo_input, priority_from_labels,
     track_from_issue, GithubIssue, GithubIssueComment,
 };
-use crate::huly::client::HulyClient;
+use crate::huly::client::{HulyClient, generate_huly_id};
 use crate::huly::relations::{HulyRelationType, HulyRelation, HulyRelationSummary, HulyDependencyChain, RelationQuery};
 use crate::huly::sync::HulySyncEngine;
 use crate::huly::types::{
@@ -35,6 +35,7 @@ use crate::huly::types::{
     HulyWorkspaceNormalizationSnapshot,
 };
 use crate::intake;
+use crate::onboarding;
 use crate::paperclip;
 use crate::slack::client::SlackClient;
 use crate::slack::sync::SlackSyncEngine;
@@ -12741,6 +12742,183 @@ pub async fn scaffold_project(
         message: msg,
         files_created,
     })
+}
+
+// ─── Client Onboarding Commands (Phase 4: CLIENT-01) ───────────
+
+/// Get all client onboarding templates.
+#[tauri::command]
+pub async fn get_client_onboarding_templates(
+    db: State<'_, DbPool>,
+) -> Result<Vec<crate::onboarding::ClientOnboardingTemplateSummary>, String> {
+    let pool = &db.0;
+    let templates = queries::get_client_onboarding_templates(pool)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    Ok(templates
+        .into_iter()
+        .map(|t| crate::onboarding::ClientOnboardingTemplateSummary {
+            id: t.id,
+            name: t.name,
+            description: t.description,
+            step_count: t.step_count,
+            is_default: t.is_default,
+            updated_at: t.updated_at,
+        })
+        .collect())
+}
+
+/// Get a single client onboarding template with full step detail.
+#[tauri::command]
+pub async fn get_client_onboarding_template(
+    db: State<'_, DbPool>,
+    template_id: String,
+) -> Result<Option<crate::onboarding::ClientOnboardingTemplate>, String> {
+    let pool = &db.0;
+    queries::get_client_onboarding_template(pool, &template_id)
+        .await
+        .map_err(|e| format!("db error: {e}"))
+}
+
+/// Create a new client onboarding template.
+#[tauri::command]
+pub async fn create_client_onboarding_template(
+    db: State<'_, DbPool>,
+    name: String,
+    description: Option<String>,
+    steps: Vec<crate::onboarding::ClientOnboardingTemplateStep>,
+    is_default: Option<bool>,
+) -> Result<String, String> {
+    let pool = &db.0;
+    let template_id = generate_huly_id();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let template = crate::onboarding::ClientOnboardingTemplate {
+        id: template_id.clone(),
+        name,
+        description,
+        steps,
+        created_at: now.clone(),
+        updated_at: now,
+        is_default: is_default.unwrap_or(false),
+    };
+
+    queries::insert_client_onboarding_template(pool, &template)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    Ok(template_id)
+}
+
+/// Get all client onboarding flows.
+#[tauri::command]
+pub async fn get_client_onboarding_flows(
+    db: State<'_, DbPool>,
+) -> Result<Vec<crate::onboarding::ClientOnboardingFlowSummary>, String> {
+    let pool = &db.0;
+    let flows = queries::get_client_onboarding_flows(pool)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    Ok(flows)
+}
+
+/// Get a single client onboarding flow with full step detail.
+#[tauri::command]
+pub async fn get_client_onboarding_flow(
+    db: State<'_, DbPool>,
+    flow_id: String,
+) -> Result<Option<crate::onboarding::ClientOnboardingFlow>, String> {
+    let pool = &db.0;
+    queries::get_client_onboarding_flow(pool, &flow_id)
+        .await
+        .map_err(|e| format!("db error: {e}"))
+}
+
+/// Create a new client onboarding flow from a template.
+#[tauri::command]
+pub async fn create_client_onboarding_flow(
+    db: State<'_, DbPool>,
+    input: crate::onboarding::CreateClientOnboardingFlowInput,
+) -> Result<String, String> {
+    let pool = &db.0;
+
+    // Fetch the template
+    let template = queries::get_client_onboarding_template(pool, &input.template_id)
+        .await
+        .map_err(|e| format!("db error: {e}"))?
+        .ok_or_else(|| format!("Template {} not found", input.template_id))?;
+
+    let flow_id = generate_huly_id();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let steps: Vec<crate::onboarding::ClientOnboardingFlowStep> = template
+        .steps
+        .into_iter()
+        .map(|s| crate::onboarding::ClientOnboardingFlowStep {
+            step_id: s.step_id,
+            title: s.title,
+            state: crate::onboarding::OnboardingStepState::NotStarted,
+            started_at: None,
+            completed_at: None,
+            notes: None,
+            assigned_to: None,
+        })
+        .collect();
+
+    let flow = crate::onboarding::ClientOnboardingFlow {
+        id: flow_id.clone(),
+        client_id: input.client_id,
+        client_name: input.client_name,
+        template_id: input.template_id,
+        template_name: template.name,
+        steps,
+        status: crate::onboarding::ClientOnboardingFlowStatus::NotStarted,
+        started_at: now,
+        completed_at: None,
+        assigned_to: input.assigned_to,
+        notes: input.notes,
+    };
+
+    queries::insert_client_onboarding_flow(pool, &flow)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    Ok(flow_id)
+}
+
+/// Update a step state in a client onboarding flow.
+#[tauri::command]
+pub async fn update_client_onboarding_step(
+    db: State<'_, DbPool>,
+    input: crate::onboarding::UpdateOnboardingStepInput,
+) -> Result<(), String> {
+    let pool = &db.0;
+
+    let state = crate::onboarding::OnboardingStepState::from_label(&input.state)
+        .ok_or_else(|| format!("Invalid step state: {}", input.state))?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+
+    queries::update_client_onboarding_step(
+        pool,
+        &input.flow_id,
+        &input.step_id,
+        state,
+        &now,
+        input.notes.as_deref(),
+        input.assigned_to.as_deref(),
+    )
+    .await
+    .map_err(|e| format!("db error: {e}"))?;
+
+    // Recompute flow status after step update
+    queries::recompute_client_onboarding_flow_status(pool, &input.flow_id)
+        .await
+        .map_err(|e| format!("db error: {e}"))?;
+
+    Ok(())
 }
 
 #[cfg(test)]
