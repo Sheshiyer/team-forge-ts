@@ -2,6 +2,49 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.3.0 - 2026-06-10
+
+Founder-First Agent Mission Control reorientation. The app is now structured as
+an ops console rather than a project-management dashboard, with navigation,
+content, and shortcuts optimized for executive decision-making.
+
+### Added
+
+- **Mission Control Navigation** — three-section sidebar:
+  - MISSION CONTROL: Overview, Agents, Inbox, Projects
+  - PORTFOLIO: Clients, Issues, Onboarding, Activity, Team
+  - SYS: Settings
+- **Command Palette** — 9 secondary pages (including Boards) demoted to ⌘K-only
+  access with remapped keyboard shortcuts (`Cmd+1-9` for priority routes).
+- **Role-Driven Overview** — dashboard content adapts to `executive`, `pm`, or
+  `developer` role:
+  - Executive sees intake console, agent runtime, active streams, standup digest,
+    and PAI recent missions
+  - PM sees agent runtime, streams, standup, and PAI missions
+  - Developer sees streams, standup, research intake, and code-focused surfaces
+- **Provenance Badges** — every `SectionFrame` displays `SRC:` and `ERR:` footer
+  metadata for traceability.
+- **Collapsible Sections** — every Overview panel can be collapsed/expanded,
+  with state persisted per session.
+- **PAI Recent Missions** — new Tauri command `get_recent_pai_missions` scans
+  `~/.claude/MEMORY/WORK` for PRD slugs, returning time-bucketed counts
+  (today / 7d / 30d / total) with graceful fallback when the directory is absent.
+- **LCARS Decision Ledger** — `DESIGN.md` updated with explicit rationale for
+  keeping the LCARS mission-control aesthetic over the Linear spec.
+
+### Changed
+
+- Navigation hierarchy flattened to founder-priority order.
+- Keyboard shortcuts remapped to match new nav structure.
+- Overview page rebuilt from generic dashboard to executive command center.
+
+### Security
+
+- Phase 1 security audit completed: Tauri capabilities (8 manifests) reviewed
+  with no ambient authority or path traversal exposure.
+- Worker route safety documented: all `/v1/` routes require Bearer or internal
+  shared-secret auth.
+
 ## v0.2.6 - 2026-05-06
 
 This release turns TeamForge into a much stronger day-to-day Paperclip control
