@@ -1,0 +1,18 @@
+{
+  "identifier": "hermes-dispatcher",
+  "description": "Narrow capability for Hermes TG dispatcher via bash (scripts/hermes-tg-dispatcher.sh). Rust ShellExt bypasses this ACL; this scopes JS-side calls only. TeamForge is operator surface only.",
+  "windows": ["main"],
+  "permissions": [
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "hermes-dispatcher",
+          "cmd": "bash",
+          "args": true,
+          "sidecar": false
+        }
+      ]
+    }
+  ]
+}

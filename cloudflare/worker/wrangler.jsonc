@@ -8,11 +8,14 @@
     "enabled": true
   },
   "vars": {
-    "TF_ENV": "development",
-    "TF_API_BASE_URL": "http://127.0.0.1:8787",
+    "TF_ENV": "production",
+    "TF_API_BASE_URL": "https://forge.thoughtseed.space",
     "TF_DEFAULT_OTA_CHANNEL": "stable",
-    "TF_ACCESS_AUDIENCE": "teamforge-desktop",
-    "TF_INTEGRATION_CONFIG_JSON": "{\"github\":{\"repos\":[{\"repo\":\"Sheshiyer/parkarea-aleph\",\"displayName\":\"ParkArea Phase 2 - Germany Launch\",\"clientName\":\"ParkArea\",\"defaultMilestoneNumber\":1,\"enabled\":true}]},\"huly\":{\"mirrorMode\":\"read_only\",\"mirrorEnabled\":true},\"slack\":{},\"clockify\":{}}"
+    "TF_ACCESS_AUDIENCE": "d3892b5d2a62027029b09b2fd015a9e8074d5efb38c443099f803517cb3feb51",
+    "TF_INTEGRATION_CONFIG_JSON": "{\"github\":{\"repos\":[{\"repo\":\"Sheshiyer/parkarea-aleph\",\"displayName\":\"ParkArea Phase 2 - Germany Launch\",\"clientName\":\"ParkArea\",\"defaultMilestoneNumber\":1,\"enabled\":true}]},\"huly\":{\"mirrorMode\":\"read_only\",\"mirrorEnabled\":true},\"slack\":{},\"clockify\":{}}",
+    // Temporary internal shared secret for m2m (parity, Hermes) bypassing CF Access service token issues on this Worker route.
+    // Set a long random value. Callers send header X-TeamForge-Internal-Secret.
+    // "TF_INTERNAL_SHARED_SECRET": "replace-with-long-random-secret"
   },
   "d1_databases": [
     {
@@ -47,7 +50,15 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["WorkspaceLock"]
+      "new_sqlite_classes": [
+        "WorkspaceLock"
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "pattern": "forge.thoughtseed.space",
+      "custom_domain": true
     }
   ]
 }

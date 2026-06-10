@@ -615,3 +615,42 @@ CREATE TABLE IF NOT EXISTS notification_dismissals (
     notification_key TEXT PRIMARY KEY,
     dismissed_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ─── Client Onboarding (Phase 4: CLIENT-01) ──────────────────────
+
+CREATE TABLE IF NOT EXISTS client_onboarding_templates (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    steps_json TEXT NOT NULL DEFAULT '[]',
+    step_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    is_default INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_client_onboarding_templates_default
+    ON client_onboarding_templates(is_default);
+
+CREATE TABLE IF NOT EXISTS client_onboarding_flows (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    client_name TEXT NOT NULL,
+    template_id TEXT NOT NULL REFERENCES client_onboarding_templates(id),
+    template_name TEXT NOT NULL,
+    steps_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'not-started',
+    progress_percent REAL NOT NULL DEFAULT 0.0,
+    steps_done INTEGER NOT NULL DEFAULT 0,
+    steps_total INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT,
+    assigned_to TEXT,
+    notes TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_client_onboarding_flows_client
+    ON client_onboarding_flows(client_id);
+CREATE INDEX IF NOT EXISTS idx_client_onboarding_flows_status
+    ON client_onboarding_flows(status);

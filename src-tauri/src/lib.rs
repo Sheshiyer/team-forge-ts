@@ -4,7 +4,9 @@ mod db;
 mod github;
 mod huly;
 mod intake;
+mod onboarding;
 mod ops;
+mod pai;
 mod paperclip;
 mod slack;
 mod sync;
@@ -41,6 +43,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -192,6 +195,12 @@ pub fn run() {
             commands::sync_github_plans,
             commands::preview_huly_workspace_normalization,
             commands::apply_huly_workspace_normalization,
+            commands::create_huly_relation,
+            commands::find_huly_relations,
+            commands::delete_huly_relation,
+            commands::get_huly_relation_summary,
+            commands::get_huly_dependency_chain,
+            pai::get_recent_pai_missions,
             commands::get_milestones,
             commands::get_time_discrepancies,
             commands::get_estimation_accuracy,
@@ -222,6 +231,13 @@ pub fn run() {
             commands::get_monthly_hours,
             commands::get_skills_matrix,
             commands::get_onboarding_flows,
+            commands::get_client_onboarding_templates,
+            commands::get_client_onboarding_template,
+            commands::create_client_onboarding_template,
+            commands::get_client_onboarding_flows,
+            commands::get_client_onboarding_flow,
+            commands::create_client_onboarding_flow,
+            commands::update_client_onboarding_step,
             commands::sync_cloud_credentials,
             commands::sync_cloud_integrations,
             commands::probe_teamforge_worker_api,

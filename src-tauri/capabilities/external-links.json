@@ -1,0 +1,9 @@
+{
+  "identifier": "external-links",
+  "description": "Narrow capability for opening external URLs (Paperclip UI) and local vault paths via tauri-plugin-opener. Replaces deprecated shell:allow-open from T-002. TeamForge is operator surface only.",
+  "windows": ["main"],
+  "permissions": [
+    "opener:allow-open-url",
+    "opener:allow-open-path"
+  ]
+}

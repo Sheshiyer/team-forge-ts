@@ -1,0 +1,18 @@
+{
+  "identifier": "node-runtime-check",
+  "description": "Narrow capability for Node.js runtime version detection (node --version). Rust ShellExt bypasses this ACL; this scopes JS-side calls only. TeamForge is operator surface only.",
+  "windows": ["main"],
+  "permissions": [
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "node-version-check",
+          "cmd": "node",
+          "args": ["--version"],
+          "sidecar": false
+        }
+      ]
+    }
+  ]
+}

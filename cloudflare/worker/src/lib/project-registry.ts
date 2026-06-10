@@ -376,6 +376,185 @@ export interface OnboardingFlowWithTasks {
   tasks: OnboardingTask[];
 }
 
+// === Handoffs (added 2026-06-09 for Hermes command surface + vault handoffs/ protocol) ===
+export interface HandoffRow {
+  id: string;
+  workspace_id: string;
+  handoff_id: string;
+  project_slug: string | null;
+  client_slug: string | null;
+  "from": string | null;
+  "to": string | null;
+  type: string | null;
+  status: string;
+  created_at: string;
+  due_at: string | null;
+  priority: string | null;
+  source_path: string | null;
+  updated_at: string;
+}
+
+export interface Handoff {
+  id: string;
+  workspaceId: string;
+  handoffId: string;
+  projectSlug: string | null;
+  clientSlug: string | null;
+  from: string | null;
+  to: string | null;
+  type: string | null;
+  status: "pending" | "approved" | "rejected";
+  createdAt: string;
+  dueAt: string | null;
+  priority: string | null;
+  sourcePath: string | null;
+  updatedAt: string;
+}
+
+export interface HandoffUpdateInput {
+  status?: "approved" | "rejected";
+  reason?: string | null; // stored in vault or audit; not duplicated here
+}
+
+function mapHandoff(row: HandoffRow): Handoff {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    handoffId: row.handoff_id,
+    projectSlug: normalizeOptionalString(row.project_slug),
+    clientSlug: normalizeOptionalString(row.client_slug),
+    from: normalizeOptionalString(row["from"]),
+    to: normalizeOptionalString(row["to"]),
+    type: normalizeOptionalString(row.type),
+    status: (row.status as Handoff["status"]) || "pending",
+    createdAt: row.created_at,
+    dueAt: normalizeOptionalString(row.due_at),
+    priority: normalizeOptionalString(row.priority),
+    sourcePath: normalizeOptionalString(row.source_path),
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function listHandoffs(
+  db: D1DatabaseLike,
+  workspaceId: string,
+  status?: "pending" | "approved" | "rejected" | null,
+): Promise<Handoff[]> {
+  let sql = `
+    SELECT * FROM handoffs
+    WHERE workspace_id = ?
+  `;
+  const params: unknown[] = [workspaceId];
+
+  if (status) {
+    sql += ` AND status = ?`;
+    params.push(status);
+  }
+
+  sql += ` ORDER BY created_at DESC`;
+
+  const rows = await queryAll<HandoffRow>(db, sql, ...params);
+  return rows.map(mapHandoff);
+}
+
+export async function getHandoffById(
+  db: D1DatabaseLike,
+  workspaceId: string,
+  handoffId: string,
+): Promise<Handoff | null> {
+  const row = await queryFirst<HandoffRow>(
+    db,
+    `SELECT * FROM handoffs WHERE workspace_id = ? AND handoff_id = ?`,
+    workspaceId,
+    handoffId,
+  );
+  return row ? mapHandoff(row) : null;
+}
+
+export async function updateHandoffStatus(
+  db: D1DatabaseLike,
+  workspaceId: string,
+  handoffId: string,
+  input: HandoffUpdateInput,
+): Promise<Handoff | null> {
+  const existing = await getHandoffById(db, workspaceId, handoffId);
+  if (!existing) return null;
+
+  if (existing.status !== "pending") {
+    throw new Error("Only pending handoffs can be approved or rejected.");
+  }
+
+  const newStatus = input.status;
+  if (!newStatus || !["approved", "rejected"].includes(newStatus)) {
+    throw new Error("status must be 'approved' or 'rejected'.");
+  }
+
+  const now = new Date().toISOString();
+
+  await execute(
+    db,
+    `UPDATE handoffs
+       SET status = ?, updated_at = ?
+     WHERE workspace_id = ? AND handoff_id = ?`,
+    newStatus,
+    now,
+    workspaceId,
+    handoffId,
+  );
+
+  return getHandoffById(db, workspaceId, handoffId);
+}
+
+export interface HandoffInput {
+  handoffId: string;
+  projectSlug?: string | null;
+  clientSlug?: string | null;
+  from?: string | null;
+  to?: string | null;
+  type?: string | null;
+  status?: "pending" | "approved" | "rejected";
+  createdAt?: string;
+  dueAt?: string | null;
+  priority?: string | null;
+  sourcePath?: string | null;
+}
+
+export async function createHandoff(
+  db: D1DatabaseLike,
+  workspaceId: string,
+  input: HandoffInput,
+): Promise<Handoff> {
+  const id = nanoid();
+  const now = new Date().toISOString();
+  const handoffId = normalizeRequiredString(input.handoffId, "handoffId");
+
+  await execute(
+    db,
+    `INSERT INTO handoffs (
+       id, workspace_id, handoff_id, project_slug, client_slug,
+       "from", "to", type, status, created_at, due_at, priority, source_path, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    id,
+    workspaceId,
+    handoffId,
+    normalizeOptionalString(input.projectSlug) ?? null,
+    normalizeOptionalString(input.clientSlug) ?? null,
+    normalizeOptionalString(input.from) ?? null,
+    normalizeOptionalString(input.to) ?? null,
+    normalizeOptionalString(input.type) ?? null,
+    input.status ?? "pending",
+    input.createdAt ?? now,
+    normalizeOptionalString(input.dueAt) ?? null,
+    normalizeOptionalString(input.priority) ?? null,
+    normalizeOptionalString(input.sourcePath) ?? null,
+    now,
+  );
+
+  const created = await getHandoffById(db, workspaceId, handoffId);
+  if (!created) throw new Error("Failed to create handoff");
+  return created;
+}
+
 export interface ProjectGraph {
   project: ProjectView;
   githubLinks: ProjectGithubLink[];

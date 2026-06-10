@@ -1,0 +1,18 @@
+{
+  "identifier": "hermes-poller",
+  "description": "Narrow capability for Hermes TG poller via bash (scripts/hermes-tg-poller.sh). Rust ShellExt bypasses this ACL; this scopes JS-side calls only. TeamForge is operator surface only.",
+  "windows": ["main"],
+  "permissions": [
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "hermes-poller",
+          "cmd": "bash",
+          "args": true,
+          "sidecar": false
+        }
+      ]
+    }
+  ]
+}
