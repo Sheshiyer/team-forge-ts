@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { SkeletonCard } from "../components/ui/Skeleton";
 import { useInvoke } from "../hooks/useInvoke";
@@ -155,25 +155,55 @@ function MetricRail({
   );
 }
 
+function ProvenanceFooter({
+  source,
+  error,
+}: {
+  source: string;
+  error?: string | null;
+}) {
+  return (
+    <div style={styles.provenanceFooter}>
+      <span style={styles.provenanceSource}>SRC: {source}</span>
+      {error ? <span style={styles.provenanceError}>ERR: {error.toUpperCase()}</span> : null}
+    </div>
+  );
+}
+
 function SectionFrame({
   title,
   subtitle,
   accent,
   actions,
   children,
+  provenance,
+  defaultOpen = true,
 }: {
   title: string;
   subtitle?: string;
   accent: string;
   actions?: React.ReactNode;
   children: React.ReactNode;
+  provenance?: { source: string; error?: string | null };
+  defaultOpen?: boolean;
 }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <section style={{ ...styles.sectionFrame, borderLeftColor: accent }}>
       <div style={styles.sectionHeader}>
-        <div>
-          <div style={styles.sectionTitle}>{title}</div>
-          {subtitle ? <div style={styles.sectionSubtitle}>{subtitle}</div> : null}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button
+            type="button"
+            onClick={() => setOpen(!open)}
+            style={styles.collapseBtn}
+            aria-label={open ? "Collapse" : "Expand"}
+          >
+            {open ? "▾" : "▸"}
+          </button>
+          <div>
+            <div style={styles.sectionTitle}>{title}</div>
+            {subtitle ? <div style={styles.sectionSubtitle}>{subtitle}</div> : null}
+          </div>
         </div>
         <div style={styles.sectionHeaderRight}>
           {actions}
@@ -181,7 +211,8 @@ function SectionFrame({
         </div>
       </div>
       <div style={styles.sectionDivider} />
-      {children}
+      {open && children}
+      {open && provenance ? <ProvenanceFooter source={provenance.source} error={provenance.error} /> : null}
     </section>
   );
 }
@@ -414,6 +445,48 @@ function Overview() {
   const [paperclipRetryCount, setPaperclipRetryCount] = useState(0);
   const [standup, setStandup] = useState<StandupReport | null>(null);
   const [dashboardRole, setDashboardRole] = useState<"executive" | "pm" | "developer">("executive");
+
+  const roleConfig = useMemo(() => {
+    switch (dashboardRole) {
+      case "pm":
+        return {
+          showIntakeConsole: false,
+          showMissionSnapshot: true,
+          showPortfolioLifecycle: true,
+          showAgentRuntime: true,
+          showActiveStreams: true,
+          showWhiteLabelable: false,
+          showNeedsReview: true,
+          showResearchIntake: false,
+          showStandup: true,
+        };
+      case "developer":
+        return {
+          showIntakeConsole: false,
+          showMissionSnapshot: false,
+          showPortfolioLifecycle: false,
+          showAgentRuntime: false,
+          showActiveStreams: true,
+          showWhiteLabelable: false,
+          showNeedsReview: true,
+          showResearchIntake: true,
+          showStandup: true,
+        };
+      case "executive":
+      default:
+        return {
+          showIntakeConsole: true,
+          showMissionSnapshot: true,
+          showPortfolioLifecycle: true,
+          showAgentRuntime: true,
+          showActiveStreams: true,
+          showWhiteLabelable: true,
+          showNeedsReview: true,
+          showResearchIntake: false,
+          showStandup: true,
+        };
+    }
+  }, [dashboardRole]);
 
   const load = useCallback(async () => {
     try {
@@ -753,6 +826,7 @@ function Overview() {
         />
       </div>
 
+      {roleConfig.showIntakeConsole && (
       <SectionFrame
         title="FOUNDER INTAKE CONSOLE"
         subtitle="CREATE, HOLD, ROUTE, AND RECOVER WORK FROM ONE SURFACE"
@@ -764,6 +838,7 @@ function Overview() {
             <ActionButton label="OPEN SETTINGS" onClick={() => navigate("/settings")} />
           </div>
         }
+        provenance={{ source: "TEAMFORGE / PAPERCLIP", error: intakeConsole.error }}
       >
         <div style={styles.commandBand}>
           <div style={styles.commandCell}>
@@ -958,8 +1033,10 @@ function Overview() {
           </div>
         )}
       </SectionFrame>
+      )}
 
       <div style={styles.heroGrid}>
+        {roleConfig.showMissionSnapshot && (
         <SectionFrame
           title="MISSION SNAPSHOT"
           subtitle="LIVE OPERATIONS VIEW"
@@ -974,6 +1051,7 @@ function Overview() {
               />
             </div>
           }
+          provenance={{ source: "VAULT / TEAMFORGE", error: vaultError }}
         >
           <div style={styles.commandBand}>
             <div style={styles.commandCell}>
@@ -1007,7 +1085,9 @@ function Overview() {
           ) : null}
           {actionMessage ? <div style={styles.warningText}>{actionMessage}</div> : null}
         </SectionFrame>
+        )}
 
+        {roleConfig.showPortfolioLifecycle && (
         <SectionFrame
           title="PORTFOLIO LIFECYCLE"
           subtitle="PROJECT STATUS"
@@ -1025,6 +1105,7 @@ function Overview() {
               />
             </div>
           }
+          provenance={{ source: "VAULT / TEAMFORGE", error: vaultError }}
         >
           <div style={styles.lifecycleGrid}>
             <div style={styles.lifecycleTile}>
@@ -1056,8 +1137,9 @@ function Overview() {
             {portfolio.productCount} PRODUCTS · {portfolio.clientDeliveryCount} CLIENT DELIVERIES · {portfolio.whiteLabelableCount} REUSABLE
           </div>
         </SectionFrame>
+        )}
 
-        {dashboardRole !== "executive" && (
+        {roleConfig.showAgentRuntime && (
         <SectionFrame
           title="AGENT RUNTIME"
           subtitle="PAPERCLIP DAILY SIGNALS"
@@ -1068,6 +1150,7 @@ function Overview() {
               <ActionButton label="OPEN SETTINGS" onClick={() => navigate("/settings")} />
             </div>
           }
+          provenance={{ source: "PAPERCLIP", error: paperclipError }}
         >
           {paperclipRuntime ? (
             <>
@@ -1124,6 +1207,7 @@ function Overview() {
       </div>
 
       <div style={styles.mainGrid}>
+        {roleConfig.showActiveStreams && (
         <SectionFrame
           title="ACTIVE DELIVERY STREAMS"
           subtitle="LIVE PROJECT TRACKING"
@@ -1137,6 +1221,7 @@ function Overview() {
               />
             </div>
           }
+          provenance={{ source: "GITHUB / HULY / CLOCKIFY", error: null }}
         >
           {activeStreams.length === 0 ? (
             <p style={styles.emptyText}>NO ACTIVE DELIVERY STREAMS YET.</p>
@@ -1157,7 +1242,9 @@ function Overview() {
             </div>
           )}
         </SectionFrame>
+        )}
 
+        {roleConfig.showWhiteLabelable && (
         <SectionFrame
           title="WHITE-LABELABLE OPPORTUNITIES"
           subtitle="REUSABLE DELIVERY WORK"
@@ -1175,6 +1262,7 @@ function Overview() {
               />
             </div>
           }
+          provenance={{ source: "VAULT", error: vaultError }}
         >
           {whiteLabelable.length === 0 ? (
             <p style={styles.emptyText}>NO WHITE-LABELABLE SURFACES REGISTERED.</p>
@@ -1197,7 +1285,9 @@ function Overview() {
             </div>
           )}
         </SectionFrame>
+        )}
 
+        {roleConfig.showNeedsReview && (
         <SectionFrame
           title="NEEDS REVIEW"
           subtitle="STALE / ORPHANED / ONBOARDING RISK"
@@ -1219,6 +1309,7 @@ function Overview() {
               />
             </div>
           }
+          provenance={{ source: "VAULT / TEAMFORGE", error: vaultError }}
         >
           {needsReview.items.length === 0 ? (
             <p style={styles.emptyText}>NO REVIEW ITEMS RIGHT NOW.</p>
@@ -1235,8 +1326,9 @@ function Overview() {
             </div>
           )}
         </SectionFrame>
+        )}
 
-        {dashboardRole === "developer" && (
+        {roleConfig.showResearchIntake && (
         <SectionFrame
           title="RESEARCH INTAKE"
           subtitle="RESEARCH NOTES AND CAPTURES"
@@ -1251,6 +1343,7 @@ function Overview() {
               <ActionButton label="OPEN CLIENTS" onClick={() => navigate("/clients")} />
             </div>
           }
+          provenance={{ source: "VAULT", error: vaultError }}
         >
           <div style={styles.lifecycleGrid}>
             <div style={styles.lifecycleTile}>
@@ -1297,6 +1390,7 @@ function Overview() {
         </SectionFrame>
         )}
 
+        {roleConfig.showStandup && (
         {/* Standup Digest Widget */}
         <SectionFrame
           title="STANDUP DIGEST"
@@ -1307,6 +1401,7 @@ function Overview() {
               <ActionButton label="OPEN INSIGHTS" onClick={() => navigate("/insights")} />
             </div>
           }
+          provenance={{ source: "SLACK / HULY", error: null }}
         >
           {!standup ? (
             <p style={styles.emptyText}>STANDUP DATA LOADING...</p>
@@ -1371,6 +1466,7 @@ function Overview() {
             </>
           )}
         </SectionFrame>
+        )}
       </div>
     </div>
   );
@@ -1708,6 +1804,34 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11,
     lineHeight: 1.6,
     fontFamily: "'JetBrains Mono', monospace",
+  },
+  collapseBtn: {
+    background: "transparent",
+    border: "none",
+    color: "var(--lcars-lavender)",
+    fontSize: 12,
+    cursor: "pointer",
+    padding: "2px 4px",
+    fontFamily: "monospace",
+    lineHeight: 1,
+  },
+  provenanceFooter: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    paddingTop: 10,
+    marginTop: 10,
+    borderTop: "1px solid rgba(153, 153, 204, 0.1)",
+    fontSize: 9,
+    fontFamily: "'JetBrains Mono', monospace",
+    letterSpacing: "0.5px",
+  },
+  provenanceSource: {
+    color: "var(--lcars-lavender)",
+    opacity: 0.7,
+  },
+  provenanceError: {
+    color: "var(--lcars-yellow)",
   },
   emptyText: lcarsPageStyles.emptyText,
   errorFrame: {
