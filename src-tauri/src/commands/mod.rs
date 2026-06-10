@@ -1551,6 +1551,13 @@ pub async fn get_settings(db: State<'_, DbPool>) -> Result<HashMap<String, Strin
 
     let mut map = HashMap::new();
     for row in rows {
+        // Credentials are zero-disk (held in RAM, see db::queries sensitive keys).
+        // They are intentionally absent from this bulk accessor so they can never
+        // leak via a settings dump/export. Read individual credentials with
+        // get_setting(key) instead.
+        if queries::is_sensitive_key(&row.key) {
+            continue;
+        }
         map.insert(row.key, row.value);
     }
     Ok(map)

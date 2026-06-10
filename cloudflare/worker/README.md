@@ -111,3 +111,65 @@ Example `TF_INTEGRATION_CONFIG_JSON`:
   "clockify": {}
 }
 ```
+
+## Founder secrets layer — `/v1/secrets/*` (2026-06-11)
+
+Identity-bound secret storage for the two co-founders. Distinct from
+`/v1/credentials` (which serves shared *vendor* integration tokens to the desktop
+app and is unchanged). This layer stores arbitrary API keys/tokens, encrypted,
+keyed to founder identity.
+
+**Auth is self-contained** — this route family does NOT use the app
+Bearer / internal-secret combo. It resolves its own principal in
+`src/lib/access-jwt.ts`:
+
+- **founder** — request carries a Cloudflare Access JWT that the Worker validates
+  itself (RS256 vs team JWKS, exact `aud`, exact `iss`, time window) AND whose
+  `email` claim is byte-equal to a hardcoded `FOUNDER_ALLOWLIST` entry.
+- **agent** — a valid Access JWT with a `common_name` (service token), or a valid
+  `X-TeamForge-Internal-Secret` header. Read-only on `agents/*`.
+- **anonymous** — everything else → `401`.
+
+The Worker never trusts the edge: a forged `Cf-Access-Jwt-Assertion` header or an
+IP-bypass request (no JWT) cannot obtain founder rights. Verified by hitting the
+`workers.dev` origin directly — both return `401`.
+
+### Authz matrix
+
+| principal | `me` (founder/self) | `shared` | `agents` |
+|---|---|---|---|
+| founder | read + write | read + write | read + write |
+| service token | — | — | read |
+| internal secret | — | — | read |
+| anonymous | 401 | 401 | 401 |
+
+A founder's private scope is addressed only as the literal `me`; the other
+founder's private namespace is unaddressable.
+
+### Routes
+
+| Method | Path | Action |
+|---|---|---|
+| GET | `/v1/secrets/<scope>` | list names + metadata (never values) |
+| GET | `/v1/secrets/<scope>/<name>` | read one (decrypted) |
+| PUT | `/v1/secrets/<scope>/<name>` | create/update, body `{ "value": "..." }` |
+| DELETE | `/v1/secrets/<scope>/<name>` | delete |
+
+`<scope>` ∈ `me | shared | agents`. Names match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
+
+### Storage & crypto
+
+- KV namespace `teamforge-secrets` (binding `SECRETS_KV`).
+- Values sealed with AES-256-GCM under the Worker secret `TF_SECRETS_MASTER_KEY`
+  (base64 of 32 bytes). AAD binds each ciphertext to its exact KV key **and**
+  version, so a blob cannot be relocated or rolled back. Envelope carries a `kid`
+  for future key rotation.
+- KV metadata holds only name / scope / created_by / updated_by / updated_at /
+  version / masked — no plaintext.
+
+### Config
+
+- Var `TF_ACCESS_TEAM_DOMAIN` = `red-queen-4dfa.cloudflareaccess.com`.
+- Secret `TF_SECRETS_MASTER_KEY` via `wrangler secret put` (never in `vars`).
+- CLI: `scripts/teamforge-secrets.mjs`. Runbook + Access policy steps:
+  `docs/runbooks/founder-secrets.md`, `docs/runbooks/access-policy-fallback.md`.

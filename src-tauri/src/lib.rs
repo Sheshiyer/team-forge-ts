@@ -99,6 +99,14 @@ pub fn run() {
                     eprintln!("[teamforge] database init failed: {e}");
                     e
                 })?;
+            // Zero-disk credentials: clear any credential values older builds may
+            // have persisted to the settings table. Credentials now live in RAM
+            // only (see db::queries sensitive-key handling).
+            if let Err(e) =
+                tauri::async_runtime::block_on(db::queries::purge_sensitive_settings_from_disk(&pool))
+            {
+                eprintln!("[teamforge] credential purge failed (non-fatal): {e}");
+            }
             app.manage(DbPool(pool));
             eprintln!("[teamforge] database initialized");
 

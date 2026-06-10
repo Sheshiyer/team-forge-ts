@@ -11,6 +11,31 @@ export interface R2BucketLike {
   head(key: string): Promise<unknown | null>;
 }
 
+export interface KVListKey {
+  name: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface KVListResult {
+  keys: KVListKey[];
+  list_complete: boolean;
+  cursor?: string;
+}
+
+export interface KVNamespaceLike {
+  get(key: string, type?: "text"): Promise<string | null>;
+  getWithMetadata<M = Record<string, unknown>>(
+    key: string,
+  ): Promise<{ value: string | null; metadata: M | null }>;
+  put(
+    key: string,
+    value: string,
+    options?: { metadata?: Record<string, unknown>; expirationTtl?: number },
+  ): Promise<void>;
+  delete(key: string): Promise<void>;
+  list(options?: { prefix?: string; cursor?: string; limit?: number }): Promise<KVListResult>;
+}
+
 export interface QueueLike<T> {
   send(message: T): Promise<void>;
 }
@@ -52,6 +77,14 @@ export interface Env {
   TEAMFORGE_ARTIFACTS?: R2BucketLike;
   SYNC_QUEUE?: QueueLike<SyncJobMessage>;
   WORKSPACE_LOCKS?: DurableObjectNamespaceLike;
+
+  // Founder secrets layer (2026-06-11). See routes/secrets.ts + lib/access-jwt.ts.
+  // TF_ACCESS_TEAM_DOMAIN: Zero Trust team host, e.g. "red-queen-4dfa.cloudflareaccess.com".
+  //   Used to derive the JWKS URL and the expected issuer for Access JWT validation.
+  // TF_SECRETS_MASTER_KEY: base64 of a 32-byte AES-256-GCM key. WORKER SECRET ONLY — never in vars.
+  TF_ACCESS_TEAM_DOMAIN?: string;
+  TF_SECRETS_MASTER_KEY?: string;
+  SECRETS_KV?: KVNamespaceLike;
   // MultiCA (AI gateway + agent backend) — 2026-06-09 architecture
   MULTICA_API_URL?: string;      // e.g. http://a2d8a7ed58f172583.awsglobalaccelerator.com
   MULTICA_APP_URL?: string;      // e.g. https://multica.thoughtseed.space

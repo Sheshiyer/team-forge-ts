@@ -14,13 +14,17 @@
  *
  * Auth: All app routes require Bearer (TF_CREDENTIAL_ENVELOPE_KEY) or internal secret.
  * Internal routes (/agent-feed/*, /projects/scaffold, /closeout) use TF_WEBHOOK_HMAC_SECRET.
+ * /v1/secrets/* self-validates the Cloudflare Access JWT (see routes/secrets.ts).
+ * /bootstrap and /remote-config are intentionally anonymous-readable, BUT
+ * /bootstrap discloses binding/route topology only to authenticated callers;
+ * anonymous callers receive a non-sensitive {service,phase,environment,...} subset.
  * No destructive operations without authentication. No unscoped DELETE endpoints.
  * Health check lives at GET /healthz (index.ts), outside this router.
  */
 
 import type { Env } from "../lib/env";
 import { requireBearerAuth, requireInternalAuth } from "../lib/auth";
-import { jsonNotImplemented, jsonOk } from "../lib/response";
+import { jsonError, jsonNotImplemented, jsonOk } from "../lib/response";
 import { handleAgentFeedExport, handleProjectCloseout, handleProjectScaffold } from "./agent-feed";
 import { handleGetConnections, handleTestConnection } from "./connections";
 import { handleGetCredentials } from "./credentials";
@@ -49,6 +53,7 @@ import {
 } from "../lib/project-registry";
 import { handleGetSyncJob, handleGetSyncRuns, handlePostSyncJob } from "./sync";
 import { handleGetTeamSnapshot, handlePostTeamRefresh } from "./team";
+import { handleSecretsRequest } from "./secrets";
 
 interface DatabaseStatus {
   available: boolean;
@@ -85,6 +90,15 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
     );
   };
 
+  // Founder secrets layer (2026-06-11) — self-contained Access-JWT identity +
+  // KV envelope storage. Deliberately does NOT use requireAppOrInternalAuth:
+  // it resolves its own principal (founder via validated Access JWT, or agent
+  // via service token / internal secret) and enforces a per-scope authz matrix.
+  // All existing route auth below is untouched.
+  if (pathname === "/v1/secrets" || pathname.startsWith("/v1/secrets/")) {
+    return handleSecretsRequest(request, env, url, method);
+  }
+
   // Agent feed (Paperclip bridge) — auth required, shared HMAC secret
   if (method === "GET" && pathname === "/v1/agent-feed/export") {
     const authFailure = requireBearerAuth(request, env.TF_WEBHOOK_HMAC_SECRET, "internal");
@@ -105,7 +119,13 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Bootstrap & config
   if (method === "GET" && pathname === "/v1/bootstrap") {
-    return jsonOk(await buildBootstrapPayload(env));
+    // Binding/route topology is sensitive (it reveals which secrets/services are
+    // configured) and is disclosed ONLY to authenticated callers. Anonymous
+    // callers get a safe liveness/version subset with HTTP 200 — never a 401 —
+    // so a future pre-auth probe still works. The auth check is used purely as a
+    // boolean here; its failure Response is never returned. (sec-review C2)
+    const authed = requireAppOrInternalAuth() === null;
+    return jsonOk(await buildBootstrapPayload(env, authed));
   }
   if (method === "GET" && pathname === "/v1/remote-config") {
     return jsonOk({
@@ -282,7 +302,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
     if (authFailure) return authFailure;
     const handoff = await getHandoffById(env.TEAMFORGE_DB!, DEFAULT_WORKSPACE_ID, handoffMatch[1]);
     if (!handoff) {
-      return jsonError({ code: "not_found", message: "Handoff not found" }, 404);
+      return jsonError({ code: "not_found", message: "Handoff not found", retryable: false }, 404);
     }
     return jsonOk(handoff);
   }
@@ -297,7 +317,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
       });
       return jsonOk(updated);
     } catch (err: any) {
-      return jsonError({ code: "invalid_transition", message: err?.message || "Invalid status transition" }, 400);
+      return jsonError({ code: "invalid_transition", message: err?.message || "Invalid status transition", retryable: false }, 400);
     }
   }
 
@@ -312,13 +332,25 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   return jsonNotImplemented(pathname, method);
 }
 
-async function buildBootstrapPayload(env: Env): Promise<Record<string, unknown>> {
-  const database = await probeDatabase(env);
-  return {
+async function buildBootstrapPayload(
+  env: Env,
+  authed: boolean,
+): Promise<Record<string, unknown>> {
+  // Public, non-sensitive subset — safe for anonymous liveness/version probing.
+  const base: Record<string, unknown> = {
     service: "teamforge-api",
     phase: "phase-2-wave-3",
     environment: env.TF_ENV,
     defaultOtaChannel: env.TF_DEFAULT_OTA_CHANNEL ?? "stable",
+  };
+
+  // Topology (which bindings/secrets are configured, which routes are live) is
+  // disclosed only to authenticated callers. Skip the D1 probe for anon too.
+  if (!authed) return base;
+
+  const database = await probeDatabase(env);
+  return {
+    ...base,
     bindings: {
       d1Available: database.available,
       schemaReady: database.schemaReady,

@@ -12,6 +12,9 @@
     "TF_API_BASE_URL": "https://forge.thoughtseed.space",
     "TF_DEFAULT_OTA_CHANNEL": "stable",
     "TF_ACCESS_AUDIENCE": "d3892b5d2a62027029b09b2fd015a9e8074d5efb38c443099f803517cb3feb51",
+    // Zero Trust team domain — used by the secrets layer to validate Access JWTs
+    // (JWKS at https://<domain>/cdn-cgi/access/certs, issuer https://<domain>).
+    "TF_ACCESS_TEAM_DOMAIN": "red-queen-4dfa.cloudflareaccess.com",
     "TF_INTEGRATION_CONFIG_JSON": "{\"github\":{\"repos\":[{\"repo\":\"Sheshiyer/parkarea-aleph\",\"displayName\":\"ParkArea Phase 2 - Germany Launch\",\"clientName\":\"ParkArea\",\"defaultMilestoneNumber\":1,\"enabled\":true}]},\"huly\":{\"mirrorMode\":\"read_only\",\"mirrorEnabled\":true},\"slack\":{},\"clockify\":{}}",
     // Temporary internal shared secret for m2m (parity, Hermes) bypassing CF Access service token issues on this Worker route.
     // Set a long random value. Callers send header X-TeamForge-Internal-Secret.
@@ -29,6 +32,13 @@
     {
       "binding": "TEAMFORGE_ARTIFACTS",
       "bucket_name": "teamforge-artifacts"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "SECRETS_KV",
+      "id": "f581ee25a19f4dca8e4386fba693bc75",
+      "preview_id": "af4a27a77672476a8da61b870e299801"
     }
   ],
   "queues": {

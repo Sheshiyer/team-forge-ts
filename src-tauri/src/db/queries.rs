@@ -3,8 +3,64 @@ use serde::Serialize;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use super::models::*;
+
+// --- Zero-disk credential storage (2026-06-11) ----------------------------
+//
+// Credentials must never be persisted to the local SQLite settings table.
+// These keys are routed transparently to a process-global in-memory map by
+// get_setting / set_setting / delete_setting, so all existing call sites keep
+// working unchanged while nothing touches disk. The values live only for the
+// lifetime of the app process; on restart the founder re-syncs from the
+// TeamForge secrets layer. `purge_sensitive_settings_from_disk` clears any
+// values written by older builds.
+const SENSITIVE_SETTING_KEYS: [&str; 5] = [
+    "clockify_api_key",
+    "huly_token",
+    "slack_bot_token",
+    "github_token",
+    "cloud_credentials_access_token",
+];
+
+pub fn is_sensitive_key(key: &str) -> bool {
+    SENSITIVE_SETTING_KEYS.contains(&key)
+}
+
+fn sensitive_store() -> &'static Mutex<HashMap<String, String>> {
+    static STORE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn sensitive_get(key: &str) -> Option<String> {
+    let guard = sensitive_store().lock().unwrap_or_else(|e| e.into_inner());
+    guard.get(key).cloned()
+}
+
+fn sensitive_set(key: &str, value: &str) {
+    let mut guard = sensitive_store().lock().unwrap_or_else(|e| e.into_inner());
+    guard.insert(key.to_string(), value.to_string());
+}
+
+fn sensitive_delete(key: &str) {
+    let mut guard = sensitive_store().lock().unwrap_or_else(|e| e.into_inner());
+    guard.remove(key);
+}
+
+/// Delete any credential values an older build may have persisted to disk.
+/// Call once during app startup. Idempotent.
+pub async fn purge_sensitive_settings_from_disk(
+    pool: &SqlitePool,
+) -> Result<(), sqlx::Error> {
+    for key in SENSITIVE_SETTING_KEYS {
+        sqlx::query("DELETE FROM settings WHERE key = ?1")
+            .bind(key)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
 
 /// Create or open the SQLite database and run migrations.
 pub async fn init_db(app_data_dir: &Path) -> Result<SqlitePool, sqlx::Error> {
@@ -1916,6 +1972,10 @@ pub async fn delete_presence_for_employee(
 // ─── Settings ────────────────────────────────────────────────────
 
 pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>, sqlx::Error> {
+    // Credentials live only in the in-memory store, never on disk.
+    if is_sensitive_key(key) {
+        return Ok(sensitive_get(key));
+    }
     let row: Option<Setting> =
         sqlx::query_as::<_, Setting>("SELECT * FROM settings WHERE key = ?1")
             .bind(key)
@@ -1925,6 +1985,11 @@ pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>,
 }
 
 pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<(), sqlx::Error> {
+    // Credentials are held in RAM only — do not write them to SQLite.
+    if is_sensitive_key(key) {
+        sensitive_set(key, value);
+        return Ok(());
+    }
     sqlx::query(
         "INSERT INTO settings (key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -1937,6 +2002,10 @@ pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<()
 }
 
 pub async fn delete_setting(pool: &SqlitePool, key: &str) -> Result<(), sqlx::Error> {
+    if is_sensitive_key(key) {
+        sensitive_delete(key);
+        return Ok(());
+    }
     sqlx::query("DELETE FROM settings WHERE key = ?1")
         .bind(key)
         .execute(pool)
