@@ -103,6 +103,7 @@ import type {
   VaultEntry,
   NotificationItem,
   ScaffoldResult,
+  PaiMissionSummary,
 } from "../lib/types";
 
 const invokeApi = {
@@ -367,6 +368,8 @@ const invokeApi = {
     invoke<EntityRelation[]>("get_relations_by_type", { relationType }),
   deleteRelation: (id: number) =>
     invoke<boolean>("delete_relation", { id }),
+  getRecentPaiMissions: (limit?: number) =>
+    invoke<PaiMissionSummary>("get_recent_pai_missions", { limit: limit ?? 8 }),
 };
 
 export function useInvoke() {

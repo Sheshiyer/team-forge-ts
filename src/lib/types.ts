@@ -1909,3 +1909,19 @@ export interface StandupReport {
   compliancePercent: number;
   entries: StandupEntry[];
 }
+
+// ── PAI Mission Control (Phase 4) ─────────────────────────────────
+
+export interface PaiMissionEntry {
+  slug: string;
+  datePrefix: string;
+  isoTimestamp: string;
+}
+
+export interface PaiMissionSummary {
+  totalWorkEntries: number;
+  last30Days: number;
+  last7Days: number;
+  today: number;
+  recent: PaiMissionEntry[];
+}

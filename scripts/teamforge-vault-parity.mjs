@@ -55,6 +55,9 @@ Options:
   --worker-base-url <url>    Override TeamForge Worker base URL.
   --teamforge-db <path>      Override local TeamForge SQLite database path for KPI imports.
   --workspace-id <id>        Required for --apply when creating new TeamForge projects.
+  --cf-access-client-id <id> Cloudflare Access Client ID (for prod Worker behind CF Access; also via CF_ACCESS_CLIENT_ID env).
+  --cf-access-client-secret <secret> Cloudflare Access Client Secret (also via CF_ACCESS_CLIENT_SECRET env).
+  --internal-secret <secret> Temporary shared secret for m2m internal auth (X-TeamForge-Internal-Secret header). Use when CF Access service tokens have issues with the Worker route (also via TF_INTERNAL_SHARED_SECRET env). For use with IP bypass or other Access-passing methods.
   --project <slug>           Limit to one or more project_id values.
   --report <path>            Write JSON report to disk.
   --help                     Show this help.
@@ -77,6 +80,9 @@ function parseArgs(argv) {
     workerBaseUrl: DEFAULT_WORKER_BASE_URL,
     teamforgeDbPath: DEFAULT_TEAMFORGE_DB_PATH,
     workspaceId: process.env.TEAMFORGE_WORKSPACE_ID ?? null,
+    cfAccessClientId: process.env.CF_ACCESS_CLIENT_ID ?? null,
+    cfAccessClientSecret: process.env.CF_ACCESS_CLIENT_SECRET ?? null,
+    internalSecret: process.env.TF_INTERNAL_SHARED_SECRET ?? null,
     projects: new Set(),
     reportPath: null,
   };
@@ -113,6 +119,18 @@ function parseArgs(argv) {
     }
     if (value === "--workspace-id") {
       args.workspaceId = argv[++index];
+      continue;
+    }
+    if (value === "--cf-access-client-id") {
+      args.cfAccessClientId = argv[++index];
+      continue;
+    }
+    if (value === "--cf-access-client-secret") {
+      args.cfAccessClientSecret = argv[++index];
+      continue;
+    }
+    if (value === "--internal-secret") {
+      args.internalSecret = argv[++index];
       continue;
     }
     if (value === "--project") {
@@ -930,6 +948,49 @@ async function normalizeOnboardingFlow(filePath, vaultRoot, family, fallbackWork
     joinedOn: normalizeOptionalString(data.joined_on),
     readyForApply: Boolean(flowId && workspaceId && memberId && audience === expectedAudience),
   };
+}
+
+function normalizeHandoffNote(filePath, vaultRoot) {
+  return Promise.all([fs.readFile(filePath, "utf8"), fs.stat(filePath)]).then(([contents, stats]) => {
+    const { data, body } = parseFrontmatter(contents);
+    const relativePath = path.relative(vaultRoot, filePath);
+    const warnings = [];
+    const handoffId = normalizeOptionalString(data.handoff_id);
+    if (!handoffId) {
+      warnings.push("Missing handoff_id in frontmatter.");
+    }
+    const projectSlug = normalizeOptionalString(data.project);
+    const clientSlug = normalizeOptionalString(data.client);
+    const from = normalizeOptionalString(data.from);
+    const to = normalizeOptionalString(data.to);
+    const type = normalizeOptionalString(data.type);
+    const status = normalizeOptionalString(data.status) || "pending";
+    const created = normalizeOptionalString(data.created);
+    const due = normalizeOptionalString(data.due);
+    const priority = normalizeOptionalString(data.priority);
+    return {
+      key: handoffId || relativePath,
+      handoffId,
+      projectSlug,
+      clientSlug,
+      from,
+      to,
+      type,
+      status,
+      created,
+      due,
+      priority,
+      relativePath,
+      filePath,
+      source: {
+        filePath,
+        relativePath,
+        lastModifiedAt: stats.mtime.toISOString(),
+      },
+      warnings,
+      readyForApply: Boolean(handoffId),
+    };
+  });
 }
 
 function buildEmployeeAliasCandidates(employee) {
@@ -1785,11 +1846,23 @@ function normalizeRemoteGraph(item) {
   return null;
 }
 
-async function fetchJson(baseUrl, pathname, token) {
+async function fetchJson(baseUrl, pathname, token, cfAccessClientId = null, cfAccessClientSecret = null, internalSecret = null) {
   const url = new URL(pathname, baseUrl);
   const headers = { Accept: "application/json" };
   if (token) {
     headers.Authorization = `Bearer ${token}`;
+  }
+  const cfId = cfAccessClientId || process.env.CF_ACCESS_CLIENT_ID || null;
+  const cfSecret = cfAccessClientSecret || process.env.CF_ACCESS_CLIENT_SECRET || null;
+  if (cfId) {
+    headers["CF-Access-Client-Id"] = cfId;
+  }
+  if (cfSecret) {
+    headers["CF-Access-Client-Secret"] = cfSecret;
+  }
+  const intSecret = internalSecret || process.env.TF_INTERNAL_SHARED_SECRET || null;
+  if (intSecret) {
+    headers["X-TeamForge-Internal-Secret"] = intSecret;
   }
   const response = await fetch(url, { headers });
   if (!response.ok) {
@@ -1799,7 +1872,7 @@ async function fetchJson(baseUrl, pathname, token) {
   return payload.data ?? payload;
 }
 
-async function putJson(baseUrl, pathname, body, token) {
+async function putJson(baseUrl, pathname, body, token, cfAccessClientId = null, cfAccessClientSecret = null, internalSecret = null) {
   const url = new URL(pathname, baseUrl);
   const headers = {
     Accept: "application/json",
@@ -1807,6 +1880,18 @@ async function putJson(baseUrl, pathname, body, token) {
   };
   if (token) {
     headers.Authorization = `Bearer ${token}`;
+  }
+  const cfId = cfAccessClientId || process.env.CF_ACCESS_CLIENT_ID || null;
+  const cfSecret = cfAccessClientSecret || process.env.CF_ACCESS_CLIENT_SECRET || null;
+  if (cfId) {
+    headers["CF-Access-Client-Id"] = cfId;
+  }
+  if (cfSecret) {
+    headers["CF-Access-Client-Secret"] = cfSecret;
+  }
+  const intSecret = internalSecret || process.env.TF_INTERNAL_SHARED_SECRET || null;
+  if (intSecret) {
+    headers["X-TeamForge-Internal-Secret"] = intSecret;
   }
   const response = await fetch(url, {
     method: "PUT",
@@ -1821,13 +1906,47 @@ async function putJson(baseUrl, pathname, body, token) {
   return payload.data ?? payload;
 }
 
-async function loadExistingGraphs(baseUrl, token) {
+async function postJson(baseUrl, pathname, body, token, cfAccessClientId = null, cfAccessClientSecret = null, internalSecret = null) {
+  const url = new URL(pathname, baseUrl);
+  const headers = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const cfId = cfAccessClientId || process.env.CF_ACCESS_CLIENT_ID || null;
+  const cfSecret = cfAccessClientSecret || process.env.CF_ACCESS_CLIENT_SECRET || null;
+  if (cfId) {
+    headers["CF-Access-Client-Id"] = cfId;
+  }
+  if (cfSecret) {
+    headers["CF-Access-Client-Secret"] = cfSecret;
+  }
+  const intSecret = internalSecret || process.env.TF_INTERNAL_SHARED_SECRET || null;
+  if (intSecret) {
+    headers["X-TeamForge-Internal-Secret"] = intSecret;
+  }
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`${response.status} ${response.statusText}: ${text}`);
+  }
+  const payload = await response.json();
+  return payload.data ?? payload;
+}
+
+async function loadExistingGraphs(baseUrl, token, cfAccessClientId = null, cfAccessClientSecret = null, internalSecret = null) {
   const byId = new Map();
   const bySlug = new Map();
   const observedShapes = new Set();
 
   for (const status of DEFAULT_STATUSES) {
-    const payload = await fetchJson(baseUrl, `/v1/project-mappings?status=${encodeURIComponent(status)}`, token);
+    const payload = await fetchJson(baseUrl, `/v1/project-mappings?status=${encodeURIComponent(status)}`, token, cfAccessClientId, cfAccessClientSecret, internalSecret);
     for (const item of extractRemoteItems(payload)) {
       const graph = normalizeRemoteGraph(item);
       if (!graph) {
@@ -2008,6 +2127,26 @@ async function main() {
           )
         : allOnboardingFlowRecords;
 
+    const handoffFiles = args.kpiOnly
+      ? []
+      : (await walk(args.vaultRoot)).filter(
+          (filePath) =>
+            filePath.includes(`${path.sep}handoffs${path.sep}`) &&
+            /HO-\d+\.md$/.test(filePath)
+        );
+    const allHandoffRecords = args.kpiOnly
+      ? []
+      : await Promise.all(
+          handoffFiles.map((filePath) => normalizeHandoffNote(filePath, args.vaultRoot))
+        );
+    const handoffRecords = args.kpiOnly
+      ? []
+      : args.projects.size > 0
+        ? allHandoffRecords.filter(
+            (record) => record.projectSlug && relevantProjectIds.has(record.projectSlug)
+          )
+        : allHandoffRecords;
+
     const kpiRecords = (
       await Promise.all(kpiFiles.map((filePath) => normalizeKpiNote(filePath, args.vaultRoot)))
     ).filter((record) => record.memberId.length > 0);
@@ -2045,7 +2184,7 @@ async function main() {
     let remoteWarning = null;
     if (!args.localOnly && !args.kpiOnly) {
       try {
-        existingGraphs = await loadExistingGraphs(args.workerBaseUrl, token);
+        existingGraphs = await loadExistingGraphs(args.workerBaseUrl, token, args.cfAccessClientId, args.cfAccessClientSecret, args.internalSecret);
         remoteShapes = existingGraphs.observedShapes ?? [];
       } catch (error) {
         remoteWarning = error instanceof Error ? error.message : String(error);
@@ -2214,6 +2353,8 @@ async function main() {
         employeeKpiCreates: employeeKpiCounts.create ?? 0,
         employeeKpiUpdates: employeeKpiCounts.update ?? 0,
         employeeKpiUnresolved: employeeKpiCounts.unresolved ?? 0,
+        handoffsFound: handoffRecords.length,
+        handoffsReady: handoffRecords.filter((r) => r.readyForApply).length,
       },
       warnings: [
         ...teamforgeContext.warnings,
@@ -2382,6 +2523,9 @@ async function main() {
             `/v1/project-mappings/${encodeURIComponent(operation.targetProjectId)}`,
             operation.requestBody,
             token,
+            args.cfAccessClientId,
+            args.cfAccessClientSecret,
+            args.internalSecret,
           );
           applied.push({
             projectId: operation.projectId,
@@ -2419,11 +2563,17 @@ async function main() {
             `/v1/client-profiles/${encodeURIComponent(operation.clientId)}`,
             operation.payload,
             token,
+            args.cfAccessClientId,
+            args.cfAccessClientSecret,
+            args.internalSecret,
           );
           const detail = await fetchJson(
             args.workerBaseUrl,
             `/v1/client-profiles/${encodeURIComponent(operation.clientId)}?workspace_id=${encodeURIComponent(operation.payload.workspaceId)}`,
             token,
+            args.cfAccessClientId,
+            args.cfAccessClientSecret,
+            args.internalSecret,
           );
           clientProfileApplied.push({
             clientId: operation.clientId,
@@ -2485,6 +2635,9 @@ async function main() {
               args.workerBaseUrl,
               `/v1/onboarding-flows?workspace_id=${encodeURIComponent(group.workspaceId)}`,
               token,
+              args.cfAccessClientId,
+              args.cfAccessClientSecret,
+              args.internalSecret,
             );
             const returnedFlows = Array.isArray(payload?.flows) ? payload.flows : [];
             for (const flowId of group.flowIds) {
@@ -2517,6 +2670,55 @@ async function main() {
       report.onboardingFlowApplied = onboardingFlowApplied;
       report.onboardingFlowFailures = onboardingFlowFailures;
       report.postApplyOnboardingFlowVerification = { verified: onboardingFlowVerification };
+
+      const handoffApplied = [];
+      const handoffFailures = [];
+      for (const record of handoffRecords) {
+        if (!record.readyForApply) {
+          handoffFailures.push({
+            handoffId: record.handoffId,
+            relativePath: record.relativePath,
+            error: record.warnings.join("; ") || "Handoff is not ready for Worker apply.",
+          });
+          continue;
+        }
+        try {
+          const payload = {
+            handoffId: record.handoffId,
+            projectSlug: record.projectSlug,
+            clientSlug: record.clientSlug,
+            from: record.from,
+            to: record.to,
+            type: record.type,
+            status: record.status,
+            createdAt: record.created,
+            dueAt: record.due,
+            priority: record.priority,
+            sourcePath: record.relativePath,
+          };
+          await postJson(
+            args.workerBaseUrl,
+            "/v1/handoffs",
+            payload,
+            token,
+            args.cfAccessClientId,
+            args.cfAccessClientSecret,
+            args.internalSecret,
+          );
+          handoffApplied.push({
+            handoffId: record.handoffId,
+            relativePath: record.relativePath,
+          });
+        } catch (error) {
+          handoffFailures.push({
+            handoffId: record.handoffId,
+            relativePath: record.relativePath,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      report.handoffApplied = handoffApplied;
+      report.handoffFailures = handoffFailures;
 
       const employeeKpiApplied = [];
       const employeeKpiFailures = [];
@@ -2570,7 +2772,7 @@ async function main() {
       report.employeeKpiFailures = employeeKpiFailures;
 
       try {
-        const verifiedGraphs = await loadExistingGraphs(args.workerBaseUrl, token);
+        const verifiedGraphs = await loadExistingGraphs(args.workerBaseUrl, token, args.cfAccessClientId, args.cfAccessClientSecret, args.internalSecret);
         report.postApplyVerification = {
           remoteShapes: verifiedGraphs.observedShapes ?? [],
           verified: applied.map((item) => {
@@ -2642,6 +2844,14 @@ async function main() {
     console.log(`Employee KPI creates: ${report.counts.employeeKpiCreates}`);
     console.log(`Employee KPI updates: ${report.counts.employeeKpiUpdates}`);
     console.log(`Employee KPI unresolved: ${report.counts.employeeKpiUnresolved}`);
+    console.log(`Handoffs found: ${report.counts.handoffsFound}`);
+    console.log(`Handoffs ready: ${report.counts.handoffsReady}`);
+    if (report.handoffApplied && report.handoffApplied.length > 0) {
+      console.log(`Handoffs applied: ${report.handoffApplied.length}`);
+    }
+    if (report.handoffFailures && report.handoffFailures.length > 0) {
+      console.log(`Handoff failures: ${report.handoffFailures.length}`);
+    }
     if (remoteWarning) {
       console.log(`Remote compare warning: ${remoteWarning}`);
     }

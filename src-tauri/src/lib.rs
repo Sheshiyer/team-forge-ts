@@ -6,6 +6,7 @@ mod huly;
 mod intake;
 mod onboarding;
 mod ops;
+mod pai;
 mod paperclip;
 mod slack;
 mod sync;
@@ -199,6 +200,7 @@ pub fn run() {
             commands::delete_huly_relation,
             commands::get_huly_relation_summary,
             commands::get_huly_dependency_chain,
+            pai::get_recent_pai_missions,
             commands::get_milestones,
             commands::get_time_discrepancies,
             commands::get_estimation_accuracy,

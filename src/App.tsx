@@ -31,46 +31,28 @@ import { useViewportWidth } from "./hooks/useViewportWidth";
 import { useAppStore } from "./stores/appStore";
 import type { NotificationItem, PaperclipStartupResult, PresenceStatus } from "./lib/types";
 
+// Sidebar shows founder-first mission control surfaces only.
+// All other pages remain reachable via command palette (⌘K) or direct URL.
 const navSections = [
   {
-    label: "COMMAND",
+    label: "MISSION CONTROL",
     color: "var(--lcars-orange)",
     items: [
       { path: "/", label: "Overview", icon: "◈" },
+      { path: "/agents", label: "Agents", icon: "⬢" },
       { path: "/inbox", label: "Inbox", icon: "✉" },
-      { path: "/timesheet", label: "Timesheet", icon: "◷" },
       { path: "/projects", label: "Projects", icon: "▣" },
     ],
   },
   {
-    label: "EXECUTION",
-    color: "var(--lcars-peach)",
-    items: [
-      { path: "/sprints", label: "Sprints", icon: "⟐" },
-      { path: "/insights", label: "Insights", icon: "◉" },
-      { path: "/team", label: "Team", icon: "⧫" },
-      { path: "/calendar", label: "Calendar", icon: "▦" },
-      { path: "/comms", label: "Comms", icon: "◬" },
-    ],
-  },
-  {
-    label: "REGISTRY",
+    label: "PORTFOLIO",
     color: "var(--lcars-cyan)",
     items: [
       { path: "/clients", label: "Clients", icon: "◇" },
       { path: "/issues", label: "Issues", icon: "⬡" },
-      { path: "/routines", label: "Routines", icon: "⟳" },
-      { path: "/goals", label: "Goals", icon: "◎" },
       { path: "/onboarding", label: "Onboarding", icon: "▷" },
-      { path: "/knowledge", label: "Skills", icon: "◎" },
-    ],
-  },
-  {
-    label: "OPS",
-    color: "var(--lcars-tan)",
-    items: [
       { path: "/activity", label: "Activity", icon: "◫" },
-      { path: "/agents", label: "Agents", icon: "⬢" },
+      { path: "/team", label: "Team", icon: "⧫" },
     ],
   },
   {
@@ -78,6 +60,19 @@ const navSections = [
     color: "var(--lcars-lavender)",
     items: [{ path: "/settings", label: "Settings", icon: "⚙" }],
   },
+];
+
+// Secondary pages reachable via palette but not sidebar (reduces nav noise).
+const paletteOnlyPages: CommandItem[] = [
+  { id: "page:timesheet", label: "Timesheet", section: "PAGES", icon: "→", action: () => {} },
+  { id: "page:sprints", label: "Sprints", section: "PAGES", icon: "→", action: () => {} },
+  { id: "page:insights", label: "Insights", section: "PAGES", icon: "→", action: () => {} },
+  { id: "page:calendar", label: "Calendar", section: "PAGES", icon: "→", action: () => {} },
+  { id: "page:comms", label: "Comms", section: "PAGES", icon: "→", action: () => {} },
+  { id: "page:routines", label: "Routines", section: "PAGES", icon: "→", action: () => {} },
+  { id: "page:goals", label: "Goals", section: "PAGES", icon: "→", action: () => {} },
+  { id: "page:knowledge", label: "Skills", section: "PAGES", icon: "→", action: () => {} },
+  { id: "page:boards", label: "Boards", section: "PAGES", icon: "→", action: () => {} },
 ];
 
 function getStardate(): string {
@@ -245,6 +240,11 @@ function App() {
       })),
     );
 
+    const secondary: CommandItem[] = paletteOnlyPages.map((p) => ({
+      ...p,
+      action: () => navigate(p.id.replace("page:", "/")),
+    }));
+
     const actions: CommandItem[] = [
       {
         id: "action:sync-all",
@@ -305,7 +305,7 @@ function App() {
       },
     ];
 
-    return [...nav, ...actions];
+    return [...nav, ...actions, ...secondary];
   }, [navigate]);
 
   // Keyboard navigation
@@ -323,8 +323,8 @@ function App() {
           return;
         }
         const routes = [
-          "/", "/timesheet", "/projects", "/sprints", "/insights",
-          "/team", "/calendar", "/comms", "/activity", "/agents",
+          "/", "/agents", "/inbox", "/projects", "/clients",
+          "/issues", "/onboarding", "/activity", "/team", "/settings",
         ];
         const num = parseInt(e.key);
         if (num >= 1 && num <= 9) {
@@ -334,14 +334,6 @@ function App() {
         if (e.key === "0") {
           e.preventDefault();
           navigate(routes[9]);
-        }
-        if (e.key === "-") {
-          e.preventDefault();
-          navigate("/clients");
-        }
-        if (e.key === "=") {
-          e.preventDefault();
-          navigate("/settings");
         }
         if (e.key === "r") {
           e.preventDefault();
