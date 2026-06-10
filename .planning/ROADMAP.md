@@ -169,3 +169,84 @@ Plans:
 | 6. Team Page Enhancements | #9 | 0/TBD | Not started | - |
 | 7. Sprints Ceremonies & Burndown | #8 | 0/TBD | Not started | - |
 | 8. Huly Planner Time-Blocking | #15 | 0/TBD | Not started | - |
+
+## v0.3 UX & Ecosystem Intelligence Overhaul (parallel/overlay track)
+
+**Status:** Planning phase. Swarm-architect orchestrational plan created (scoped 120–180+ tasks across 4 phases). First 23 issues (Phase 1 Wave 1 + early scaffolding) generated via plan-to-github.md playbook. Work proceeds gradually and surgically; new tasks added only on discovery of edge cases.
+
+**Core Direction (from CLAUDE.md + founder intent):**
+- Vault-first with NVIDIA embeddings for semantic intelligence on thoughtseed-labs documents (project briefs, client profiles, onboarding flows, etc.).
+- TeamForge becomes the clean organizational consumer layer (IDs/mapping/operator surfaces) that consumes vault intelligence.
+- Full 4-bridge visibility (A: Vault, B: Paperclip, C: TeamForge/Cloudflare, D: Hermes) with explicit ownership per CLAUDE.md.
+- Tauri primitives hardened (narrow capabilities, locked CSP, dynamic tray, global shortcuts, updater UX, notifications).
+
+**Critical Architectural Constraint — Singleton Paperclip (locked 2026-06-08):**
+- Paperclip is a **single shared instance** (one long-running process on a fixed port + adapter, e.g. 3101).
+- This one instance serves **multiple organizations** inside the Thoughtseed ecosystem.
+- TeamForge (the Tauri app) is the operator surface only — it talks to the existing singleton via the launch script (`scripts/launch-thoughtseed-paperclip.sh`) + adapter (bridge B).
+- **Explicitly forbidden:** per-organization Paperclip instances, or migrating Paperclip into a Tauri sidecar.
+- All plans, capabilities, UI surfaces, and bridge health must surface and respect "singleton shared instance for the whole ecosystem."
+
+**Phases (high-level, expandable)**
+- **Phase 1: Vault Semantic Foundation + Tauri Security Baseline** (NVIDIA embeddings + contracts, capability narrowing with singleton Paperclip preserved, bridge health contract, first organizational model).
+- **Phase 2: TeamForge as Organizational Consumer Layer** (core screens redesigned to consume embeddings, layered IA, bridge surfaces, shell polish).
+- **Phase 3: Full Ecosystem Surfaces + Tauri Primitives + Bridge Visibility** (all 19 screens, dynamic tray, global shortcuts, updater, notifications, command palette, ownership badges everywhere).
+- **Phase 4: Advanced Intelligence, Polish, Validation & Sustain** (deeper embeddings, advanced flows, long-term maintenance, evidence-driven iteration).
+
+**First Deliverables (already generated)**
+- `.planning/v0.3-23-issues.sh` — complete bash script with 23 `gh issue create` commands (singleton Paperclip constraint written into every relevant body).
+- `.planning/v0.3-phase2-wave3-expansion.md` — Phase 2 Wave 3 expanded to 16 granular tasks (bridge surfaces + shell polish, singleton Paperclip language baked in).
+- `.planning/T-001-execution.md` — exact file edits + verification commands for the very first task (capability audit/narrowing) to be run safely in a dedicated worktree.
+
+**How v0.3 coexists with v0.2**
+- v0.2 Foundation Closeout (Phases 1–8, issues #45, #46, #4, #14, #12, #9, #8, #15) continues on its current track for data quality, Huly relations, and remaining surfaces.
+- v0.3 is the strategic UX/ecosystem intelligence overlay. Issues use distinct labels (`phase:p1`, `wave:w1`, `swarm:tauri-security`, `bridge:paperclip` etc.) and a separate milestone.
+- When a v0.3 task discovers something that affects v0.2 (or vice-versa), we add a surgical task to the appropriate plan and link the issues.
+
+**Next Actions (gradual)**
+1. User runs the 23-issue script locally (after creating the milestone).
+2. Create worktree and execute T-001 using `.planning/T-001-execution.md` (first narrow the capabilities while preserving singleton Paperclip launch behavior).
+3. On completion of T-001 (or any task), report findings/edge cases → we surgically expand the plan and file the next small batch.
+4. Continue wave-by-wave, loading the required skill-clusters (`tauri-orchestrator` + spokes, `creative-frontend-orchestrator`, etc.) before each implementation task.
+
+**Phase 2 Wave 3 Batch (16 issues)**
+- Script: `.planning/v0.3-phase2-wave3-issues.sh`
+- All 16 tasks include the singleton Paperclip constraint.
+- Dependencies on Phase 1 Wave 1 bridge health + T-023 "Test All Bridges".
+- Focus: Make bridges (especially the singleton Paperclip) visible and actionable in shell + core screens using embeddings for relevance.
+- Status: Ready to run after Phase 1 Wave 1 issues are created and T-001/T-005/T-019/T-023 are in progress.
+
+**Anticipated Discoveries / Edge Cases from T-001 (capability narrowing)**
+Run `.planning/T-001-execution.md` in its worktree and report back. Anticipated items (update this section with real results):
+
+- Bundle resource path vs repo path for `launch-thoughtseed-paperclip.sh` in packaged .app (the capability `cmd` may need to point to the bundled resource location instead of $HOME path).
+- Whether `shell:allow-open` is still required for non-Paperclip things (e.g. opening external links in updater, Huly, Clockify, GitHub from the app).
+- PID babysitter reuse behavior after permission change — confirm the singleton instance is still correctly detected and not respawned unnecessarily.
+- Any other call sites in `src-tauri/src/commands/mod.rs` or `paperclip.rs` that still rely on broad shell (e.g. vault parity script).
+- CSP impact on the Paperclip adapter HTTP calls (127.0.0.1:3101 etc.) after T-003.
+- If the new `paperclip-singleton` capability identifier needs to be granted to specific windows only or affects the updater plugin.
+
+**Discovery Log Template**
+Create or append to `.planning/T-001-discoveries.md` with:
+- Exact `tauri capability list` before/after
+- Any path adjustments needed for the launch script in the narrow capability
+- Confirmation that the single shared Paperclip instance (one for all orgs) still launches/stops/statuses correctly
+- New edge cases found → create follow-up tasks (e.g. T-002 will address the exact bundled script path)
+- Evidence files attached
+
+**v0.3 Progress Snapshot (as of latest update)**
+- Phase 1 Wave 1: 23 issues scripted (T-001 to T-023)
+- Phase 2 Wave 3: 16 issues scripted
+- T-001 execution kit ready
+- Singleton Paperclip constraint propagated to all new artifacts
+- v0.2 Foundation Closeout continues independently
+
+Load skill clusters before starting any implementation task in these waves.
+
+**References**
+- CLAUDE.md (thoughtseed-labs) — single source of truth for ownership and flows.
+- Existing v0.2 ROADMAP above remains the active closeout track.
+- All new artifacts live under `.planning/`.
+- Swarm-architect playbooks used: `runbooks/plan-to-github.md`, `playbooks/github-sync.md`, `templates/github-issue-template.md`.
+
+**Last Updated:** 2026-06-08 (singleton Paperclip constraint + first 23 issues + Wave 3 expansion + T-001 execution kit added).

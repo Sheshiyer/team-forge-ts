@@ -1,5 +1,11 @@
 # Design System: Linear
 
+> **Decision Ledger (2026-06-10):** TeamForge intentionally retains and enhances its current **LCARS-inspired mission-control aesthetic** (Orbitron headings, console bars, monospace technical labels, status colors) rather than migrating to this Linear spec. The Linear system documented below serves as an aspirational reference for polish principles (spacing, elevation, typography hierarchy), but the implemented visual identity is "founder agent mission control" — sci-fi console ops, not SaaS marketing. This decision honors the app's role as a desktop command surface for agent runtime, vault-backed signals, and founder intake. Anti-AI-slop guard: no generic gradient-blob hero sections, no decorative illustrations, no marketing-page bloat. Every pixel serves operator efficiency.
+>
+> *Rationale:* The existing LCARS styling (observed in App.tsx, Overview, Agents, Settings) is thematically coherent with "agent mission control" and distinguishes TeamForge from generic project-management UIs. A forced migration to Linear would incur visual churn without improving founder/agent workflow signal-to-noise. Future visual refinements should deepen the LCARS language (better density, collapsible sections, provenance badges) rather than replace it.
+>
+> *Scope:* This reorientation (Phase 1–3) hardens LCARS consistency across nav, Overview, Agents, Inbox, and Settings. Linear tokens may be referenced for micro-layout corrections (spacing scale, border radius) but never as a replacement identity.
+
 ## 1. Visual Theme & Atmosphere
 
 Linear's website is a masterclass in dark-mode-first product design — a near-black canvas (`#08090a`) where content emerges from darkness like starlight. The overall impression is one of extreme precision engineering: every element exists in a carefully calibrated hierarchy of luminance, from barely-visible borders (`rgba(255,255,255,0.05)`) to soft, luminous text (`#f7f8f8`). This is not a dark theme applied to a light design — it is darkness as the native medium, where information density is managed through subtle gradations of white opacity rather than color variation.

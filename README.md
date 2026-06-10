@@ -85,6 +85,63 @@ Leave tracking and yearly holidays now live on a dedicated Calendar route, keepi
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
+## Architecture Updates — 2026-06-09 (Four Planes + CF Access + MultiCA + Handoffs)
+
+The operating model is now explicitly four planes:
+
+- **Obsidian Vault** (`thoughtseed-labs/`) — durable human-readable documents, handoffs/, standups/.
+- **Paperclip** — 6-agent orchestration plane (CEO, Scientist, Engineer, Designer, Synthesist, Hermes).
+- **TeamForge** (this repo + Cloudflare Worker at `forge.thoughtseed.space`) — canonical project/client slug registry and control plane.
+- **Co-founders via Hermes** — Telegram-first command surface (`/ts-*` commands) and external delivery.
+
+**Security note (CF Access):** The TeamForge Worker is protected by Cloudflare Zero Trust Access. Service token `teamforge-multica-bridge-v2` is the authenticated bridge for MultiCA and automated callers.
+
+Example authenticated call (both CF Access headers + app Bearer are required):
+
+```bash
+CF_ACCESS_CLIENT_ID="21ad48de5aefe985ef5bddbe42a07b8e.access"
+CF_ACCESS_CLIENT_SECRET="e90d3c459f1e8565a44e5ac42ec03704500ae0faf842b3765e31c3e8759095ed"
+
+curl -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+     -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+     -H "Authorization: Bearer $TF_CREDENTIAL_ENVELOPE_KEY" \
+     https://forge.thoughtseed.space/v1/projects
+```
+
+**Temporary internal shared-secret bridge (for m2m when service tokens have Worker compatibility issues):**
+
+For local parity runs or Hermes on IP-bypass allowed machines, set `TF_INTERNAL_SHARED_SECRET` (long random value, also configurable in Worker vars) and use `--internal-secret` (or the env). The script will send `X-TeamForge-Internal-Secret` header.
+
+The Worker accepts it as alternative to the regular Bearer for app routes (after the request passes Access policy, e.g. via IP allowlist).
+
+Example (from machine with IP bypass):
+
+```bash
+TF_INTERNAL_SHARED_SECRET="your-long-random-secret-here" \
+node scripts/teamforge-vault-parity.mjs --apply ...
+```
+
+This is a temporary workaround (see debugging notes for service token 302 issues on Worker routes). Prefer service tokens or IP when possible. For MultiCA/AWS callers, service token or future non-Access path recommended.
+
+**MultiCA (AI gateway + agent backend):** Runs on AWS ECS Fargate behind Global Accelerator.
+
+- Static IPs: `166.117.29.182`, `76.223.32.238`
+- GA endpoint (HTTP for agents): `http://a2d8a7ed58f172583.awsglobalaccelerator.com`
+- App: `https://multica.thoughtseed.space`
+- Workspace: `Thoughtseedlabs` (`e0ffc9e2-7848-447f-933f-cc743deedfd0`)
+
+See `cloudflare/worker/src/lib/env.ts` for `MULTICA_*` settings.
+
+**Handoff Protocol:** Agent stage-to-stage transitions live in `thoughtseed-labs/handoffs/` (HO-NNN.md). TeamForge now owns the status machine and registry surface so Hermes `/ts-handoffs`, `/ts-approve`, `/ts-reject` can act on them.
+
+**Hermes Telegram commands (13):** `ts-status`, `ts-agents`, `ts-agent`, `ts-projects`, `ts-project`, `ts-run`, `ts-handoffs`, `ts-approve`, `ts-reject`, `ts-vault`, `ts-standup`, `ts-digest`, `ts-help`.
+
+Group: `-1003698657291`. Co-founders (equal authority): `1371522080`, `926168615`.
+
+See the full backfill checklist in `ARCHITECTURE_CHANGES_2026-06-09.md`.
+
+<img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
+
 ## New In v0.2.6
 
 - **Paperclip daily operations now live much more fully inside TeamForge.**

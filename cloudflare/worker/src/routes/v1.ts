@@ -1,5 +1,25 @@
+/**
+ * V1 API Router — Safety Audit Note (2026-06-10)
+ *
+ * Route classification (read-only vs mutation):
+ *  READ  — GET  /bootstrap, /remote-config, /projects, /client-profiles, /onboarding-flows,
+ *               /project-mappings, /project-mappings/issues, /project-mappings/:id/control-plane,
+ *               /credentials, /connections, /sync/jobs/:id, /sync/runs, /ota/check,
+ *               /team/snapshot, /huly/normalization/history, /handoffs, /handoffs/:id,
+ *               /agent-feed/export, /projects/:id/closeout
+ *  WRITE — PUT  /projects/:id, /client-profiles/:id, /onboarding-flows, /project-mappings/:id
+ *          POST /projects/scaffold, /project-mappings/:id/actions, /connections/:id/test,
+ *               /sync/jobs, /team/refresh, /huly/normalization/preview, /huly/normalization/apply,
+ *               /ota/install-events, /handoffs, /handoffs/:id
+ *
+ * Auth: All app routes require Bearer (TF_CREDENTIAL_ENVELOPE_KEY) or internal secret.
+ * Internal routes (/agent-feed/*, /projects/scaffold, /closeout) use TF_WEBHOOK_HMAC_SECRET.
+ * No destructive operations without authentication. No unscoped DELETE endpoints.
+ * Health check lives at GET /healthz (index.ts), outside this router.
+ */
+
 import type { Env } from "../lib/env";
-import { requireBearerAuth } from "../lib/auth";
+import { requireBearerAuth, requireInternalAuth } from "../lib/auth";
 import { jsonNotImplemented, jsonOk } from "../lib/response";
 import { handleAgentFeedExport, handleProjectCloseout, handleProjectScaffold } from "./agent-feed";
 import { handleGetConnections, handleTestConnection } from "./connections";
@@ -20,6 +40,13 @@ import {
   handlePutProject,
   handlePutProjectMappings,
 } from "./projects";
+import {
+  createHandoff,
+  getHandoffById,
+  listHandoffs,
+  updateHandoffStatus,
+  type HandoffInput,
+} from "../lib/project-registry";
 import { handleGetSyncJob, handleGetSyncRuns, handlePostSyncJob } from "./sync";
 import { handleGetTeamSnapshot, handlePostTeamRefresh } from "./team";
 
@@ -30,12 +57,33 @@ interface DatabaseStatus {
 
 export async function handleV1Request(request: Request, env: Env, url: URL): Promise<Response> {
   const { method, pathname } = { method: request.method, pathname: url.pathname };
-  const requireAppAuth = () =>
-    requireBearerAuth(
+  // Combined auth for app routes: allow either the normal Bearer (TF_CREDENTIAL_ENVELOPE_KEY)
+  // or the temporary internal shared secret (for m2m like parity/Hermes when CF Access service tokens
+  // have compatibility issues with this Worker route). Internal uses header X-TeamForge-Internal-Secret.
+  // The request must still pass the upstream Cloudflare Access policy (e.g. via IP bypass on allowed machines).
+  const requireAppOrInternalAuth = () => {
+    const internalFailure = requireInternalAuth(request, env.TF_INTERNAL_SHARED_SECRET);
+    if (internalFailure) {
+      return internalFailure; // internal header present but invalid
+    }
+
+    const providedInternal = request.headers.get("x-teamforge-internal-secret");
+    const hasValidInternal =
+      providedInternal &&
+      env.TF_INTERNAL_SHARED_SECRET &&
+      providedInternal === env.TF_INTERNAL_SHARED_SECRET;
+
+    if (hasValidInternal) {
+      return null; // internal auth succeeded — bypass bearer requirement
+    }
+
+    // No (valid) internal header — require the standard app Bearer
+    return requireBearerAuth(
       request,
       env.TF_CREDENTIAL_ENVELOPE_KEY,
       "app",
     );
+  };
 
   // Agent feed (Paperclip bridge) — auth required, shared HMAC secret
   if (method === "GET" && pathname === "/v1/agent-feed/export") {
@@ -76,69 +124,69 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Projects
   if (method === "GET" && pathname === "/v1/projects") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleGetProjects(env, url);
   }
   const projectMatch = pathname.match(/^\/v1\/projects\/([^/]+)$/);
   if (method === "PUT" && projectMatch) {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handlePutProject(env, projectMatch[1], request);
   }
   if (method === "GET" && pathname === "/v1/client-profiles") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleGetClientProfiles(env, url);
   }
   const clientProfileMatch = pathname.match(/^\/v1\/client-profiles\/([^/]+)$/);
   if (method === "GET" && clientProfileMatch) {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleGetClientProfile(env, clientProfileMatch[1], url);
   }
   if (method === "PUT" && clientProfileMatch) {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handlePutClientProfile(env, clientProfileMatch[1], request);
   }
   if (method === "GET" && pathname === "/v1/onboarding-flows") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleGetOnboardingFlows(env, url);
   }
   if (method === "PUT" && pathname === "/v1/onboarding-flows") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handlePutOnboardingFlows(env, request);
   }
 
   // Project mappings — alias to projects with mapping context
   if (method === "GET" && pathname === "/v1/project-mappings") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleGetProjectMappings(env, url);
   }
   if (method === "GET" && pathname === "/v1/project-mappings/issues") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleGetProjectMappingIssues(env, url);
   }
   const mappingMatch = pathname.match(/^\/v1\/project-mappings\/([^/]+)$/);
   if (method === "PUT" && mappingMatch) {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handlePutProjectMappings(env, mappingMatch[1], request);
   }
   const controlPlaneMatch = pathname.match(/^\/v1\/project-mappings\/([^/]+)\/control-plane$/);
   if (method === "GET" && controlPlaneMatch) {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleGetProjectControlPlane(env, controlPlaneMatch[1]);
   }
   const projectActionMatch = pathname.match(/^\/v1\/project-mappings\/([^/]+)\/actions$/);
   if (method === "POST" && projectActionMatch) {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handlePostProjectAction(env, projectActionMatch[1], request);
   }
@@ -150,31 +198,31 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Connections
   if (method === "GET" && pathname === "/v1/connections") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleGetConnections(env, url);
   }
   const connTestMatch = pathname.match(/^\/v1\/connections\/([^/]+)\/test$/);
   if (method === "POST" && connTestMatch) {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleTestConnection(env, connTestMatch[1], request);
   }
 
   // Sync
   if (method === "POST" && pathname === "/v1/sync/jobs") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handlePostSyncJob(env, request);
   }
   const syncJobMatch = pathname.match(/^\/v1\/sync\/jobs\/([^/]+)$/);
   if (method === "GET" && syncJobMatch) {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleGetSyncJob(env, syncJobMatch[1]);
   }
   if (method === "GET" && pathname === "/v1/sync/runs") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleGetSyncRuns(env, url);
   }
@@ -189,31 +237,76 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Team snapshot
   if (method === "GET" && pathname === "/v1/team/snapshot") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleGetTeamSnapshot(env, url);
   }
   if (method === "POST" && pathname === "/v1/team/refresh") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handlePostTeamRefresh(env, request);
   }
 
   // Huly normalization
   if (method === "POST" && pathname === "/v1/huly/normalization/preview") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleNormalizationPreview(env, request);
   }
   if (method === "POST" && pathname === "/v1/huly/normalization/apply") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleNormalizationApply(env, request);
   }
   if (method === "GET" && pathname === "/v1/huly/normalization/history") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleGetNormalizationHistory(env, url);
+  }
+
+  // Handoffs — 2026-06-09 (Hermes Telegram command surface + vault handoffs/ protocol)
+  // Auth: app-level Bearer (after CF Access edge protection for MultiCA/Hermes callers)
+  const DEFAULT_WORKSPACE_ID = "thoughtseed-primary";
+
+  if (method === "GET" && pathname === "/v1/handoffs") {
+    const authFailure = requireAppOrInternalAuth();
+    if (authFailure) return authFailure;
+    const statusParam = url.searchParams.get("status") as "pending" | "approved" | "rejected" | null;
+    const handoffs = await listHandoffs(env.TEAMFORGE_DB!, DEFAULT_WORKSPACE_ID, statusParam || undefined);
+    return jsonOk({ handoffs });
+  }
+
+  const handoffMatch = pathname.match(/^\/v1\/handoffs\/([^/]+)$/);
+  if (method === "GET" && handoffMatch) {
+    const authFailure = requireAppOrInternalAuth();
+    if (authFailure) return authFailure;
+    const handoff = await getHandoffById(env.TEAMFORGE_DB!, DEFAULT_WORKSPACE_ID, handoffMatch[1]);
+    if (!handoff) {
+      return jsonError({ code: "not_found", message: "Handoff not found" }, 404);
+    }
+    return jsonOk(handoff);
+  }
+
+  if (method === "PUT" && handoffMatch) {
+    const authFailure = requireAppOrInternalAuth();
+    if (authFailure) return authFailure;
+    const body = (await request.json()) as { status?: "approved" | "rejected"; reason?: string | null };
+    try {
+      const updated = await updateHandoffStatus(env.TEAMFORGE_DB!, DEFAULT_WORKSPACE_ID, handoffMatch[1], {
+        status: body.status,
+      });
+      return jsonOk(updated);
+    } catch (err: any) {
+      return jsonError({ code: "invalid_transition", message: err?.message || "Invalid status transition" }, 400);
+    }
+  }
+
+  if (method === "POST" && pathname === "/v1/handoffs") {
+    const authFailure = requireAppOrInternalAuth();
+    if (authFailure) return authFailure;
+    const body = (await request.json()) as HandoffInput;
+    const created = await createHandoff(env.TEAMFORGE_DB!, DEFAULT_WORKSPACE_ID, body);
+    return jsonOk(created);
   }
 
   return jsonNotImplemented(pathname, method);
@@ -245,6 +338,7 @@ async function buildBootstrapPayload(env: Env): Promise<Record<string, unknown>>
       teamSnapshot: "live",
       hulyNormalization: "live",
       ota: "live",
+      handoffs: "live",
     },
   };
 }
