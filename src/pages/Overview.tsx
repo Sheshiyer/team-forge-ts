@@ -1391,7 +1391,6 @@ function Overview() {
         )}
 
         {roleConfig.showStandup && (
-        {/* Standup Digest Widget */}
         <SectionFrame
           title="STANDUP DIGEST"
           subtitle={standup ? `${standup.date} · ${standup.compliancePercent.toFixed(0)}% COMPLIANCE` : "TODAY"}
