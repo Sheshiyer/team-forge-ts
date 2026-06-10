@@ -6,6 +6,7 @@ import type {
   FounderActiveStreamView,
   FounderCommandCenterView,
   FounderNeedsReviewItemView,
+  PaiMissionSummary,
   PaperclipUser,
   StandupReport,
   TeamforgeIntakeItemView,
@@ -444,6 +445,7 @@ function Overview() {
   const [openingVaultPath, setOpeningVaultPath] = useState<string | null>(null);
   const [paperclipRetryCount, setPaperclipRetryCount] = useState(0);
   const [standup, setStandup] = useState<StandupReport | null>(null);
+  const [paiMissions, setPaiMissions] = useState<PaiMissionSummary | null>(null);
   const [dashboardRole, setDashboardRole] = useState<"executive" | "pm" | "developer">("executive");
 
   const roleConfig = useMemo(() => {
@@ -691,6 +693,21 @@ function Overview() {
     fetchStandup();
     const interval = setInterval(fetchStandup, 60000);
     return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  // Fetch PAI recent missions (Phase 4)
+  useEffect(() => {
+    let cancelled = false;
+    const fetchPai = async () => {
+      try {
+        const summary = await api.getRecentPaiMissions(6);
+        if (!cancelled) setPaiMissions(summary);
+      } catch {
+        // PAI missions are best-effort; fail silently if directory absent
+      }
+    };
+    fetchPai();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -1467,6 +1484,57 @@ function Overview() {
         </SectionFrame>
         )}
       </div>
+
+      {/* PAI Recent Missions (Phase 4) */}
+      {paiMissions && paiMissions.totalWorkEntries > 0 && (
+        <SectionFrame
+          title="RECENT MISSIONS"
+          subtitle="PAI ALGORITHM RUNS"
+          accent="var(--lcars-lavender)"
+          actions={
+            <div style={styles.actionGroup}>
+              <ActionButton label="OPEN PAI DASHBOARD" onClick={() => navigate("/agents")} />
+            </div>
+          }
+          provenance={{ source: "PAI / ~/.claude/MEMORY/WORK", error: null }}
+          defaultOpen={false}
+        >
+          <div style={styles.commandBand}>
+            <div style={styles.commandCell}>
+              <div style={styles.commandLabel}>TODAY</div>
+              <div style={{ ...styles.commandValue, color: "var(--lcars-green)" }}>
+                {paiMissions.today}
+              </div>
+            </div>
+            <div style={styles.commandCell}>
+              <div style={styles.commandLabel}>LAST 7D</div>
+              <div style={{ ...styles.commandValue, color: "var(--lcars-cyan)" }}>
+                {paiMissions.last7Days}
+              </div>
+            </div>
+            <div style={styles.commandCell}>
+              <div style={styles.commandLabel}>LAST 30D</div>
+              <div style={{ ...styles.commandValue, color: "var(--lcars-lavender)" }}>
+                {paiMissions.last30Days}
+              </div>
+            </div>
+            <div style={styles.commandCell}>
+              <div style={styles.commandLabel}>TOTAL</div>
+              <div style={styles.commandValue}>{paiMissions.totalWorkEntries}</div>
+            </div>
+          </div>
+          <div style={styles.columnList}>
+            {paiMissions.recent.map((mission) => (
+              <div key={mission.datePrefix} style={styles.signalRow}>
+                <div>
+                  <div style={styles.signalTitle}>{mission.slug.toUpperCase()}</div>
+                  <div style={styles.signalMeta}>{mission.isoTimestamp}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </SectionFrame>
+      )}
     </div>
   );
 }
