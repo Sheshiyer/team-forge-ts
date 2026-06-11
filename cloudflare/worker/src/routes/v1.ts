@@ -1,5 +1,6 @@
 import type { Env } from "../lib/env";
 import { requireBearerAuth } from "../lib/auth";
+import { verifyAccessJwt } from "../lib/access";
 import { jsonNotImplemented, jsonOk } from "../lib/response";
 import { handleAgentFeedExport, handleProjectCloseout, handleProjectScaffold } from "./agent-feed";
 import { handleGetConnections, handleTestConnection } from "./connections";
@@ -32,12 +33,17 @@ interface DatabaseStatus {
 
 export async function handleV1Request(request: Request, env: Env, url: URL): Promise<Response> {
   const { method, pathname } = { method: request.method, pathname: url.pathname };
+  // Phase 4: a valid Cloudflare Access JWT satisfies app-auth; otherwise fall
+  // back to the interim bearer. Returns null until the Access app is configured.
+  const accessIdentity = await verifyAccessJwt(request, env);
   const requireAppAuth = () =>
-    requireBearerAuth(
-      request,
-      env.TF_CREDENTIAL_ENVELOPE_KEY,
-      "app",
-    );
+    accessIdentity
+      ? null
+      : requireBearerAuth(
+          request,
+          env.TF_CREDENTIAL_ENVELOPE_KEY,
+          "app",
+        );
 
   // Agent feed (Paperclip bridge) — auth required, shared HMAC secret
   if (method === "GET" && pathname === "/v1/agent-feed/export") {
@@ -74,6 +80,13 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
         hulyNormalizationEnabled: false,
       },
     });
+  }
+
+  // Identity — Access login target + whoami (Cloudflare Access or interim bearer)
+  if (method === "GET" && pathname === "/v1/whoami") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
+    return jsonOk({ email: accessIdentity?.email ?? null, access: Boolean(accessIdentity) });
   }
 
   // Clockify cutover backfill (Phase 3) — internal-auth, admin/ops op
