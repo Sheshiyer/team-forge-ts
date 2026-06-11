@@ -42,7 +42,7 @@
         "windowSize": { "width": 660, "height": 400 }
       },
       "minimumSystemVersion": "10.15",
-      "signingIdentity": null
+      "signingIdentity": "Developer ID Application: Thoughtseed Private Limited (BS6SZR4929)"
     },
     "category": "public.app-category.business",
     "shortDescription": "LCARS mission control for team operations and project orchestration",
