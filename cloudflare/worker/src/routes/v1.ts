@@ -22,6 +22,7 @@ import {
 } from "./projects";
 import { handleGetSyncJob, handleGetSyncRuns, handlePostSyncJob } from "./sync";
 import { handleGetTeamSnapshot, handlePostTeamRefresh } from "./team";
+import { handleGetTimeEntries, handlePostTimeEntries } from "./time-entries";
 
 interface DatabaseStatus {
   available: boolean;
@@ -72,6 +73,18 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
         hulyNormalizationEnabled: false,
       },
     });
+  }
+
+  // Time entries (Plexus employee tracker → canonical store)
+  if (method === "POST" && pathname === "/v1/time-entries") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
+    return handlePostTimeEntries(env, request);
+  }
+  if (method === "GET" && pathname === "/v1/time-entries") {
+    const authFailure = requireAppAuth();
+    if (authFailure) return authFailure;
+    return handleGetTimeEntries(env, url);
   }
 
   // Projects
