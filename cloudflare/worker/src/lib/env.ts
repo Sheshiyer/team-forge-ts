@@ -40,6 +40,10 @@ export interface Env {
   TF_API_BASE_URL?: string;
   TF_DEFAULT_OTA_CHANNEL?: string;
   TF_ACCESS_AUDIENCE?: string;
+  // Cloudflare Access JWT validation (lib/access.ts). Left unset for now → verifyAccessJwt
+  // is a no-op and app routes fall back to the Bearer path. Enabling real Access = WS5.
+  TF_ACCESS_TEAM_DOMAIN?: string;
+  TF_ACCESS_AUD?: string;
   TF_CLOCKIFY_API_TOKEN_GLOBAL?: string;
   TF_HULY_USER_TOKEN_GLOBAL?: string;
   TF_SLACK_BOT_TOKEN_GLOBAL?: string;

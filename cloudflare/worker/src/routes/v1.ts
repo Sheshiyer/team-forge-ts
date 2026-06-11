@@ -20,7 +20,10 @@
 
 import type { Env } from "../lib/env";
 import { requireBearerAuth, requireInternalAuth } from "../lib/auth";
-import { jsonNotImplemented, jsonOk } from "../lib/response";
+import { jsonError, jsonNotImplemented, jsonOk } from "../lib/response";
+import { verifyAccessJwt } from "../lib/access";
+import { handleGetTimeEntries, handlePostTimeEntries } from "./time-entries";
+import { handleBackfillClockify } from "./clockify-backfill";
 import { handleAgentFeedExport, handleProjectCloseout, handleProjectScaffold } from "./agent-feed";
 import { handleGetConnections, handleTestConnection } from "./connections";
 import { handleGetCredentials } from "./credentials";
@@ -57,11 +60,18 @@ interface DatabaseStatus {
 
 export async function handleV1Request(request: Request, env: Env, url: URL): Promise<Response> {
   const { method, pathname } = { method: request.method, pathname: url.pathname };
-  // Combined auth for app routes: allow either the normal Bearer (TF_CREDENTIAL_ENVELOPE_KEY)
-  // or the temporary internal shared secret (for m2m like parity/Hermes when CF Access service tokens
-  // have compatibility issues with this Worker route). Internal uses header X-TeamForge-Internal-Secret.
+
+  // Per-employee identity (Cloudflare Access). No-op (returns null) until the TF_ACCESS_* vars are
+  // set (WS5), so today this is null and app routes use the internal/Bearer path below.
+  const accessIdentity = await verifyAccessJwt(request, env);
+
+  // Combined auth for app routes — three tiers so neither Plexus nor Hermes regresses:
+  //   1) a verified Cloudflare Access identity, else
+  //   2) the temporary internal shared secret (m2m: parity/Hermes; header X-TeamForge-Internal-Secret), else
+  //   3) the normal app Bearer (TF_CREDENTIAL_ENVELOPE_KEY).
   // The request must still pass the upstream Cloudflare Access policy (e.g. via IP bypass on allowed machines).
   const requireAppOrInternalAuth = () => {
+    if (accessIdentity) return null; // Cloudflare Access identity verified → authorized
     const internalFailure = requireInternalAuth(request, env.TF_INTERNAL_SHARED_SECRET);
     if (internalFailure) {
       return internalFailure; // internal header present but invalid
@@ -120,6 +130,30 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
         hulyNormalizationEnabled: false,
       },
     });
+  }
+
+  // Identity — whoami (Cloudflare Access identity or interim Bearer)
+  if (method === "GET" && pathname === "/v1/whoami") {
+    const authFailure = requireAppOrInternalAuth();
+    if (authFailure) return authFailure;
+    return jsonOk({ email: accessIdentity?.email ?? null, access: Boolean(accessIdentity) });
+  }
+
+  // Time entries (Plexus employee tracker → canonical store) + one-time Clockify cutover backfill
+  if (method === "POST" && pathname === "/v1/time-entries/backfill-clockify") {
+    const authFailure = requireAppOrInternalAuth();
+    if (authFailure) return authFailure;
+    return handleBackfillClockify(env, request, url);
+  }
+  if (method === "POST" && pathname === "/v1/time-entries") {
+    const authFailure = requireAppOrInternalAuth();
+    if (authFailure) return authFailure;
+    return handlePostTimeEntries(env, request);
+  }
+  if (method === "GET" && pathname === "/v1/time-entries") {
+    const authFailure = requireAppOrInternalAuth();
+    if (authFailure) return authFailure;
+    return handleGetTimeEntries(env, url);
   }
 
   // Projects
@@ -282,7 +316,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
     if (authFailure) return authFailure;
     const handoff = await getHandoffById(env.TEAMFORGE_DB!, DEFAULT_WORKSPACE_ID, handoffMatch[1]);
     if (!handoff) {
-      return jsonError({ code: "not_found", message: "Handoff not found" }, 404);
+      return jsonError({ code: "not_found", message: "Handoff not found", retryable: false }, 404);
     }
     return jsonOk(handoff);
   }
@@ -297,7 +331,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
       });
       return jsonOk(updated);
     } catch (err: any) {
-      return jsonError({ code: "invalid_transition", message: err?.message || "Invalid status transition" }, 400);
+      return jsonError({ code: "invalid_transition", message: err?.message || "Invalid status transition", retryable: false }, 400);
     }
   }
 
@@ -339,6 +373,8 @@ async function buildBootstrapPayload(env: Env): Promise<Record<string, unknown>>
       hulyNormalization: "live",
       ota: "live",
       handoffs: "live",
+      timeEntries: "live",
+      whoami: "live",
     },
   };
 }
