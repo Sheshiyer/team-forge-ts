@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    TeamForge is a non-sandboxed Developer ID app.
+    It requires hardened-runtime exceptions because it:
+    - hosts a V8/WKWebView engine (JIT)
+    - spawns Node.js and bash child processes
+    - opens external URLs and local file paths
+    - reads from user-selected directories and ~/.claude/MEMORY/WORK
+  -->
+
+  <!-- Allow Just-In-Time compilation for the WebView JS engine -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+
+  <!-- Allow unsigned executable memory for Node.js runtime and shell scripts -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+
+  <!-- Disable library validation so spawned interpreters (node, bash) can load their own libraries -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>
