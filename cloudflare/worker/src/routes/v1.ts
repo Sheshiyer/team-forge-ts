@@ -89,9 +89,10 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
     return jsonOk({ email: accessIdentity?.email ?? null, access: Boolean(accessIdentity) });
   }
 
-  // Clockify cutover backfill (Phase 3) — internal-auth, admin/ops op
+  // Clockify cutover backfill (Phase 3) — app-auth (single token; once Access
+  // is live this can be tightened to an admin-email check).
   if (method === "POST" && pathname === "/v1/time-entries/backfill-clockify") {
-    const authFailure = requireBearerAuth(request, env.TF_WEBHOOK_HMAC_SECRET, "internal");
+    const authFailure = requireAppAuth();
     if (authFailure) return authFailure;
     return handleBackfillClockify(env, request, url);
   }
