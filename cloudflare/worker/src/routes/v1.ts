@@ -23,6 +23,7 @@ import {
 import { handleGetSyncJob, handleGetSyncRuns, handlePostSyncJob } from "./sync";
 import { handleGetTeamSnapshot, handlePostTeamRefresh } from "./team";
 import { handleGetTimeEntries, handlePostTimeEntries } from "./time-entries";
+import { handleBackfillClockify } from "./clockify-backfill";
 
 interface DatabaseStatus {
   available: boolean;
@@ -73,6 +74,13 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
         hulyNormalizationEnabled: false,
       },
     });
+  }
+
+  // Clockify cutover backfill (Phase 3) — internal-auth, admin/ops op
+  if (method === "POST" && pathname === "/v1/time-entries/backfill-clockify") {
+    const authFailure = requireBearerAuth(request, env.TF_WEBHOOK_HMAC_SECRET, "internal");
+    if (authFailure) return authFailure;
+    return handleBackfillClockify(env, request, url);
   }
 
   // Time entries (Plexus employee tracker → canonical store)
