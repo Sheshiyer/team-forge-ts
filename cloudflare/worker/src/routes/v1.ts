@@ -13,6 +13,7 @@
  *               /ota/install-events, /handoffs, /handoffs/:id
  *
  * Auth: All app routes require Bearer (TF_CREDENTIAL_ENVELOPE_KEY) or internal secret.
+ * GET /whoami is Access-JWT-only and fail-closed (401 without a verified identity) since WS5.
  * Internal routes (/agent-feed/*, /projects/scaffold, /closeout) use TF_WEBHOOK_HMAC_SECRET.
  * No destructive operations without authentication. No unscoped DELETE endpoints.
  * Health check lives at GET /healthz (index.ts), outside this router.
@@ -61,8 +62,9 @@ interface DatabaseStatus {
 export async function handleV1Request(request: Request, env: Env, url: URL): Promise<Response> {
   const { method, pathname } = { method: request.method, pathname: url.pathname };
 
-  // Per-employee identity (Cloudflare Access). No-op (returns null) until the TF_ACCESS_* vars are
-  // set (WS5), so today this is null and app routes use the internal/Bearer path below.
+  // Per-employee identity (Cloudflare Access). Live since WS5: TF_ACCESS_TEAM_DOMAIN +
+  // TF_ACCESS_AUD are set, so a valid Cf-Access-Jwt-Assertion resolves to the caller's email.
+  // Returns null for m2m callers (workers.dev path, no JWT) — they use internal/Bearer below.
   const accessIdentity = await verifyAccessJwt(request, env);
 
   // Combined auth for app routes — three tiers so neither Plexus nor Hermes regresses:
@@ -132,11 +134,20 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
     });
   }
 
-  // Identity — whoami (Cloudflare Access identity or interim Bearer)
+  // Identity — whoami. Access-JWT-only and fail-closed (WS5): per-employee identity must come
+  // from a verified Cloudflare Access JWT; Bearer/internal callers have no identity to return.
   if (method === "GET" && pathname === "/v1/whoami") {
-    const authFailure = requireAppOrInternalAuth();
-    if (authFailure) return authFailure;
-    return jsonOk({ email: accessIdentity?.email ?? null, access: Boolean(accessIdentity) });
+    if (!accessIdentity) {
+      return jsonError(
+        {
+          code: "access_identity_required",
+          message: "A verified Cloudflare Access identity is required.",
+          retryable: false,
+        },
+        401,
+      );
+    }
+    return jsonOk({ email: accessIdentity.email, access: true });
   }
 
   // Time entries (Plexus employee tracker → canonical store) + one-time Clockify cutover backfill

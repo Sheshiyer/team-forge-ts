@@ -12,6 +12,12 @@
     "TF_API_BASE_URL": "https://forge.thoughtseed.space",
     "TF_DEFAULT_OTA_CHANNEL": "stable",
     "TF_ACCESS_AUDIENCE": "d3892b5d2a62027029b09b2fd015a9e8074d5efb38c443099f803517cb3feb51",
+    // Cloudflare Access JWT verification (lib/access.ts) — WS5. Team domain + the AUDs of the
+    // two Access apps fronting this worker (plexus-api.thoughtseed.space, forge.thoughtseed.space).
+    // Rollback gotcha: keep_vars=true means removing these lines does NOT unset them on deploy —
+    // use `wrangler rollback`, set them to "", or delete in the dashboard.
+    "TF_ACCESS_TEAM_DOMAIN": "red-queen-4dfa.cloudflareaccess.com",
+    "TF_ACCESS_AUD": "5695e8409cd4e838eaaef4de4995541dae4f31a2773945ea67f136800977c200,d3892b5d2a62027029b09b2fd015a9e8074d5efb38c443099f803517cb3feb51",
     "TF_INTEGRATION_CONFIG_JSON": "{\"github\":{\"repos\":[{\"repo\":\"Sheshiyer/parkarea-aleph\",\"displayName\":\"ParkArea Phase 2 - Germany Launch\",\"clientName\":\"ParkArea\",\"defaultMilestoneNumber\":1,\"enabled\":true}]},\"huly\":{\"mirrorMode\":\"read_only\",\"mirrorEnabled\":true},\"slack\":{},\"clockify\":{}}",
     // Temporary internal shared secret for m2m (parity, Hermes) bypassing CF Access service token issues on this Worker route.
     // Set a long random value. Callers send header X-TeamForge-Internal-Secret.

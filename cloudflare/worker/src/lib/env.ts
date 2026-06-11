@@ -39,9 +39,12 @@ export interface Env {
   TF_ENV: string;
   TF_API_BASE_URL?: string;
   TF_DEFAULT_OTA_CHANNEL?: string;
+  // Credential-handout echo check ONLY (routes/credentials.ts): the desktop app's
+  // ?audience= query param must match this value. NOT used for JWT verification.
   TF_ACCESS_AUDIENCE?: string;
-  // Cloudflare Access JWT validation (lib/access.ts). Left unset for now → verifyAccessJwt
-  // is a no-op and app routes fall back to the Bearer path. Enabling real Access = WS5.
+  // Cloudflare Access JWT verification (lib/access.ts) — live since WS5. TEAM_DOMAIN is the
+  // Access org domain; AUD is a comma-separated list of allowed application AUDs (plexus-api +
+  // forge apps). Unsetting both reverts verifyAccessJwt to a no-op (Bearer-era behavior).
   TF_ACCESS_TEAM_DOMAIN?: string;
   TF_ACCESS_AUD?: string;
   TF_CLOCKIFY_API_TOKEN_GLOBAL?: string;

@@ -9,6 +9,24 @@ It aligns with the frozen contracts in:
 - `docs/architecture/contracts/worker-route-contract.md`
 - `docs/architecture/contracts/ota-updater-contract.md`
 
+## Auth (current, post-WS5)
+
+App routes accept three tiers (`requireAppOrInternalAuth` in `src/routes/v1.ts`):
+
+1. **Cloudflare Access JWT** — `Cf-Access-Jwt-Assertion` header (or
+   `CF_Authorization` cookie) verified by `src/lib/access.ts` against
+   `TF_ACCESS_TEAM_DOMAIN` + `TF_ACCESS_AUD` (comma-separated AUD list; two
+   Access apps front this worker: plexus-api.thoughtseed.space for Plexus
+   employees, forge.thoughtseed.space for the operator).
+2. **Internal shared secret** — `X-TeamForge-Internal-Secret` header
+   (`TF_INTERNAL_SHARED_SECRET`), m2m via the workers.dev hostname.
+3. **App Bearer** — `Authorization: Bearer` (`TF_CREDENTIAL_ENVELOPE_KEY`).
+
+`GET /v1/whoami` is the exception: Access-JWT-only and fail-closed (401 without
+a verified identity) — it is how Plexus resolves the signed-in employee's email.
+`TF_ACCESS_AUDIENCE` is unrelated to JWT verification: it is the
+`/v1/credentials` `?audience=` echo check for the desktop credential handout.
+
 ## Scope
 
 Wave 1 provides:

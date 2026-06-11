@@ -10,6 +10,12 @@ import type { Env } from "./env";
  * Returns null (and is therefore a no-op) when TF_ACCESS_TEAM_DOMAIN /
  * TF_ACCESS_AUD are unset — so this can ship before the Access app exists
  * without breaking the interim bearer-token path.
+ *
+ * TF_ACCESS_AUD may hold a comma-separated list of allowed application AUDs:
+ * two Access apps front this worker (plexus-api.thoughtseed.space for Plexus
+ * employees, forge.thoughtseed.space for the operator) and each issues JWTs
+ * with its own AUD. Not to be confused with TF_ACCESS_AUDIENCE, which is the
+ * /v1/credentials ?audience= echo check (see lib/env.ts).
  */
 
 export interface AccessIdentity {
@@ -60,8 +66,11 @@ async function getJwks(domain: string): Promise<Jwk[]> {
 
 export async function verifyAccessJwt(request: Request, env: Env): Promise<AccessIdentity | null> {
   const domain = env.TF_ACCESS_TEAM_DOMAIN;
-  const aud = env.TF_ACCESS_AUD;
-  if (!domain || !aud) return null; // Access not configured → skip (bearer fallback)
+  const audAllowed = (env.TF_ACCESS_AUD ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!domain || audAllowed.length === 0) return null; // Access not configured → skip (bearer fallback)
 
   const token = request.headers.get("cf-access-jwt-assertion") ?? readCookie(request, "CF_Authorization");
   if (!token) return null;
@@ -79,7 +88,7 @@ export async function verifyAccessJwt(request: Request, env: Env): Promise<Acces
     if (typeof payload.exp === "number" && payload.exp < nowSec) return null;
     if (payload.iss && payload.iss !== `https://${domain}`) return null;
     const auds = Array.isArray(payload.aud) ? payload.aud : payload.aud ? [payload.aud] : [];
-    if (!auds.includes(aud)) return null;
+    if (!auds.some((a) => audAllowed.includes(a))) return null;
 
     const keys = await getJwks(domain);
     const jwk = keys.find((k) => k.kid === header.kid);

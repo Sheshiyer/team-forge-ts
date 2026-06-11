@@ -2,6 +2,17 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## Unreleased
+
+### Worker
+
+- **Cloudflare Access JWT verification enabled (WS5,
+  [#81](https://github.com/Sheshiyer/team-forge-ts/issues/81))** —
+  `TF_ACCESS_TEAM_DOMAIN` + `TF_ACCESS_AUD` set (AUD accepts a comma-separated
+  list covering both Access apps); `GET /v1/whoami` is now Access-JWT-only and
+  fail-closed (401 instead of `{email: null}`), so Plexus `accessLogin()`
+  resolves the real signed-in email. Bearer/internal m2m paths unchanged.
+
 ## v0.3.0 - 2026-06-10
 
 Founder-First Agent Mission Control reorientation. The app is now structured as
