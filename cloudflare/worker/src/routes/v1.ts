@@ -33,17 +33,17 @@ interface DatabaseStatus {
 
 export async function handleV1Request(request: Request, env: Env, url: URL): Promise<Response> {
   const { method, pathname } = { method: request.method, pathname: url.pathname };
-  // Phase 4: a valid Cloudflare Access JWT satisfies app-auth; otherwise fall
-  // back to the interim bearer. Returns null until the Access app is configured.
+  // Phase 4 two-tier auth: a TEAM Access JWT grants employee routes only; the
+  // FOUNDER tier (founder Access aud, or the interim app-bearer) is required for
+  // everything sensitive. Both fall back to the bearer until Access is configured.
   const accessIdentity = await verifyAccessJwt(request, env);
-  const requireAppAuth = () =>
-    accessIdentity
+  const requireTeam = () =>
+    accessIdentity ? null : requireBearerAuth(request, env.TF_CREDENTIAL_ENVELOPE_KEY, "app");
+  const requireFounder = () =>
+    accessIdentity?.tier === "founder"
       ? null
-      : requireBearerAuth(
-          request,
-          env.TF_CREDENTIAL_ENVELOPE_KEY,
-          "app",
-        );
+      : requireBearerAuth(request, env.TF_CREDENTIAL_ENVELOPE_KEY, "app");
+  const requireAppAuth = requireFounder; // default for sensitive routes
 
   // Agent feed (Paperclip bridge) — auth required, shared HMAC secret
   if (method === "GET" && pathname === "/v1/agent-feed/export") {
@@ -84,7 +84,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Identity — Access login target + whoami (Cloudflare Access or interim bearer)
   if (method === "GET" && pathname === "/v1/whoami") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireTeam();
     if (authFailure) return authFailure;
     return jsonOk({ email: accessIdentity?.email ?? null, access: Boolean(accessIdentity) });
   }
@@ -99,19 +99,19 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Time entries (Plexus employee tracker → canonical store)
   if (method === "POST" && pathname === "/v1/time-entries") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireTeam();
     if (authFailure) return authFailure;
     return handlePostTimeEntries(env, request);
   }
   if (method === "GET" && pathname === "/v1/time-entries") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireTeam();
     if (authFailure) return authFailure;
     return handleGetTimeEntries(env, url);
   }
 
   // Projects
   if (method === "GET" && pathname === "/v1/projects") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireTeam();
     if (authFailure) return authFailure;
     return handleGetProjects(env, url);
   }
@@ -224,7 +224,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Team snapshot
   if (method === "GET" && pathname === "/v1/team/snapshot") {
-    const authFailure = requireAppAuth();
+    const authFailure = requireTeam();
     if (authFailure) return authFailure;
     return handleGetTeamSnapshot(env, url);
   }

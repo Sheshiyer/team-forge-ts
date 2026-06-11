@@ -42,7 +42,8 @@ export interface Env {
   TF_ACCESS_AUDIENCE?: string;
   // Cloudflare Access (Phase 4) — set these once the Access application exists.
   TF_ACCESS_TEAM_DOMAIN?: string; // e.g. thoughtseed.cloudflareaccess.com
-  TF_ACCESS_AUD?: string;         // the Access application AUD tag
+  TF_ACCESS_AUD?: string;         // the Plexus TEAM Access application AUD tag
+  TF_ACCESS_AUD_FOUNDER?: string; // optional founder Access app AUD (founder-tier routes)
   TF_CLOCKIFY_API_TOKEN_GLOBAL?: string;
   TF_HULY_USER_TOKEN_GLOBAL?: string;
   TF_SLACK_BOT_TOKEN_GLOBAL?: string;

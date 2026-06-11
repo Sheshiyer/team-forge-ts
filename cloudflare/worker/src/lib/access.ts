@@ -14,6 +14,7 @@ import type { Env } from "./env";
 
 export interface AccessIdentity {
   email: string;
+  tier: "team" | "founder";
 }
 
 interface Jwk {
@@ -60,8 +61,9 @@ async function getJwks(domain: string): Promise<Jwk[]> {
 
 export async function verifyAccessJwt(request: Request, env: Env): Promise<AccessIdentity | null> {
   const domain = env.TF_ACCESS_TEAM_DOMAIN;
-  const aud = env.TF_ACCESS_AUD;
-  if (!domain || !aud) return null; // Access not configured → skip (bearer fallback)
+  const audTeam = env.TF_ACCESS_AUD;
+  const audFounder = env.TF_ACCESS_AUD_FOUNDER;
+  if (!domain || (!audTeam && !audFounder)) return null; // Access not configured → skip (bearer fallback)
 
   const token = request.headers.get("cf-access-jwt-assertion") ?? readCookie(request, "CF_Authorization");
   if (!token) return null;
@@ -79,7 +81,9 @@ export async function verifyAccessJwt(request: Request, env: Env): Promise<Acces
     if (typeof payload.exp === "number" && payload.exp < nowSec) return null;
     if (payload.iss && payload.iss !== `https://${domain}`) return null;
     const auds = Array.isArray(payload.aud) ? payload.aud : payload.aud ? [payload.aud] : [];
-    if (!auds.includes(aud)) return null;
+    const valid = [audTeam, audFounder].filter(Boolean) as string[];
+    if (!auds.some((a) => valid.includes(a))) return null;
+    const tier: "team" | "founder" = audFounder && auds.includes(audFounder) ? "founder" : "team";
 
     const keys = await getJwks(domain);
     const jwk = keys.find((k) => k.kid === header.kid);
@@ -102,7 +106,7 @@ export async function verifyAccessJwt(request: Request, env: Env): Promise<Acces
 
     const email = payload.email ?? payload.identity;
     if (!email) return null;
-    return { email: String(email).toLowerCase() };
+    return { email: String(email).toLowerCase(), tier };
   } catch {
     return null;
   }
