@@ -4,7 +4,7 @@
   "compatibility_date": "2026-04-09",
   "workers_dev": true,
   "routes": [
-    { "pattern": "teamforge-api.thoughtseed.space", "custom_domain": true }
+    { "pattern": "plexus-api.thoughtseed.space", "custom_domain": true }
   ],
   "keep_vars": true,
   "observability": {
