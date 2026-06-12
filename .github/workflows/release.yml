@@ -79,11 +79,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GH_RELEASE_PAT || secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "TeamForge ${{ github.ref_name }}"
+          releaseName: "TeamForge ${{ github.ref_name }} - Calliope"
           releaseBody: |
-            ## TeamForge ${{ github.ref_name }}
+            ## TeamForge ${{ github.ref_name }} - Calliope
 
-            LCARS Mission Control for your team. Unifies Clockify + Huly.io into a single native Mac dashboard.
+            Command Cortex for your team. Unifies Paperclip agents, Clockify, Huly, and GitHub into a single native Mac command surface.
 
             ### Download
 
@@ -135,7 +135,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GH_RELEASE_PAT || secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "TeamForge ${{ github.ref_name }}"
+          releaseName: "TeamForge ${{ github.ref_name }} - Calliope"
           releaseDraft: false
           prerelease: false
           args: --target x86_64-apple-darwin

@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Team Forge | Foundry Design System v2.0</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    /* ===== CSS CUSTOM PROPERTIES ===== */
+    :root {
+      /* Backgrounds */
+      --bg-void: #080B10;
+      --bg-base: #0A1628;
+      --bg-raised: #102542;
+      --bg-elevated: #1A3A5C;
+      --bg-hover: rgba(248, 112, 96, 0.08);
+      
+      /* Forge Heat Spectrum */
+      --ember: #F87060;
+      --ember-soft: rgba(248, 112, 96, 0.7);
+      --ember-glow: rgba(248, 112, 96, 0.15);
+      --gold: #E1BB80;
+      --gold-soft: rgba(225, 187, 128, 0.7);
+      --iron: #352208;
+      
+      /* Text */
+      --text-primary: #F0F4F8;
+      --text-secondary: #94A3B8;
+      --text-muted: #64748B;
+      --text-ghost: #475569;
+      
+      /* Status */
+      --status-success: #10B981;
+      --status-warning: #F59E0B;
+      --status-error: #EF4444;
+      --status-info: #3B82F6;
+      --status-ai: #A855F7;
+      
+      /* Borders */
+      --border-subtle: rgba(148, 163, 184, 0.12);
+      --border-default: rgba(148, 163, 184, 0.2);
+      --border-strong: rgba(248, 112, 96, 0.4);
+      
+      /* Gradients */
+      --gradient-forge: linear-gradient(180deg, var(--bg-base) 0%, var(--bg-raised) 100%);
+      --gradient-ember: linear-gradient(135deg, var(--ember) 0%, var(--gold) 100%);
+      --gradient-text-ember: linear-gradient(180deg, #F87060 0%, #E1BB80 100%);
+      
+      /* Typography */
+      --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+      
+      /* Motion */
+      --ease-default: cubic-bezier(0.25, 0.1, 0.25, 1);
+      --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+      --duration-fast: 150ms;
+      --duration-normal: 200ms;
+      --duration-slow: 300ms;
+      
+      /* Shadows */
+      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+      --shadow-ember: 0 0 20px var(--ember-glow);
+    }
+
+    /* ===== RESET & BASE ===== */
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      background: var(--bg-void);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: geometricPrecision;
+    }
+
+    /* ===== TYPOGRAPHY UTILITIES ===== */
+    .text-gradient {
+      background: var(--gradient-text-ember);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .text-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+    }
+
+    .text-display {
+      font-size: clamp(2rem, 4.5vw, 3.5rem);
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+    }
+
+    /* ===== LAYOUT ===== */
+    .app-shell {
+      display: grid;
+      grid-template-columns: 64px 1fr;
+      grid-template-rows: 40px 1fr;
+      min-height: 100vh;
+    }
+
+    /* ===== TITLEBAR ===== */
+    .titlebar {
+      grid-column: 1 / -1;
+      height: 40px;
+      background: var(--bg-void);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .titlebar-drag {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      -webkit-app-region: drag;
+    }
+
+    .titlebar-icon {
+      width: 20px;
+      height: 20px;
+      color: var(--ember);
+    }
+
+    .titlebar-title {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+
+    .titlebar-controls {
+      display: flex;
+      -webkit-app-region: no-drag;
+    }
+
+    .titlebar-btn {
+      width: 46px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: background var(--duration-fast) var(--ease-default),
+                  color var(--duration-fast) var(--ease-default);
+    }
+
+    .titlebar-btn:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    .titlebar-btn.close:hover {
+      background: var(--status-error);
+      color: white;
+    }
+
+    /* ===== SIDEBAR ===== */
+    .sidebar {
+      width: 64px;
+      background: var(--bg-base);
+      border-right: 1px solid var(--border-subtle);
+      padding: 16px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: width var(--duration-slow) var(--ease-default);
+      overflow: hidden;
+    }
+
+    .sidebar:hover {
+      width: 200px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 20px;
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: all var(--duration-normal) var(--ease-default);
+      white-space: nowrap;
+    }
+
+    .nav-item:hover {
+      color: var(--text-primary);
+      background: var(--bg-hover);
+    }
+
+    .nav-item.active {
+      color: var(--ember);
+      background: var(--ember-glow);
+      border-right: 2px solid var(--ember);
+    }
+
+    .nav-item svg {
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+
+    .nav-label {
+      font-size: 0.875rem;
+      font-weight: 500;
+      opacity: 0;
+      transition: opacity var(--duration-normal) var(--ease-default);
+    }
+
+    .sidebar:hover .nav-label {
+      opacity: 1;
+    }
+
+    .nav-group-label {
+      padding: 8px 20px;
+      margin-top: 16px;
+      opacity: 0;
+      transition: opacity var(--duration-normal) var(--ease-default);
+    }
+
+    .sidebar:hover .nav-group-label {
+      opacity: 1;
+    }
+
+    /* ===== MAIN CONTENT ===== */
+    .main-content {
+      background: var(--bg-base);
+      padding: 32px;
+      overflow-y: auto;
+    }
+
+    .page-header {
+      margin-bottom: 32px;
+    }
+
+    .page-title {
+      margin: 0 0 8px 0;
+      font-size: clamp(1.5rem, 2.5vw, 2rem);
+      font-weight: 700;
+    }
+
+    .page-subtitle {
+      margin: 0;
+      color: var(--text-secondary);
+      font-size: 1rem;
+    }
+
+    /* ===== CARDS ===== */
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px;
+      margin-bottom: 32px;
+    }
+
+    .card {
+      background: var(--bg-raised);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 24px;
+      transition: all var(--duration-slow) var(--ease-default);
+    }
+
+    .card:hover {
+      border-color: var(--border-strong);
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-ember);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .card-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: var(--ember-glow);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--ember);
+    }
+
+    .card-title {
+      margin: 0 0 4px 0;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .card-value {
+      font-size: clamp(1.75rem, 3vw, 2.5rem);
+      font-weight: 700;
+      margin: 0;
+    }
+
+    .card-delta {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      margin-top: 8px;
+    }
+
+    .card-delta.positive { color: var(--status-success); }
+    .card-delta.negative { color: var(--status-error); }
+
+    /* ===== STATUS BADGES ===== */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+
+    .badge-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .badge-active {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--status-success);
+    }
+    .badge-active .badge-dot { background: var(--status-success); }
+
+    .badge-syncing {
+      background: rgba(59, 130, 246, 0.15);
+      color: var(--status-info);
+    }
+    .badge-syncing .badge-dot { background: var(--status-info); }
+
+    .badge-ai {
+      background: rgba(168, 85, 247, 0.15);
+      color: var(--status-ai);
+    }
+    .badge-ai .badge-dot { background: var(--status-ai); }
+
+    /* ===== BUTTONS ===== */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all var(--duration-normal) var(--ease-default);
+      border: none;
+    }
+
+    .btn-primary {
+      background: var(--gradient-ember);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-ember);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border-default);
+      color: var(--text-primary);
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--ember);
+      background: var(--ember-glow);
+    }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-muted);
+    }
+
+    .btn-ghost:hover {
+      color: var(--text-primary);
+      background: var(--bg-hover);
+    }
+
+    /* ===== ACTIVITY FEED ===== */
+    .activity-section {
+      background: var(--bg-raised);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 24px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+
+    .section-title {
+      margin: 0;
+      font-size: 1.125rem;
+      font-weight: 600;
+    }
+
+    .activity-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .activity-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 12px;
+      border-radius: 10px;
+      background: var(--bg-base);
+      border: 1px solid var(--border-subtle);
+      transition: border-color var(--duration-normal) var(--ease-default);
+    }
+
+    .activity-item:hover {
+      border-color: var(--border-default);
+    }
+
+    .activity-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: var(--status-ai);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: white;
+      flex-shrink: 0;
+    }
+
+    .activity-avatar.human { background: var(--ember); }
+    .activity-avatar.system { background: var(--gold); color: var(--iron); }
+
+    .activity-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .activity-message {
+      margin: 0 0 4px 0;
+      font-size: 0.875rem;
+      color: var(--text-primary);
+    }
+
+    .activity-meta {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    /* ===== DATA TABLE ===== */
+    .table-container {
+      background: var(--bg-raised);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      overflow: hidden;
+      margin-top: 32px;
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .table th {
+      text-align: left;
+      padding: 14px 20px;
+      background: var(--bg-elevated);
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .table td {
+      padding: 16px 20px;
+      font-size: 0.875rem;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .table tr:hover td {
+      background: var(--bg-hover);
+    }
+
+    /* ===== FORGE BRAND ELEMENT ===== */
+    .forge-glow {
+      position: fixed;
+      bottom: -200px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 600px;
+      height: 400px;
+      background: radial-gradient(ellipse at center, var(--ember-glow) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ===== ANIMATIONS ===== */
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .animate-in {
+      animation: fadeInUp 0.7s var(--ease-default) forwards;
+    }
+
+    .delay-1 { animation-delay: 0.1s; opacity: 0; }
+    .delay-2 { animation-delay: 0.2s; opacity: 0; }
+    .delay-3 { animation-delay: 0.3s; opacity: 0; }
+    .delay-4 { animation-delay: 0.4s; opacity: 0; }
+
+    /* ===== PREVIEW INFO ===== */
+    .preview-info {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-default);
+      border-radius: 12px;
+      padding: 16px 20px;
+      font-size: 0.875rem;
+      z-index: 100;
+    }
+
+    .preview-info h4 {
+      margin: 0 0 8px 0;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+    }
+
+    .preview-info p {
+      margin: 0;
+      color: var(--text-secondary);
+    }
+
+    .preview-info .version {
+      color: var(--ember);
+      font-family: var(--font-mono);
+    }
+  </style>
+</head>
+<body>
+  <div class="forge-glow"></div>
+  
+  <div class="app-shell">
+    <!-- TITLEBAR -->
+    <header class="titlebar">
+      <div class="titlebar-drag">
+        <svg class="titlebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+          <path d="M2 17l10 5 10-5"/>
+          <path d="M2 12l10 5 10-5"/>
+        </svg>
+        <span class="titlebar-title">Team Forge</span>
+      </div>
+      <div class="titlebar-controls">
+        <button class="titlebar-btn" aria-label="Minimize">
+          <svg width="12" height="2" fill="currentColor"><rect width="12" height="2"/></svg>
+        </button>
+        <button class="titlebar-btn" aria-label="Maximize">
+          <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="10" height="10" rx="1"/></svg>
+        </button>
+        <button class="titlebar-btn close" aria-label="Close">
+          <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 1l10 10M11 1L1 11"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- SIDEBAR -->
+    <nav class="sidebar">
+      <a href="#" class="nav-item active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="7" height="7" rx="1"/>
+          <rect x="14" y="3" width="7" height="7" rx="1"/>
+          <rect x="3" y="14" width="7" height="7" rx="1"/>
+          <rect x="14" y="14" width="7" height="7" rx="1"/>
+        </svg>
+        <span class="nav-label">Dashboard</span>
+      </a>
+      <a href="#" class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        <span class="nav-label">Team</span>
+      </a>
+      <a href="#" class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="11" width="18" height="10" rx="2"/>
+          <circle cx="12" cy="5" r="3"/>
+        </svg>
+        <span class="nav-label">Agents</span>
+      </a>
+      
+      <div class="nav-group-label text-label">Integrations</div>
+      
+      <a href="#" class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+        </svg>
+        <span class="nav-label">Paperclip</span>
+      </a>
+      <a href="#" class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+        <span class="nav-label">Clockify</span>
+      </a>
+    </nav>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+      <div class="page-header animate-in">
+        <h1 class="page-title">Mission Control</h1>
+        <p class="page-subtitle">Orchestrate your team and AI agents across all platforms</p>
+      </div>
+
+      <!-- STATS CARDS -->
+      <div class="card-grid">
+        <div class="card animate-in delay-1">
+          <div class="card-header">
+            <div class="card-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+              </svg>
+            </div>
+            <span class="badge badge-active">
+              <span class="badge-dot"></span>
+              Active
+            </span>
+          </div>
+          <h3 class="card-title">Active Tasks</h3>
+          <p class="card-value text-gradient">24</p>
+          <p class="card-delta positive">+3 from yesterday</p>
+        </div>
+
+        <div class="card animate-in delay-2">
+          <div class="card-header">
+            <div class="card-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="11" width="18" height="10" rx="2"/>
+                <circle cx="12" cy="5" r="3"/>
+              </svg>
+            </div>
+            <span class="badge badge-ai">
+              <span class="badge-dot"></span>
+              AI
+            </span>
+          </div>
+          <h3 class="card-title">AI Agents Running</h3>
+          <p class="card-value text-gradient">7</p>
+          <p class="card-delta">3 Paperclip, 4 custom</p>
+        </div>
+
+        <div class="card animate-in delay-3">
+          <div class="card-header">
+            <div class="card-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <polyline points="12 6 12 12 16 14"/>
+              </svg>
+            </div>
+            <span class="badge badge-syncing">
+              <span class="badge-dot"></span>
+              Syncing
+            </span>
+          </div>
+          <h3 class="card-title">Hours Tracked</h3>
+          <p class="card-value text-gradient">142.5</p>
+          <p class="card-delta positive">On track for sprint</p>
+        </div>
+      </div>
+
+      <!-- ACTIVITY FEED -->
+      <section class="activity-section animate-in delay-4">
+        <div class="section-header">
+          <h2 class="section-title">Recent Activity</h2>
+          <button class="btn btn-ghost">View All</button>
+        </div>
+        <div class="activity-list">
+          <div class="activity-item">
+            <div class="activity-avatar">AI</div>
+            <div class="activity-content">
+              <p class="activity-message">Paperclip Agent completed code review on PR #847</p>
+              <span class="activity-meta">2 minutes ago</span>
+            </div>
+          </div>
+          <div class="activity-item">
+            <div class="activity-avatar human">SN</div>
+            <div class="activity-content">
+              <p class="activity-message">Shesh assigned 3 new tasks to Sprint 24</p>
+              <span class="activity-meta">15 minutes ago</span>
+            </div>
+          </div>
+          <div class="activity-item">
+            <div class="activity-avatar system">SY</div>
+            <div class="activity-content">
+              <p class="activity-message">Clockify sync completed - 8.5 hours logged today</p>
+              <span class="activity-meta">1 hour ago</span>
+            </div>
+          </div>
+          <div class="activity-item">
+            <div class="activity-avatar">AI</div>
+            <div class="activity-content">
+              <p class="activity-message">Research Agent found 12 relevant papers for Project Atlas</p>
+              <span class="activity-meta">2 hours ago</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- DATA TABLE -->
+      <div class="table-container animate-in delay-4">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Agent</th>
+              <th>Status</th>
+              <th>Platform</th>
+              <th>Last Activity</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="color: var(--text-primary); font-weight: 500;">Code Review Agent</td>
+              <td><span class="badge badge-active"><span class="badge-dot"></span>Active</span></td>
+              <td style="color: var(--text-secondary);">Paperclip</td>
+              <td style="font-family: var(--font-mono); color: var(--text-muted);">2 min ago</td>
+            </tr>
+            <tr>
+              <td style="color: var(--text-primary); font-weight: 500;">Research Agent</td>
+              <td><span class="badge badge-ai"><span class="badge-dot"></span>Processing</span></td>
+              <td style="color: var(--text-secondary);">Custom</td>
+              <td style="font-family: var(--font-mono); color: var(--text-muted);">5 min ago</td>
+            </tr>
+            <tr>
+              <td style="color: var(--text-primary); font-weight: 500;">Time Sync Agent</td>
+              <td><span class="badge badge-syncing"><span class="badge-dot"></span>Syncing</span></td>
+              <td style="color: var(--text-secondary);">Clockify</td>
+              <td style="font-family: var(--font-mono); color: var(--text-muted);">1 hr ago</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <div class="preview-info">
+    <h4>Design System</h4>
+    <p>Team Forge Foundry <span class="version">v2.0</span></p>
+  </div>
+</body>
+</html>

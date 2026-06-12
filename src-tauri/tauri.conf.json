@@ -1,6 +1,6 @@
 {
   "productName": "TeamForge",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "identifier": "com.thoughtseed.teamforge",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -12,7 +12,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "TeamForge — LCARS Mission Control",
+        "title": "TeamForge — Command Cortex",
         "width": 1280,
         "height": 800,
         "minWidth": 900,
@@ -46,8 +46,8 @@
       "signingIdentity": "Developer ID Application: Thoughtseed Private Limited (BS6SZR4929)"
     },
     "category": "public.app-category.business",
-    "shortDescription": "LCARS mission control for team operations and project orchestration",
-    "longDescription": "TeamForge unifies Clockify time tracking, Huly execution workflows, and a Cloudflare-backed TeamForge project control plane into a single native Mac app. Track quotas, monitor presence, link GitHub and Huly projects, manage artifacts, and operate the portfolio from one bridge.",
+    "shortDescription": "Command Cortex for agentic team operations and project orchestration",
+    "longDescription": "TeamForge unifies Paperclip agents, Clockify time tracking, Huly execution workflows, GitHub review gates, and a Cloudflare-backed project control plane into a single native Mac command cortex.",
     "copyright": "Copyright 2026 Thoughtseed",
     "publisher": "Thoughtseed",
     "homepage": "https://github.com/Sheshiyer/team-forge-ts",

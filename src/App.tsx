@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { Routes, Route, NavLink, Navigate, useNavigate } from "react-router-dom";
+import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
@@ -23,6 +23,7 @@ import Routines from "./pages/Routines";
 import Goals from "./pages/Goals";
 import Knowledge from "./pages/Knowledge";
 import Onboarding from "./pages/Onboarding";
+import MissionCortexPage from "./pages/MissionCortexPage";
 import Avatar from "./components/ui/Avatar";
 import DateRangePicker from "./components/ui/DateRangePicker";
 import CommandPalette from "./components/ui/CommandPalette";
@@ -31,13 +32,12 @@ import { useViewportWidth } from "./hooks/useViewportWidth";
 import { useAppStore } from "./stores/appStore";
 import type { NotificationItem, PaperclipStartupResult, PresenceStatus } from "./lib/types";
 
-// Sidebar shows founder-first mission control surfaces only.
-// All other pages remain reachable via command palette (⌘K) or direct URL.
 const navSections = [
   {
     label: "MISSION CONTROL",
     color: "var(--lcars-orange)",
     items: [
+      { path: "/mission-cortex", label: "Cortex", icon: "✺" },
       { path: "/", label: "Overview", icon: "◈" },
       { path: "/agents", label: "Agents", icon: "⬢" },
       { path: "/inbox", label: "Inbox", icon: "✉" },
@@ -75,6 +75,60 @@ const paletteOnlyPages: CommandItem[] = [
   { id: "page:boards", label: "Boards", section: "PAGES", icon: "→", action: () => {} },
 ];
 
+const classicFallbackPages = [
+  { path: "/classic/overview", label: "Classic Overview" },
+  { path: "/classic/inbox", label: "Classic Inbox" },
+  { path: "/classic/agents", label: "Classic Agents" },
+  { path: "/classic/projects", label: "Classic Projects" },
+  { path: "/classic/clients", label: "Classic Clients" },
+  { path: "/classic/issues", label: "Classic Issues" },
+  { path: "/classic/onboarding", label: "Classic Onboarding" },
+  { path: "/classic/activity", label: "Classic Activity" },
+  { path: "/classic/team", label: "Classic Team" },
+  { path: "/classic/timesheet", label: "Classic Timesheet" },
+  { path: "/classic/sprints", label: "Classic Sprints" },
+  { path: "/classic/insights", label: "Classic Insights" },
+  { path: "/classic/calendar", label: "Classic Calendar" },
+  { path: "/classic/comms", label: "Classic Comms" },
+  { path: "/classic/routines", label: "Classic Routines" },
+  { path: "/classic/goals", label: "Classic Goals" },
+  { path: "/classic/knowledge", label: "Classic Skills" },
+  { path: "/classic/boards", label: "Classic Boards" },
+  { path: "/classic/settings", label: "Classic Settings" },
+];
+
+const cortexRoutePrefixes = [
+  "/mission-cortex",
+  "/agents",
+  "/inbox",
+  "/projects",
+  "/clients",
+  "/issues",
+  "/onboarding",
+  "/activity",
+  "/team",
+  "/timesheet",
+  "/sprints",
+  "/insights",
+  "/calendar",
+  "/comms",
+  "/boards",
+  "/routines",
+  "/goals",
+  "/knowledge",
+  "/settings",
+  "/devices",
+  "/planner",
+  "/live",
+];
+
+function isCommandCortexPath(pathname: string): boolean {
+  if (pathname === "/") return true;
+  return cortexRoutePrefixes.some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`),
+  );
+}
+
 function getStardate(): string {
   const now = new Date();
   const start = new Date(now.getFullYear(), 0, 0);
@@ -86,6 +140,7 @@ function getStardate(): string {
 
 function App() {
   const navigate = useNavigate();
+  const location = useLocation();
   const viewportWidth = useViewportWidth();
   const [teamPresence, setTeamPresence] = useState<PresenceStatus[]>([]);
   const [appVersion, setAppVersion] = useState<string>("--");
@@ -102,6 +157,7 @@ function App() {
   const sidebarExpandedWidth = isCompactShell ? 208 : isTightShell ? 224 : 240;
   const sidebarWidth = sidebarCollapsed ? 52 : sidebarExpandedWidth;
   const visiblePresence = teamPresence.slice(0, isCompactShell ? 6 : 8);
+  const isCortexRoute = isCommandCortexPath(location.pathname);
 
   // Paperclip heartbeat polling every 15s
   useEffect(() => {
@@ -245,6 +301,14 @@ function App() {
       action: () => navigate(p.id.replace("page:", "/")),
     }));
 
+    const classicFallbacks: CommandItem[] = classicFallbackPages.map((page) => ({
+      id: `classic:${page.path}`,
+      label: page.label,
+      section: "CLASSIC FALLBACKS",
+      icon: "↩",
+      action: () => navigate(page.path),
+    }));
+
     const actions: CommandItem[] = [
       {
         id: "action:sync-all",
@@ -305,7 +369,7 @@ function App() {
       },
     ];
 
-    return [...nav, ...actions, ...secondary];
+    return [...nav, ...actions, ...secondary, ...classicFallbacks];
   }, [navigate]);
 
   // Keyboard navigation
@@ -314,6 +378,10 @@ function App() {
       if (e.metaKey || e.ctrlKey) {
         if (e.key === "k") {
           e.preventDefault();
+          if (isCortexRoute) {
+            window.dispatchEvent(new CustomEvent("cortex:focus-command"));
+            return;
+          }
           setPaletteOpen((prev) => !prev);
           return;
         }
@@ -343,7 +411,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [navigate]);
+  }, [isCortexRoute, navigate]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -393,6 +461,44 @@ function App() {
     check();
     return () => { cancelled = true; };
   }, []);
+
+  if (isCortexRoute) {
+    return (
+      <div className="cortex-app-frame">
+        <Routes>
+          <Route path="/" element={<MissionCortexPage />} />
+          <Route path="/mission-cortex" element={<MissionCortexPage />} />
+          <Route path="/agents/*" element={<MissionCortexPage />} />
+          <Route path="/inbox" element={<MissionCortexPage />} />
+          <Route path="/projects/*" element={<MissionCortexPage />} />
+          <Route path="/clients/*" element={<MissionCortexPage />} />
+          <Route path="/issues/*" element={<MissionCortexPage />} />
+          <Route path="/onboarding" element={<MissionCortexPage />} />
+          <Route path="/activity/*" element={<MissionCortexPage />} />
+          <Route path="/team/*" element={<MissionCortexPage />} />
+          <Route path="/timesheet" element={<MissionCortexPage />} />
+          <Route path="/sprints" element={<MissionCortexPage />} />
+          <Route path="/insights" element={<MissionCortexPage />} />
+          <Route path="/calendar" element={<MissionCortexPage />} />
+          <Route path="/comms" element={<MissionCortexPage />} />
+          <Route path="/boards" element={<MissionCortexPage />} />
+          <Route path="/routines" element={<MissionCortexPage />} />
+          <Route path="/goals" element={<MissionCortexPage />} />
+          <Route path="/knowledge" element={<MissionCortexPage />} />
+          <Route path="/settings" element={<MissionCortexPage />} />
+          <Route path="/devices" element={<Navigate to="/issues" replace />} />
+          <Route path="/planner" element={<Navigate to="/team/capacity" replace />} />
+          <Route path="/live" element={<Navigate to="/agents" replace />} />
+          <Route path="*" element={<Navigate to="/mission-cortex" replace />} />
+        </Routes>
+        <CommandPalette
+          open={paletteOpen}
+          onClose={() => setPaletteOpen(false)}
+          items={commandItems}
+        />
+      </div>
+    );
+  }
 
   return (
     <div style={styles.shell}>
@@ -774,28 +880,26 @@ function App() {
           }}
         >
           <Routes>
-            <Route path="/" element={<Overview />} />
-            <Route path="/inbox" element={<Inbox />} />
-            <Route path="/timesheet" element={<Timesheet />} />
-            <Route path="/projects" element={<Projects />} />
-            <Route path="/sprints" element={<Sprints />} />
-        <Route path="/insights" element={<Insights />} />
-        <Route path="/team/*" element={<Team />} />
-        <Route path="/calendar" element={<Calendar />} />
-        <Route path="/comms" element={<Comms />} />
-            <Route path="/boards" element={<Boards />} />
-            <Route path="/clients" element={<Clients />} />
-            <Route path="/issues" element={<Issues />} />
-            <Route path="/routines" element={<Routines />} />
-            <Route path="/goals" element={<Goals />} />
-            <Route path="/devices" element={<Navigate to="/issues" replace />} />
-            <Route path="/knowledge" element={<Knowledge />} />
-            <Route path="/onboarding" element={<Onboarding />} />
-            <Route path="/planner" element={<Navigate to="/team/capacity" replace />} />
-            <Route path="/activity" element={<Activity />} />
-          <Route path="/agents/*" element={<Agents />} />
-            <Route path="/live" element={<Navigate to="/agents" replace />} />
-            <Route path="/settings" element={<Settings />} />
+            <Route path="/classic" element={<Navigate to="/classic/overview" replace />} />
+            <Route path="/classic/overview" element={<Overview />} />
+            <Route path="/classic/inbox" element={<Inbox />} />
+            <Route path="/classic/projects" element={<Projects />} />
+            <Route path="/classic/sprints" element={<Sprints />} />
+            <Route path="/classic/insights" element={<Insights />} />
+            <Route path="/classic/team/*" element={<Team />} />
+            <Route path="/classic/calendar" element={<Calendar />} />
+            <Route path="/classic/comms" element={<Comms />} />
+            <Route path="/classic/boards" element={<Boards />} />
+            <Route path="/classic/clients" element={<Clients />} />
+            <Route path="/classic/issues" element={<Issues />} />
+            <Route path="/classic/routines" element={<Routines />} />
+            <Route path="/classic/goals" element={<Goals />} />
+            <Route path="/classic/knowledge" element={<Knowledge />} />
+            <Route path="/classic/onboarding" element={<Onboarding />} />
+            <Route path="/classic/activity" element={<Activity />} />
+            <Route path="/classic/agents/*" element={<Agents />} />
+            <Route path="/classic/timesheet" element={<Timesheet />} />
+            <Route path="/classic/settings" element={<Settings />} />
           </Routes>
         </div>
       </main>

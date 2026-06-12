@@ -13,6 +13,42 @@ All notable changes to TeamForge are documented in this file.
   fail-closed (401 instead of `{email: null}`), so Plexus `accessLogin()`
   resolves the real signed-in email. Bearer/internal m2m paths unchanged.
 
+## v0.3.1 - 2026-06-12
+
+Codename: Calliope.
+
+Command Cortex OTA release. This release replaces the default LCARS/dashboard shell with the Mission Cortex neural command surface and preserves every old page behind reversible classic fallback routes.
+
+### Added
+
+- **Command Cortex home** — `/` and `/mission-cortex` now open the tactical neural command field instead of the classic Overview dashboard.
+- **Lens-routed legacy surfaces** — normal routes now map to Command Cortex lenses:
+  - Mission: `/`, `/mission-cortex`, `/inbox`
+  - Agents: `/agents`, `/team`
+  - Work: `/projects`, `/sprints`, `/boards`
+  - Clients: `/clients`, `/onboarding`
+  - Risk: `/issues`, `/settings`
+  - Signals: `/activity`, `/timesheet`, `/calendar`, `/comms`, `/insights`
+  - Memory: `/knowledge`, `/goals`, `/routines`
+- **Classic fallback namespace** — old React pages remain reachable under `/classic/...` for rollback and debugging.
+- **Live graph adapter** — Mission Cortex synthesizes TeamForge, Paperclip, GitHub, Huly, Clockify, and activity data through existing read-only Tauri commands.
+
+### Changed
+
+- App metadata and window title now describe the Command Cortex surface.
+- Core command actions remain safe UI stubs until dedicated Tauri mutation commands receive security review.
+
+### Verification
+
+- `pnpm build`
+- Browser route screenshots for `/`, `/agents`, `/knowledge`, `/settings`, and `/classic/overview`
+- Tauri runtime smoke: `pnpm tauri dev` reached database initialization, Huly connection, and scheduler startup
+
+### Known Limitations
+
+- Local native visual verification is still blocked until macOS Screen Recording and Accessibility permissions are granted for the native capture tool.
+- Classic fallback routes still require the Tauri runtime for pages that call `invoke` directly.
+
 ## v0.3.0 - 2026-06-10
 
 Founder-First Agent Mission Control reorientation. The app is now structured as
