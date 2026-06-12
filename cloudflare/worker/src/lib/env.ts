@@ -68,4 +68,6 @@ export interface Env {
   // Used as alternative to TF_CREDENTIAL_ENVELOPE_KEY for app routes. Caller sends header "X-TeamForge-Internal-Secret".
   // Requires the request to pass the Access policy (e.g. via IP bypass on allowed machines).
   TF_INTERNAL_SHARED_SECRET?: string;
+  // Phase 7: Paperclip repo root for per-member provisioning
+  TF_PAPERCLIP_REPO_ROOT?: string;
 }
