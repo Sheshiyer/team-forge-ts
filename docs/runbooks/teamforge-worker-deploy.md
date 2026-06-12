@@ -97,6 +97,21 @@ flag. Preserve the step-1 snapshot as reconciliation evidence.
   wrangler reconciles by filename and a "cleanup" would re-apply confusion.
 - **Migration order going forward:** `0006_handoffs` → `0007_time_entries` →
   `0008_employees_email_unique` (WS3) → `0009_project_assignments` (WS4).
-- **Cloudflare Access is inert** until `TF_ACCESS_TEAM_DOMAIN` + `TF_ACCESS_AUD`
-  are set (WS5 / [#81](https://github.com/Sheshiyer/team-forge-ts/issues/81));
-  app routes use the Bearer/internal path until then.
+- **Cloudflare Access is LIVE** since WS5
+  ([#81](https://github.com/Sheshiyer/team-forge-ts/issues/81)):
+  `TF_ACCESS_TEAM_DOMAIN` (`red-queen-4dfa.cloudflareaccess.com`) and
+  `TF_ACCESS_AUD` (comma-separated AUDs of the two Access apps:
+  plexus-api.thoughtseed.space + forge.thoughtseed.space) are set in
+  `wrangler.jsonc` vars. `GET /v1/whoami` is Access-JWT-only and **fail-closed**
+  (401 without a verified identity). The workers.dev hostname remains the
+  Access-bypassing m2m path (operator parity/roster pushes, Hermes) — those
+  callers authenticate with Bearer/internal secret as before.
+  - *Historical bug fixed here:* issue #81 was filed against a var-name mismatch
+    (`access.ts` read `TF_ACCESS_AUD` while only `TF_ACCESS_AUDIENCE` was set —
+    the latter is the `/v1/credentials` `?audience=` echo check, a different
+    concern). Resolution kept `TF_ACCESS_AUD` for JWT verify and set it for real.
+  - *Rollback:* `wrangler.jsonc` has `keep_vars: true`, so **deleting the vars
+    from the file does NOT unset them on deploy** — use `wrangler rollback`, set
+    them to `""`, or delete them in the dashboard. Unset/empty vars revert
+    `verifyAccessJwt` to a no-op (Bearer-era behavior); whoami then 401s but no
+    other route changes.
