@@ -65,6 +65,10 @@
     {
       "pattern": "forge.thoughtseed.space",
       "custom_domain": true
+    },
+    {
+      "pattern": "plexus-api.thoughtseed.space",
+      "custom_domain": true
     }
   ]
 }
