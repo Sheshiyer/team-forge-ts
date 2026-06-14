@@ -15,41 +15,20 @@
  *   - Click-to-select a node; drag-to-move it freely in 3D space.
  */
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Edges, Html, OrbitControls, Stars, useGLTF } from "@react-three/drei";
+import { Edges, Html, OrbitControls, Stars } from "@react-three/drei";
 import { Bloom, ChromaticAberration, EffectComposer, Vignette } from "@react-three/postprocessing";
 import { BlendFunction } from "postprocessing";
-import { createContext, useContext, useEffect, useMemo, useRef, useState, Suspense, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
 import type { CortexGraph, CortexLensId, CortexNode, CortexPath, CortexSignal, CortexSignalState } from "../../lib/commandCortex/types";
 
-/* ---- Meshy-generated GLB assets per node kind ----------------------------
- * Each kind has a real 3D mesh generated from its V3 specimen plate via
- * Meshy AI image-to-3D. See docs/cortex-3d-meshy-workflow.md and
- * scripts/meshy-run-all-glyphs.sh. NodeForm uses these when available;
- * the procedural geometric form is the fallback (still in place for the
- * mission Nucleus and as a Suspense fallback during GLB load).            */
-import nodeClientUrl from "../../assets/3d/node-client.glb?url";
-import nodeProjectUrl from "../../assets/3d/node-project.glb?url";
-import nodeAgentUrl from "../../assets/3d/node-agent.glb?url";
-import nodeHumanUrl from "../../assets/3d/node-human.glb?url";
-import nodeIssueUrl from "../../assets/3d/node-issue.glb?url";
-import nodeMemoryUrl from "../../assets/3d/node-memory.glb?url";
-import nodeApprovalUrl from "../../assets/3d/node-approval.glb?url";
-import nodeRoutineUrl from "../../assets/3d/node-routine.glb?url";
-
-const KIND_GLB: Record<string, string> = {
-  client: nodeClientUrl,
-  project: nodeProjectUrl,
-  agent: nodeAgentUrl,
-  human: nodeHumanUrl,
-  issue: nodeIssueUrl,
-  memory: nodeMemoryUrl,
-  approval: nodeApprovalUrl,
-  routine: nodeRoutineUrl,
-};
-
-// Preload all so they're cached by the time Suspense first asks for them.
-for (const url of Object.values(KIND_GLB)) useGLTF.preload(url);
+/* The Meshy-generated GLBs in src/assets/3d/ are intentionally NOT imported
+ * here. Loading 77 MB of binary mesh data on page paint is too heavy for the
+ * default MISSION view, and at MISSION zoom the meshes were too small
+ * compared to the data leaves anyway. The assets stay in the repo for a
+ * future opt-in "examine specimen" deep-zoom mode (loaded on demand only
+ * when the user drills into a single node at FOCUS stage). See
+ * docs/cortex-3d-meshy-workflow.md. */
 
 /* ---- Locked zoom stages ---------------------------------------------------
  * V3 design implies four distinct "altitude" reads, not free zoom:
@@ -452,57 +431,8 @@ interface NodeFormProps {
   innerEmissive: number;
 }
 
-/** Real 3D mesh loaded from a Meshy-generated GLB. Loaded once via useGLTF,
- *  cloned per instance so transforms don't fight each other. Wrapped in
- *  Suspense by the caller so the procedural form is the loading fallback. */
-function NodeGltf({ url, kind, color, emissive }: { url: string; kind: string; color: string; emissive: number }) {
-  const { scene } = useGLTF(url);
-  // Per-instance clone so multiple nodes of the same kind don't share xforms
-  const cloned = useMemo(() => {
-    const c = scene.clone(true);
-    // Tint the GLB with the state color via emissive — preserves the meshy
-    // texture but lets state changes still read.
-    c.traverse((obj) => {
-      if ((obj as THREE.Mesh).isMesh) {
-        const mesh = obj as THREE.Mesh;
-        const mat = mesh.material as THREE.MeshStandardMaterial;
-        if (mat && "emissive" in mat) {
-          mat.emissive = new THREE.Color(color);
-          mat.emissiveIntensity = emissive * 0.5;
-        }
-      }
-    });
-    return c;
-  }, [scene, color, emissive]);
-  // Per-kind scale tuning — Meshy outputs at varying world sizes; this brings
-  // them into rough parity with the procedural form sizes (r ~ 0.22).
-  const scale = useMemo(() => {
-    const map: Record<string, number> = {
-      client: 0.32,
-      project: 0.32,
-      agent: 0.32,
-      human: 0.32,
-      issue: 0.32,
-      memory: 0.34,
-      approval: 0.32,
-      routine: 0.32,
-    };
-    return map[kind] ?? 0.32;
-  }, [kind]);
-  return <primitive object={cloned} scale={scale} />;
-}
-
 function NodeForm({ kind, color, emissive, innerEmissive }: NodeFormProps) {
-  // If we have a Meshy GLB for this kind, prefer it over the procedural form.
-  // Suspense lets the procedural shape render until the GLB streams in.
-  const glbUrl = KIND_GLB[kind];
-  if (glbUrl) {
-    return (
-      <Suspense fallback={<ProceduralForm kind={kind} color={color} emissive={emissive} innerEmissive={innerEmissive} />}>
-        <NodeGltf url={glbUrl} kind={kind} color={color} emissive={emissive} />
-      </Suspense>
-    );
-  }
+  // Pure procedural — no GLB loading. See top-of-file note explaining why.
   return <ProceduralForm kind={kind} color={color} emissive={emissive} innerEmissive={innerEmissive} />;
 }
 
@@ -515,12 +445,12 @@ function ProceduralForm({ kind, color, emissive, innerEmissive }: NodeFormProps)
       return (
         <group>
           <mesh>
-            <octahedronGeometry args={[0.22, 0]} />
+            <octahedronGeometry args={[0.32, 0]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.35} transparent opacity={0.16} roughness={0.4} metalness={0.5} side={THREE.DoubleSide} />
             <Edges color={color} threshold={1} linewidth={1.2} />
           </mesh>
           <mesh>
-            <octahedronGeometry args={[0.11, 1]} />
+            <octahedronGeometry args={[0.16, 1]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={innerEmissive} roughness={0.25} metalness={0.3} />
           </mesh>
         </group>
@@ -531,12 +461,12 @@ function ProceduralForm({ kind, color, emissive, innerEmissive }: NodeFormProps)
       return (
         <group>
           <mesh rotation={[0, Math.PI / 6, 0]}>
-            <cylinderGeometry args={[0.16, 0.16, 0.26, 6, 1]} />
+            <cylinderGeometry args={[0.22, 0.22, 0.34, 6, 1]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.4} transparent opacity={0.22} roughness={0.4} metalness={0.4} />
             <Edges color={color} threshold={15} linewidth={1.2} />
           </mesh>
-          <mesh position={[0, 0.22, 0]} rotation={[0, Math.PI / 6, 0]}>
-            <coneGeometry args={[0.16, 0.18, 6]} />
+          <mesh position={[0, 0.3, 0]} rotation={[0, Math.PI / 6, 0]}>
+            <coneGeometry args={[0.22, 0.24, 6]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.7} transparent opacity={0.4} roughness={0.3} />
             <Edges color={color} threshold={15} linewidth={1.2} />
           </mesh>
@@ -552,7 +482,7 @@ function ProceduralForm({ kind, color, emissive, innerEmissive }: NodeFormProps)
       return (
         <group>
           <mesh>
-            <dodecahedronGeometry args={[0.2, 0]} />
+            <dodecahedronGeometry args={[0.28, 0]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.3} transparent opacity={0.18} roughness={0.35} metalness={0.5} side={THREE.DoubleSide} />
             <Edges color={color} threshold={15} linewidth={1.2} />
           </mesh>
@@ -568,7 +498,7 @@ function ProceduralForm({ kind, color, emissive, innerEmissive }: NodeFormProps)
       return (
         <group>
           <mesh rotation={[0.3, 0.6, 0]}>
-            <tetrahedronGeometry args={[0.26, 0]} />
+            <tetrahedronGeometry args={[0.36, 0]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.4} transparent opacity={0.2} roughness={0.45} metalness={0.45} side={THREE.DoubleSide} />
             <Edges color={color} threshold={1} linewidth={1.4} />
           </mesh>
@@ -584,12 +514,12 @@ function ProceduralForm({ kind, color, emissive, innerEmissive }: NodeFormProps)
       return (
         <group>
           <mesh rotation={[0, 0, 0]}>
-            <cylinderGeometry args={[0.15, 0.15, 0.28, 3, 1]} />
+            <cylinderGeometry args={[0.2, 0.2, 0.38, 3, 1]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.4} transparent opacity={0.22} roughness={0.4} metalness={0.4} />
             <Edges color={color} threshold={15} linewidth={1.2} />
           </mesh>
-          <mesh position={[0, 0.2, 0]}>
-            <coneGeometry args={[0.14, 0.16, 3]} />
+          <mesh position={[0, 0.28, 0]}>
+            <coneGeometry args={[0.18, 0.22, 3]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.7} transparent opacity={0.4} roughness={0.3} />
             <Edges color={color} threshold={15} linewidth={1.2} />
           </mesh>
@@ -624,7 +554,7 @@ function ProceduralForm({ kind, color, emissive, innerEmissive }: NodeFormProps)
       return (
         <group>
           <mesh>
-            <octahedronGeometry args={[0.22, 0]} />
+            <octahedronGeometry args={[0.32, 0]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.4} transparent opacity={0.22} roughness={0.35} metalness={0.5} side={THREE.DoubleSide} />
             <Edges color={color} threshold={1} linewidth={1.3} />
           </mesh>
