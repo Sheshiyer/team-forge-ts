@@ -36,6 +36,7 @@ import nodeIssueUrl from "../../assets/3d/node-issue.glb?url";
 import nodeMemoryUrl from "../../assets/3d/node-memory.glb?url";
 import nodeApprovalUrl from "../../assets/3d/node-approval.glb?url";
 import nodeRoutineUrl from "../../assets/3d/node-routine.glb?url";
+import missionNucleusUrl from "../../assets/3d/mission-nucleus.glb?url";
 
 const KIND_GLB: Record<string, string> = {
   client: nodeClientUrl,
@@ -296,42 +297,38 @@ function Nucleus() {
 
   return (
     <group>
-      <pointLight intensity={28} distance={14} color="#18d7ff" decay={1.9} />
+      <pointLight intensity={22} distance={14} color="#18d7ff" decay={1.9} />
 
-      <mesh ref={innerRef}>
-        <icosahedronGeometry args={[0.62, 5]} />
-        <meshStandardMaterial
-          color={new THREE.Color("#9ff0ff")}
-          emissive={new THREE.Color("#18d7ff")}
-          emissiveIntensity={1.4}
-          roughness={0.22}
-          metalness={0.12}
-        />
-      </mesh>
+      {/* Mission specimen — the Meshy mission-nucleus glyph replaces the
+          prior procedural cyan ball + shell + halo. Suspense renders nothing
+          (transparent group) while it streams in; the point light + rings +
+          flare cross still establish presence during load. */}
+      <Suspense fallback={<group ref={innerRef} />}>
+        <group ref={innerRef}>
+          <NucleusGltf />
+        </group>
+      </Suspense>
 
-      <mesh>
-        <sphereGeometry args={[0.82, 48, 48]} />
-        <meshBasicMaterial color="#7ee9ff" transparent opacity={0.14} side={THREE.BackSide} />
-      </mesh>
-
-      <mesh ref={haloRef}>
-        <sphereGeometry args={[1.45, 48, 48]} />
-        <meshBasicMaterial color="#18d7ff" transparent opacity={0.08} side={THREE.BackSide} depthWrite={false} />
+      {/* haloRef still declared as an invisible target so the existing
+          useFrame doesn't need to branch on whether the halo exists. */}
+      <mesh ref={haloRef} visible={false}>
+        <sphereGeometry args={[0.01, 4, 4]} />
+        <meshBasicMaterial />
       </mesh>
 
       <mesh ref={ringARef} rotation={[Math.PI / 2.2, 0, 0]}>
         <torusGeometry args={[1.8, 0.012, 16, 160]} />
-        <meshBasicMaterial color="#9ff0ff" transparent opacity={0.4} />
+        <meshBasicMaterial color="#9ff0ff" transparent opacity={0.32} />
       </mesh>
 
       <mesh ref={ringBRef} rotation={[Math.PI / 2, Math.PI / 5, 0]}>
         <torusGeometry args={[2.4, 0.008, 16, 200]} />
-        <meshBasicMaterial color="#18d7ff" transparent opacity={0.24} />
+        <meshBasicMaterial color="#18d7ff" transparent opacity={0.18} />
       </mesh>
 
       <mesh rotation={[0, 0, 0]}>
         <torusGeometry args={[3.1, 0.005, 12, 240]} />
-        <meshBasicMaterial color="#39ff88" transparent opacity={0.15} />
+        <meshBasicMaterial color="#39ff88" transparent opacity={0.12} />
       </mesh>
     </group>
   );
@@ -447,6 +444,29 @@ interface NodeFormProps {
   color: string;
   emissive: number;
   innerEmissive: number;
+}
+
+/** Mission nucleus specimen — the Meshy-generated mission-nucleus GLB.
+ *  Replaces the prior procedural cyan ball + halo + shell stack. */
+function NucleusGltf() {
+  const { scene } = useGLTF(missionNucleusUrl);
+  const cloned = useMemo(() => {
+    const c = scene.clone(true);
+    c.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (mesh.isMesh) {
+        const mat = mesh.material as THREE.MeshStandardMaterial;
+        if (mat && "emissive" in mat) {
+          mat.emissive = new THREE.Color("#18d7ff");
+          mat.emissiveIntensity = 1.8;
+          mat.toneMapped = false;
+        }
+      }
+    });
+    return c;
+  }, [scene]);
+  // Mission is the visual centre; it can be bigger than the satellite nodes.
+  return <primitive object={cloned} scale={1.5} />;
 }
 
 /** Real 3D mesh loaded lazily from a Meshy-generated GLB. useGLTF here
@@ -1176,19 +1196,21 @@ function InflammationHalo({ intensity, label }: { intensity: number; label?: str
 
   return (
     <group>
-      {/* Soft atmospheric haze — much subtler than before so the GLB reads */}
-      <mesh ref={haloRef}>
-        <sphereGeometry args={[baseR, 32, 32]} />
-        <meshBasicMaterial color="#ff2f7a" transparent opacity={0.1} side={THREE.BackSide} depthWrite={false} />
-      </mesh>
+      {/* No surrounding sphere — the Meshy issue GLB has its own inflamed
+          silhouette. Just an atmospheric point light tinted magenta and the
+          metric badge. */}
       <pointLight ref={lightRef} color="#ff2f7a" distance={baseR * 5} intensity={4 * intensity} decay={1.7} />
       <MetricBadge
         text={label ? `${label.toUpperCase()} · INFLAMED` : "INFLAMED"}
         position={[0, baseR + 0.4, 0]}
         tone="danger"
       />
-      {/* coreRef + ringRef still declared but no longer rendered — refs left
-          to keep the useFrame happy without an extra branch */}
+      {/* haloRef + coreRef + ringRef still declared so useFrame doesn't need
+          conditional refs. They render at scale 0 / hidden. */}
+      <mesh ref={haloRef} visible={false}>
+        <sphereGeometry args={[0.01, 4, 4]} />
+        <meshBasicMaterial />
+      </mesh>
       <mesh ref={coreRef} visible={false}>
         <sphereGeometry args={[0.01, 4, 4]} />
         <meshBasicMaterial />
