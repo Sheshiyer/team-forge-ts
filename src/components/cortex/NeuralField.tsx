@@ -1176,31 +1176,27 @@ function InflammationHalo({ intensity, label }: { intensity: number; label?: str
 
   return (
     <group>
+      {/* Soft atmospheric haze — much subtler than before so the GLB reads */}
       <mesh ref={haloRef}>
         <sphereGeometry args={[baseR, 32, 32]} />
-        <meshBasicMaterial color="#ff2f7a" transparent opacity={0.28} side={THREE.BackSide} depthWrite={false} />
+        <meshBasicMaterial color="#ff2f7a" transparent opacity={0.1} side={THREE.BackSide} depthWrite={false} />
       </mesh>
-      <mesh ref={coreRef}>
-        <icosahedronGeometry args={[0.48, 2]} />
-        <meshStandardMaterial
-          color="#ff2f7a"
-          emissive="#ff2f7a"
-          emissiveIntensity={2.5}
-          roughness={0.4}
-          transparent
-          opacity={0.85}
-        />
-      </mesh>
-      <mesh ref={ringRef} rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[baseR * 0.85, 0.016, 8, 96]} />
-        <meshStandardMaterial color="#ff2f7a" emissive="#ff2f7a" emissiveIntensity={1.5} transparent opacity={0.7} />
-      </mesh>
-      <pointLight ref={lightRef} color="#ff2f7a" distance={baseR * 5} intensity={6 * intensity} decay={1.6} />
+      <pointLight ref={lightRef} color="#ff2f7a" distance={baseR * 5} intensity={4 * intensity} decay={1.7} />
       <MetricBadge
         text={label ? `${label.toUpperCase()} · INFLAMED` : "INFLAMED"}
         position={[0, baseR + 0.4, 0]}
         tone="danger"
       />
+      {/* coreRef + ringRef still declared but no longer rendered — refs left
+          to keep the useFrame happy without an extra branch */}
+      <mesh ref={coreRef} visible={false}>
+        <sphereGeometry args={[0.01, 4, 4]} />
+        <meshBasicMaterial />
+      </mesh>
+      <mesh ref={ringRef} visible={false}>
+        <sphereGeometry args={[0.01, 4, 4]} />
+        <meshBasicMaterial />
+      </mesh>
     </group>
   );
 }
@@ -1232,11 +1228,11 @@ function FlowLoop({ color, intensity, label }: { color: string; intensity: numbe
       </mesh>
       <mesh rotation={[Math.PI / 2, 0, 0]}>
         <torusGeometry args={[0.9, 0.005, 8, 96]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.4} transparent opacity={0.22} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.3} transparent opacity={0.1} />
       </mesh>
       <mesh ref={trimRef} rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[0.72, 0.012, 8, 96, arcExtent * 0.7]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.4} transparent opacity={0.7} />
+        <torusGeometry args={[0.72, 0.008, 8, 96, arcExtent * 0.7]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.9} transparent opacity={0.35} />
       </mesh>
       <mesh ref={pulseRef} rotation={[Math.PI / 2, 0, 0]}>
         <sphereGeometry args={[0.055, 12, 12]} />
@@ -1252,8 +1248,9 @@ function FlowLoop({ color, intensity, label }: { color: string; intensity: numbe
 }
 
 function MemoryRings() {
-  // Memory: 3 concentric rings + 5 labeled memory shards spread around.
-  const tilts = [0, Math.PI / 5, -Math.PI / 6];
+  // Memory: 5 labeled memory shards. Guide tori dropped — the GLB body
+  // already reads as concentric layered sediment; extra rings competed
+  // with the specimen.
   const shards = useMemo(() => {
     return [0, 1, 2, 3, 4].map((i) => {
       const a = (i / 5) * Math.PI * 2 + 0.2;
@@ -1268,21 +1265,6 @@ function MemoryRings() {
   }, []);
   return (
     <group>
-      {tilts.map((tilt, i) => {
-        const r = 0.6 + i * 0.16;
-        return (
-          <mesh key={i} rotation={[Math.PI / 2 + tilt, 0, 0]}>
-            <torusGeometry args={[r, 0.008, 8, 96]} />
-            <meshStandardMaterial
-              color={i === 0 ? "#39ff88" : "#83918c"}
-              emissive={i === 0 ? "#39ff88" : "#83918c"}
-              emissiveIntensity={1.0 - i * 0.22}
-              transparent
-              opacity={0.6 - i * 0.12}
-            />
-          </mesh>
-        );
-      })}
       {shards.map((s, i) => (
         <LeafBranch key={i} end={s.end} color="#83918c" label={s.label} size={0.046} />
       ))}
@@ -1341,30 +1323,22 @@ function NodeContext({ node, color }: { node: CortexNode; color: string }) {
 /* PulseSelection — pulsing animated ring around a selected node               */
 /* -------------------------------------------------------------------------- */
 function PulseSelection({ color }: { color: string }) {
-  const outerRef = useRef<THREE.Mesh>(null);
-  const innerRef = useRef<THREE.Mesh>(null);
+  // Single soft pulsing ring — the prior double-ring competed with the
+  // GLB silhouette.
+  const ringRef = useRef<THREE.Mesh>(null);
   useFrame(({ clock }) => {
     const t = clock.elapsedTime * 1.4;
     const s = 1 + Math.sin(t) * 0.08;
-    if (outerRef.current) {
-      outerRef.current.scale.set(s, s, s);
-      (outerRef.current.material as THREE.MeshBasicMaterial).opacity = 0.55 + Math.sin(t + 0.5) * 0.25;
-    }
-    if (innerRef.current) {
-      innerRef.current.rotation.z = t * 0.6;
+    if (ringRef.current) {
+      ringRef.current.scale.set(s, s, s);
+      (ringRef.current.material as THREE.MeshBasicMaterial).opacity = 0.28 + Math.sin(t + 0.5) * 0.18;
     }
   });
   return (
-    <group>
-      <mesh ref={outerRef}>
-        <torusGeometry args={[0.62, 0.014, 8, 80]} />
-        <meshBasicMaterial color={color} transparent opacity={0.6} depthWrite={false} />
-      </mesh>
-      <mesh ref={innerRef} rotation={[0, 0, 0]}>
-        <torusGeometry args={[0.42, 0.008, 8, 64]} />
-        <meshBasicMaterial color={color} transparent opacity={0.45} depthWrite={false} />
-      </mesh>
-    </group>
+    <mesh ref={ringRef}>
+      <torusGeometry args={[0.7, 0.008, 8, 80]} />
+      <meshBasicMaterial color={color} transparent opacity={0.32} depthWrite={false} />
+    </mesh>
   );
 }
 
