@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CortexLensDefinition } from "../../lib/commandCortex/lensTypes";
 import type { CortexCommand, CortexGraph, CortexLensId, CortexNode } from "../../lib/commandCortex/types";
 import { getCommandsForNode } from "../../lib/commandCortex/commandRules";
-import CommandRing from "./CommandRing";
 import LensRail from "./LensRail";
 import NeuralField from "./NeuralField";
 import TacticalMembrane from "./TacticalMembrane";
@@ -83,6 +82,21 @@ export default function MissionCortex({
       if (event.key === "Escape") {
         commandInputRef.current?.blur();
       }
+      // ⇧1-4 → run lens quick-action against selected node (or mission default)
+      if (event.shiftKey && /^[1-4]$/.test(event.key)) {
+        const idx = Number(event.key) - 1;
+        const activeLensDef = lenses.find((l) => l.id === activeLens);
+        const cmdId = activeLensDef?.quickActions[idx];
+        if (cmdId) {
+          const cmd = commands.find((c) => c.id === cmdId);
+          const targetNode = selectedNode ?? graph.nodes.find((n) => n.kind === "mission") ?? graph.nodes[0];
+          if (cmd && targetNode) {
+            event.preventDefault();
+            onCommand(cmd, targetNode);
+            return;
+          }
+        }
+      }
       if ((event.metaKey || event.ctrlKey) && /^[1-7]$/.test(event.key)) {
         const lens = lenses[Number(event.key) - 1];
         if (lens) {
@@ -93,7 +107,7 @@ export default function MissionCortex({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [lenses, onSelectLens]);
+  }, [lenses, onSelectLens, activeLens, commands, graph.nodes, onCommand, selectedNode]);
 
   const submitIntent = () => {
     if (!selectedNode || selectedCommands.length === 0) return;
@@ -167,16 +181,38 @@ export default function MissionCortex({
         activeLens={activeLens}
         selectedNodeId={selectedNode?.id ?? null}
         onSelectNode={onSelectNode}
-      />
-
-      <CommandRing
-        node={selectedNode ?? null}
-        commands={selectedCommands}
-        onCommand={(commandId) => {
-          const command = selectedCommands.find((item) => item.id === commandId);
-          if (command && selectedNode) onCommand(command, selectedNode);
+        onCommand={(commandId, node) => {
+          const command = selectedCommands.find((item) => item.id === commandId)
+            ?? commands.find((c) => c.id === commandId);
+          if (command) onCommand(command, node);
         }}
       />
+
+      {/* Quick-action cards per current lens — V3 mockup 06 bottom row.
+          Hot-bound to ⇧1-4 (⌘1-7 are lens switchers). Each card fires the
+          lens's chosen quickAction against the selected node (or mission). */}
+      <div className="cortex-quick-actions" aria-label="Lens quick actions">
+        {activeLensDefinition.quickActions.map((cmdId, i) => {
+          const command = commands.find((c) => c.id === cmdId);
+          if (!command) return null;
+          const targetNode = selectedNode ?? graph.nodes.find((n) => n.kind === "mission") ?? graph.nodes[0];
+          return (
+            <button
+              key={cmdId}
+              type="button"
+              className="cortex-quick-action"
+              data-index={i + 1}
+              onClick={() => {
+                if (targetNode) onCommand(command, targetNode);
+              }}
+              title={command.description}
+            >
+              <span className="cortex-quick-action__hotkey">⇧{i + 1}</span>
+              <span className="cortex-quick-action__label">{command.label}</span>
+            </button>
+          );
+        })}
+      </div>
 
       <TacticalMembrane
         node={selectedNode ?? null}

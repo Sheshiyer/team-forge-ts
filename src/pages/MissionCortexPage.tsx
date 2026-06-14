@@ -108,7 +108,13 @@ export default function MissionCortexPage() {
       onSelectLens={setActiveLens}
       onSelectNode={setSelectedNodeId}
       onCommand={(command, node) => {
-        setLastCommand(describeCommandStub(command, node));
+        // Stub for now: format → "[HH:MM:SS] command on node — description".
+        // Tier 2 follow-up will switch this to a real Tauri invoke per
+        // command kind (paperclip_summon_agent, github_approve_pr, etc.)
+        // and reflect the ack timing back into lastCommand.
+        const ts = new Date().toISOString().slice(11, 19);
+        const stub = describeCommandStub(command, node);
+        setLastCommand(`[${ts}] ${stub}`);
       }}
     />
   );

@@ -389,6 +389,128 @@
   display: none;
 }
 
+/* In-canvas 3D command ring — radial buttons orbiting selected node */
+.cortex-3d-ring {
+  --ring-color: var(--cortex-cyan);
+  position: relative;
+  width: 0;
+  height: 0;
+  pointer-events: auto;
+}
+.cortex-3d-ring__hub {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  margin: -13px;
+  border: 1px solid var(--ring-color);
+  border-radius: 999px;
+  background: rgba(3, 7, 7, 0.65);
+  box-shadow: 0 0 14px var(--ring-color);
+  pointer-events: none;
+}
+.cortex-3d-ring__cmd {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 84px;
+  height: 46px;
+  margin: -23px -42px;
+  padding: 3px 5px;
+  border: 1px solid var(--ring-color);
+  background: rgba(3, 7, 7, 0.82);
+  color: var(--cortex-bone);
+  cursor: pointer;
+  font-family: var(--cortex-font-mono);
+  font-size: 8px;
+  letter-spacing: 0.05em;
+  line-height: 1.1;
+  text-transform: uppercase;
+  white-space: pre-line;
+  clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%);
+  backdrop-filter: blur(4px);
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+.cortex-3d-ring__cmd:hover,
+.cortex-3d-ring__cmd:focus-visible {
+  background: color-mix(in srgb, var(--ring-color) 22%, rgba(3, 7, 7, 0.85));
+  box-shadow: 0 0 18px var(--ring-color);
+  outline: none;
+}
+.cortex-3d-ring__glyph {
+  font-size: 12px;
+  color: var(--ring-color);
+  line-height: 1;
+}
+.cortex-3d-ring__label {
+  margin-top: 2px;
+  text-align: center;
+  font-size: 7px;
+  opacity: 0.88;
+}
+
+/* Quick-action cards bar at bottom — V3 mockup 06 */
+.cortex-quick-actions {
+  position: absolute;
+  left: 50%;
+  bottom: 86px;
+  z-index: 8;
+  display: flex;
+  gap: 8px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+.cortex-quick-action {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 130px;
+  padding: 9px 14px 11px;
+  border: 1px solid rgba(24, 215, 255, 0.32);
+  background: rgba(3, 7, 7, 0.72);
+  color: var(--cortex-bone);
+  cursor: pointer;
+  font-family: var(--cortex-font-mono);
+  font-size: 10px;
+  letter-spacing: var(--cortex-letterspace-wide);
+  text-transform: uppercase;
+  clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%);
+  backdrop-filter: var(--cortex-backdrop-blur);
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.cortex-quick-action:hover,
+.cortex-quick-action:focus-visible {
+  border-color: var(--cortex-cyan);
+  background: rgba(24, 215, 255, 0.12);
+  box-shadow: var(--cortex-glow-cyan);
+  outline: none;
+  transform: translateY(-3px);
+}
+.cortex-quick-action__hotkey {
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  font-size: 8px;
+  color: rgba(131, 145, 140, 0.7);
+}
+.cortex-quick-action__label {
+  font-weight: 600;
+  font-size: 10px;
+}
+
+@media (max-width: 920px) {
+  .cortex-quick-actions {
+    bottom: 96px;
+    flex-wrap: wrap;
+    max-width: calc(100vw - 32px);
+    justify-content: center;
+  }
+}
+
 /* Quadrant labels above the 3D canvas need higher z-index */
 .cortex-shell:has(.cortex-neural-field--3d) .cortex-quadrant-labels {
   z-index: 4;

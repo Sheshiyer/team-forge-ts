@@ -21,6 +21,57 @@ import { BlendFunction } from "postprocessing";
 import { createContext, useContext, useEffect, useMemo, useRef, useState, Suspense, type ReactNode } from "react";
 import * as THREE from "three";
 import type { CortexGraph, CortexLensId, CortexNode, CortexPath, CortexSignal, CortexSignalState } from "../../lib/commandCortex/types";
+import { CORTEX_LENSES } from "../../lib/commandCortex/lensTypes";
+
+/* ---- Lens emphasis --------------------------------------------------------
+ * Computes per-node visual treatment based on the currently active lens.
+ * The same field is rendered for all lenses; emphasis tells each renderer
+ * how much to amplify / dim / push-back this particular node.
+ *
+ *   scale       1.0 default → 1.30 emphasised, 0.78 receded
+ *   opacity     1.0 default → 0.40 receded
+ *   zOffset     0   default → -2.0 receded (pushed back into z)
+ *   emissive    1.0 default → 1.4 emphasised, 0.55 receded
+ *   pathScale   1.0 default → 1.6 if path kind matches lens primaryPathKinds
+ *   inflammation 1.0 default → 1.5 on risk lens, 0.5 on memory lens
+ */
+interface LensEmphasis {
+  scale: number;
+  opacity: number;
+  zOffset: number;
+  emissive: number;
+  /** When the LENS itself emphasises a state (e.g. risk lens emphasises
+   *  blocked + pending), nodes in those states get extra punch. */
+  inflammation: number;
+}
+
+function computeLensEmphasis(node: CortexNode, activeLens: CortexLensId): LensEmphasis {
+  const lens = CORTEX_LENSES.find((l) => l.id === activeLens);
+  if (!lens) return { scale: 1, opacity: 1, zOffset: 0, emissive: 1, inflammation: 1 };
+  const kindMatches = lens.primaryNodeKinds.includes(node.kind);
+  const stateMatches = lens.emphasizedStates.includes(node.state);
+  const affinityMatches = node.lensAffinity?.includes(activeLens) ?? false;
+  const isPrimary = kindMatches || affinityMatches || node.kind === "mission";
+  const isHotStateForLens = stateMatches && isPrimary;
+  // Lens-specific overrides
+  let inflammation = 1;
+  if (activeLens === "risk") inflammation = node.state === "blocked" || node.state === "pending" ? 1.55 : 0.7;
+  if (activeLens === "memory") inflammation = node.kind === "memory" ? 1.4 : 0.5;
+  if (activeLens === "agents") inflammation = node.kind === "agent" || node.kind === "human" ? 1.25 : 0.7;
+  return {
+    scale: isHotStateForLens ? 1.3 : isPrimary ? 1.12 : 0.78,
+    opacity: isPrimary ? 1.0 : 0.45,
+    zOffset: isPrimary ? 0.15 : -2.0,
+    emissive: isHotStateForLens ? 1.5 : isPrimary ? 1.15 : 0.6,
+    inflammation,
+  };
+}
+
+function pathMatchesLens(path: CortexPath, activeLens: CortexLensId): boolean {
+  const lens = CORTEX_LENSES.find((l) => l.id === activeLens);
+  if (!lens) return false;
+  return lens.primaryPathKinds.includes(path.kind);
+}
 
 /* ---- Meshy GLB asset URLs (lazy-loaded) -----------------------------------
  * Each kind has a real 3D mesh generated from its V3 specimen plate via
@@ -125,7 +176,77 @@ export interface NeuralFieldProps {
   activeLens: CortexLensId;
   selectedNodeId?: string | null;
   onSelectNode?: (nodeId: string) => void;
+  /** Fired when the user clicks a command in the 3D command ring. The
+   *  cortex parent (MissionCortex) decides what to do with it — typically
+   *  records lastCommand + invokes a Tauri command. */
+  onCommand?: (commandId: string, node: CortexNode) => void;
 }
+
+/** 6 commands per node kind — keyed to V3 mockup 04's radial command ring.
+ *  Drawn from commandRules; this constant pins the order so the ring layout
+ *  is stable across selections. */
+const RING_COMMANDS_BY_KIND: Record<string, Array<{ id: string; label: string; glyph: string }>> = {
+  mission: [
+    { id: "trace-signal", label: "TRACE\nSIGNAL", glyph: "≈" },
+    { id: "summon-agent", label: "SUMMON\nAGENT", glyph: "▲" },
+    { id: "stabilize-branch", label: "STABILIZE\nBRANCH", glyph: "⊙" },
+    { id: "approve-synapse", label: "APPROVE\nSYNAPSE", glyph: "○○" },
+    { id: "escalate-human", label: "ESCALATE\nHUMAN", glyph: "♁" },
+    { id: "extract-memory", label: "EXTRACT\nMEMORY", glyph: "◬" },
+  ],
+  client: [
+    { id: "trace-signal", label: "TRACE\nSIGNAL", glyph: "≈" },
+    { id: "stabilize-branch", label: "STABILIZE", glyph: "⊙" },
+    { id: "generate-brief", label: "GENERATE\nBRIEF", glyph: "◫" },
+    { id: "summon-agent", label: "SUMMON\nAGENT", glyph: "▲" },
+    { id: "extract-memory", label: "EXTRACT\nMEMORY", glyph: "◬" },
+    { id: "route-work", label: "ROUTE\nWORK", glyph: "→" },
+  ],
+  project: [
+    { id: "trace-signal", label: "TRACE\nSIGNAL", glyph: "≈" },
+    { id: "split-pathway", label: "SPLIT\nPATHWAY", glyph: "Y" },
+    { id: "summon-agent", label: "SUMMON\nAGENT", glyph: "▲" },
+    { id: "stabilize-branch", label: "STABILIZE", glyph: "⊙" },
+    { id: "generate-brief", label: "BRIEF", glyph: "◫" },
+    { id: "route-work", label: "ROUTE\nWORK", glyph: "→" },
+  ],
+  agent: [
+    { id: "trace-signal", label: "TRACE", glyph: "≈" },
+    { id: "summon-agent", label: "SUMMON", glyph: "▲" },
+    { id: "generate-brief", label: "BRIEF", glyph: "◫" },
+    { id: "escalate-human", label: "ESCALATE", glyph: "♁" },
+  ],
+  human: [
+    { id: "trace-signal", label: "TRACE", glyph: "≈" },
+    { id: "route-work", label: "ROUTE\nWORK", glyph: "→" },
+    { id: "generate-brief", label: "BRIEF", glyph: "◫" },
+    { id: "escalate-human", label: "ANCHOR", glyph: "♁" },
+  ],
+  issue: [
+    { id: "trace-signal", label: "TRACE", glyph: "≈" },
+    { id: "quarantine-risk", label: "QUARANTINE", glyph: "⊗" },
+    { id: "approve-synapse", label: "APPROVE", glyph: "○○" },
+    { id: "escalate-human", label: "ESCALATE", glyph: "♁" },
+    { id: "stabilize-branch", label: "STABILIZE", glyph: "⊙" },
+    { id: "split-pathway", label: "SPLIT", glyph: "Y" },
+  ],
+  memory: [
+    { id: "extract-memory", label: "EXTRACT", glyph: "◬" },
+    { id: "generate-brief", label: "BRIEF", glyph: "◫" },
+    { id: "trace-signal", label: "TRACE", glyph: "≈" },
+  ],
+  approval: [
+    { id: "approve-synapse", label: "APPROVE", glyph: "○○" },
+    { id: "escalate-human", label: "ESCALATE", glyph: "♁" },
+    { id: "trace-signal", label: "TRACE", glyph: "≈" },
+    { id: "summon-agent", label: "SUMMON", glyph: "▲" },
+  ],
+  routine: [
+    { id: "trace-signal", label: "TRACE", glyph: "≈" },
+    { id: "extract-memory", label: "EXTRACT", glyph: "◬" },
+    { id: "generate-brief", label: "BRIEF", glyph: "◫" },
+  ],
+};
 
 const STATE_COLOR: Record<CortexSignalState, string> = {
   healthy: "#39ff88",
@@ -714,6 +835,7 @@ function Node3D({
   selected,
   dimmed,
   emphasized,
+  lensEmphasis,
   onSelect,
   onMove,
   setOrbit,
@@ -723,6 +845,7 @@ function Node3D({
   selected: boolean;
   dimmed: boolean;
   emphasized: boolean;
+  lensEmphasis: LensEmphasis;
   onSelect: (id: string) => void;
   onMove: (id: string, pos: [number, number, number]) => void;
   setOrbit: (enabled: boolean) => void;
@@ -749,16 +872,26 @@ function Node3D({
 
   const color = STATE_COLOR[node.state];
   const baseY = position[1];
-  const targetScale = selected ? 1.4 : hovered ? 1.15 : dimmed ? 0.78 : 1;
+  // Compose: selection > hover > dimmed > lensEmphasis.scale
+  const targetScale = selected
+    ? 1.4
+    : hovered
+    ? 1.15
+    : dimmed
+    ? 0.55
+    : lensEmphasis.scale;
+  const targetZ = position[2] + lensEmphasis.zOffset;
 
   useFrame(({ clock }) => {
     if (!groupRef.current) return;
     if (!dragRef.current.dragging) {
       const t = clock.elapsedTime + node.id.length * 0.21;
       groupRef.current.position.y = baseY + Math.sin(t * 0.55) * 0.07;
+      // Lerp Z toward lens-emphasis target so receding nodes glide back
+      const curZ = groupRef.current.position.z;
+      groupRef.current.position.z = curZ + (targetZ - curZ) * 0.08;
     }
     if (scaleRef.current) {
-      // Smoothly interpolate scale to target — no hard pops
       const current = scaleRef.current.scale.x;
       const next = current + (targetScale - current) * 0.18;
       scaleRef.current.scale.setScalar(next);
@@ -832,8 +965,8 @@ function Node3D({
     );
   }
 
-  const emissive = dimmed ? 0.5 : emphasized ? 1.4 : 0.9;
-  const innerEmissive = dimmed ? 0.8 : emphasized ? 2.6 : 1.8;
+  const emissive = (dimmed ? 0.5 : emphasized ? 1.4 : 0.9) * lensEmphasis.emissive;
+  const innerEmissive = (dimmed ? 0.8 : emphasized ? 2.6 : 1.8) * lensEmphasis.emissive;
 
   return (
     <group ref={groupRef} position={position}>
@@ -1342,6 +1475,52 @@ function NodeContext({ node, color }: { node: CortexNode; color: string }) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* CommandRing3D — radial command ring anchored at a selected node             */
+/* Uses drei <Html> so the buttons live as HTML overlays projected at the     */
+/* node's world position; they orbit correctly when the camera rotates.       */
+/* -------------------------------------------------------------------------- */
+function CommandRing3D({
+  node,
+  position,
+  color,
+  onCommand,
+}: {
+  node: CortexNode;
+  position: [number, number, number];
+  color: string;
+  onCommand: (commandId: string, node: CortexNode) => void;
+}) {
+  const commands = RING_COMMANDS_BY_KIND[node.kind] ?? RING_COMMANDS_BY_KIND.mission;
+  const n = commands.length;
+  return (
+    <Html position={[position[0], position[1], position[2] + 0.05]} center distanceFactor={6} zIndexRange={[50, 30]} style={{ pointerEvents: "auto" }}>
+      <div className="cortex-3d-ring" style={{ ["--ring-color" as string]: color }}>
+        <div className="cortex-3d-ring__hub" />
+        {commands.map((cmd, i) => {
+          const angle = (i / n) * 360 - 90;
+          return (
+            <button
+              key={cmd.id}
+              type="button"
+              className="cortex-3d-ring__cmd"
+              style={{ transform: `rotate(${angle}deg) translate(110px) rotate(${-angle}deg)` }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCommand(cmd.id, node);
+              }}
+              title={cmd.label.replace("\n", " ")}
+            >
+              <span className="cortex-3d-ring__glyph">{cmd.glyph}</span>
+              <span className="cortex-3d-ring__label">{cmd.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </Html>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* PulseSelection — pulsing animated ring around a selected node               */
 /* -------------------------------------------------------------------------- */
 function PulseSelection({ color }: { color: string }) {
@@ -1472,6 +1651,7 @@ interface SceneProps {
   positions: Map<string, [number, number, number]>;
   setPosition: (id: string, pos: [number, number, number]) => void;
   onSelectNode: (id: string) => void;
+  onCommand: (commandId: string, node: CortexNode) => void;
   orbitEnabled: boolean;
   setOrbit: (enabled: boolean) => void;
   zoomStage: number;
@@ -1485,6 +1665,7 @@ function Scene({
   positions,
   setPosition,
   onSelectNode,
+  onCommand,
   orbitEnabled,
   setOrbit,
   zoomStage,
@@ -1528,13 +1709,14 @@ function Scene({
       {graph.paths.map((path) => {
         const r = pathRenderable(path);
         if (!r) return null;
+        const lensMatch = pathMatchesLens(path, activeLens);
         return (
           <Synapse
             key={path.id}
             from={r.from}
             to={r.to}
             state={path.state}
-            emphasized={r.emph}
+            emphasized={r.emph || lensMatch}
           />
         );
       })}
@@ -1570,6 +1752,7 @@ function Scene({
             selected={isSelected}
             dimmed={isDimmed}
             emphasized={isNodeEmphasized(node)}
+            lensEmphasis={computeLensEmphasis(node, activeLens)}
             onSelect={onSelectNode}
             onMove={setPosition}
             setOrbit={setOrbit}
@@ -1580,6 +1763,21 @@ function Scene({
       {/* Locked zoom controller + wheel snap handler */}
       <ZoomController stage={zoomStage} />
       <WheelSnap stage={zoomStage} setStage={setZoomStage} />
+      {(() => {
+        if (!selectedNodeId) return null;
+        const sel = graph.nodes.find((n) => n.id === selectedNodeId);
+        const pos = sel ? positions.get(sel.id) : null;
+        if (!sel || !pos || sel.kind === "mission") return null;
+        return (
+          <CommandRing3D
+            node={sel}
+            position={pos}
+            color={STATE_COLOR[sel.state]}
+            onCommand={onCommand}
+          />
+        );
+      })()}
+
       <OrbitControls
         enabled={orbitEnabled}
         enablePan
@@ -1607,7 +1805,7 @@ function FallbackOverlay({ children }: { children: ReactNode }) {
   return <div className="cortex-3d-fallback">{children}</div>;
 }
 
-export default function NeuralField({ graph, activeLens, selectedNodeId, onSelectNode }: NeuralFieldProps) {
+export default function NeuralField({ graph, activeLens, selectedNodeId, onSelectNode, onCommand }: NeuralFieldProps) {
   const [orbitEnabled, setOrbitEnabled] = useState(true);
   const [zoomStage, setZoomStage] = useState(1); // default MISSION
 
@@ -1665,6 +1863,7 @@ export default function NeuralField({ graph, activeLens, selectedNodeId, onSelec
             positions={positions}
             setPosition={setPosition}
             onSelectNode={onSelectNode ?? (() => {})}
+            onCommand={onCommand ?? (() => {})}
             orbitEnabled={orbitEnabled}
             setOrbit={setOrbitEnabled}
             zoomStage={zoomStage}
