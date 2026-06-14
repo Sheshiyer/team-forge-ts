@@ -499,7 +499,14 @@ function Synapse({
 }
 
 /* -------------------------------------------------------------------------- */
-/* TravelingSignal — particle that loops along a curve                         */
+/* TravelingSignal — 4 motion archetypes (V3 mockup 05)                        */
+/*   HEALTHY  — smooth steady flow                                              */
+/*   HANDOFF  — pulse splits at midpoint, branches diverge                      */
+/*   PENDING  — pulse arrives at synapse, pauses, 3 route options blink         */
+/*   BLOCKED  — pulse stalls at ~55%, magenta inflammation ripples outward      */
+/*                                                                             */
+/* Dispatcher selects archetype by (state, path.kind). Each archetype is a     */
+/* small focused component that reads its own progress phase.                  */
 /* -------------------------------------------------------------------------- */
 function durationFor(state: CortexSignalState): number {
   switch (state) {
@@ -508,39 +515,34 @@ function durationFor(state: CortexSignalState): number {
     case "healthy":
       return 4.8;
     case "pending":
-      return 4.2;
+      return 5.2;
     case "blocked":
-      return 6.0;
+      return 6.6;
     default:
       return 7.5;
   }
 }
 
-function TravelingSignal({
-  from,
-  to,
-  state,
+/** HEALTHY — single particle smoothly flowing from start to end. */
+function HealthySignal({
+  curve,
+  color,
+  dur,
   offset,
 }: {
-  from: [number, number, number];
-  to: [number, number, number];
-  state: CortexSignalState;
+  curve: THREE.QuadraticBezierCurve3;
+  color: string;
+  dur: number;
   offset: number;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
   const trailRef = useRef<THREE.Mesh>(null);
-  const curve = useMemo(
-    () => curveBetween(new THREE.Vector3(...from), new THREE.Vector3(...to), 1),
-    [from, to],
-  );
-  const dur = durationFor(state);
   useFrame(({ clock }) => {
     const t = ((clock.elapsedTime + offset) / dur) % 1;
     const p = curve.getPointAt(t);
     if (meshRef.current) meshRef.current.position.copy(p);
     if (trailRef.current) trailRef.current.position.copy(p);
   });
-  const color = STATE_COLOR[state];
   return (
     <group>
       <mesh ref={trailRef}>
@@ -553,6 +555,251 @@ function TravelingSignal({
       </mesh>
     </group>
   );
+}
+
+/** HANDOFF — pulse travels to midpoint, then splits: one continues, one
+ *  branches off perpendicular for the final 50% of the cycle. Two trails. */
+function HandoffSignal({
+  curve,
+  color,
+  dur,
+  offset,
+}: {
+  curve: THREE.QuadraticBezierCurve3;
+  color: string;
+  dur: number;
+  offset: number;
+}) {
+  const primaryRef = useRef<THREE.Mesh>(null);
+  const branchRef = useRef<THREE.Mesh>(null);
+  const primaryTrail = useRef<THREE.Mesh>(null);
+  const branchTrail = useRef<THREE.Mesh>(null);
+  // Cached midpoint + perpendicular direction (in XZ-plane) for branch path
+  const { midpoint, perp } = useMemo(() => {
+    const mid = curve.getPointAt(0.5);
+    const t = curve.getTangentAt(0.5);
+    const p = new THREE.Vector3(-t.z, 0, t.x).normalize();
+    return { midpoint: mid, perp: p };
+  }, [curve]);
+  useFrame(({ clock }) => {
+    const t = ((clock.elapsedTime + offset) / dur) % 1;
+    if (t < 0.5) {
+      // Both particles share the primary curve until the split
+      const p = curve.getPointAt(t);
+      primaryRef.current?.position.copy(p);
+      primaryTrail.current?.position.copy(p);
+      branchRef.current?.position.copy(p);
+      branchTrail.current?.position.copy(p);
+    } else {
+      // Primary keeps going to the original endpoint
+      const tp = curve.getPointAt(t);
+      primaryRef.current?.position.copy(tp);
+      primaryTrail.current?.position.copy(tp);
+      // Branch diverges from midpoint along the perpendicular
+      const bt = (t - 0.5) / 0.5;
+      const dist = bt * 1.4;
+      const bp = midpoint.clone().addScaledVector(perp, dist);
+      branchRef.current?.position.copy(bp);
+      branchTrail.current?.position.copy(bp);
+    }
+  });
+  return (
+    <group>
+      <mesh ref={primaryTrail}>
+        <sphereGeometry args={[0.16, 16, 16]} />
+        <meshBasicMaterial color={color} transparent opacity={0.18} depthWrite={false} />
+      </mesh>
+      <mesh ref={primaryRef}>
+        <sphereGeometry args={[0.06, 16, 16]} />
+        <meshBasicMaterial color={color} />
+      </mesh>
+      <mesh ref={branchTrail}>
+        <sphereGeometry args={[0.14, 16, 16]} />
+        <meshBasicMaterial color="#39ff88" transparent opacity={0.18} depthWrite={false} />
+      </mesh>
+      <mesh ref={branchRef}>
+        <sphereGeometry args={[0.05, 16, 16]} />
+        <meshBasicMaterial color="#39ff88" />
+      </mesh>
+    </group>
+  );
+}
+
+/** PENDING — pulse reaches the synapse (endpoint), pauses for the last
+ *  20% of the cycle. During pause, 3 small route-option dots blink in
+ *  sequence around the endpoint. */
+function PendingSignal({
+  curve,
+  color,
+  dur,
+  offset,
+}: {
+  curve: THREE.QuadraticBezierCurve3;
+  color: string;
+  dur: number;
+  offset: number;
+}) {
+  const pulseRef = useRef<THREE.Mesh>(null);
+  const pulseTrail = useRef<THREE.Mesh>(null);
+  const routeRefs = [useRef<THREE.Mesh>(null), useRef<THREE.Mesh>(null), useRef<THREE.Mesh>(null)];
+  const { endpoint, routePts } = useMemo(() => {
+    const ep = curve.getPointAt(1);
+    const tg = curve.getTangentAt(1);
+    const perp = new THREE.Vector3(-tg.z, 0, tg.x).normalize();
+    const up = new THREE.Vector3(0, 1, 0);
+    const out: THREE.Vector3[] = [];
+    for (let k = 0; k < 3; k++) {
+      const phi = -0.4 + k * 0.4; // -0.4, 0, +0.4 radians side spread
+      const offsetV = perp.clone().multiplyScalar(Math.sin(phi) * 0.7).add(up.clone().multiplyScalar(Math.cos(phi) * 0.15));
+      const targetForward = tg.clone().multiplyScalar(0.55);
+      out.push(ep.clone().add(targetForward).add(offsetV));
+    }
+    return { endpoint: ep, routePts: out };
+  }, [curve]);
+  useFrame(({ clock }) => {
+    const t = ((clock.elapsedTime + offset) / dur) % 1;
+    if (t < 0.8) {
+      // Travel phase: 0 → endpoint scaled into 0..0.8
+      const u = t / 0.8;
+      const p = curve.getPointAt(u);
+      pulseRef.current?.position.copy(p);
+      pulseTrail.current?.position.copy(p);
+    } else {
+      // Pause phase at endpoint
+      pulseRef.current?.position.copy(endpoint);
+      pulseTrail.current?.position.copy(endpoint);
+    }
+    // Blink route options during the pause phase
+    routeRefs.forEach((ref, i) => {
+      const mat = ref.current?.material as THREE.MeshBasicMaterial | undefined;
+      if (!mat) return;
+      if (t < 0.8) {
+        mat.opacity = 0;
+      } else {
+        const phase = (t - 0.8) / 0.2; // 0..1 during pause
+        // Sequential blink: route 0 at 0-0.33, route 1 at 0.33-0.66, route 2 at 0.66-1
+        const slot = i / 3;
+        const inside = phase >= slot && phase < slot + 0.33;
+        mat.opacity = inside ? 0.85 : 0.15;
+      }
+    });
+  });
+  return (
+    <group>
+      <mesh ref={pulseTrail}>
+        <sphereGeometry args={[0.16, 16, 16]} />
+        <meshBasicMaterial color={color} transparent opacity={0.18} depthWrite={false} />
+      </mesh>
+      <mesh ref={pulseRef}>
+        <sphereGeometry args={[0.06, 16, 16]} />
+        <meshBasicMaterial color={color} />
+      </mesh>
+      {routePts.map((rp, i) => (
+        <mesh key={i} ref={routeRefs[i]} position={rp}>
+          <sphereGeometry args={[0.045, 12, 12]} />
+          <meshBasicMaterial color={color} transparent opacity={0} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+/** BLOCKED — pulse stalls at ~55% along the curve, magenta inflammation
+ *  rings expand outward from the stall point and fade. The stall point
+ *  flickers (signal trying but failing to advance). */
+function BlockedSignal({
+  curve,
+  color,
+  dur,
+  offset,
+}: {
+  curve: THREE.QuadraticBezierCurve3;
+  color: string;
+  dur: number;
+  offset: number;
+}) {
+  const stallRef = useRef<THREE.Mesh>(null);
+  const ring1 = useRef<THREE.Mesh>(null);
+  const ring2 = useRef<THREE.Mesh>(null);
+  const ring3 = useRef<THREE.Mesh>(null);
+  const { stallPoint, tangent } = useMemo(() => {
+    const sp = curve.getPointAt(0.55);
+    const tg = curve.getTangentAt(0.55).normalize();
+    return { stallPoint: sp, tangent: tg };
+  }, [curve]);
+
+  // Orient the ripple rings so they sit perpendicular to the curve tangent
+  const ringQuat = useMemo(() => {
+    const q = new THREE.Quaternion();
+    q.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent);
+    return q;
+  }, [tangent]);
+
+  useFrame(({ clock }) => {
+    const tCycle = ((clock.elapsedTime + offset) / dur) % 1;
+    // Stall point flickers magenta
+    if (stallRef.current) {
+      stallRef.current.position.copy(stallPoint);
+      const mat = stallRef.current.material as THREE.MeshBasicMaterial;
+      mat.opacity = 0.55 + Math.sin(tCycle * Math.PI * 8) * 0.3;
+    }
+    // 3 expanding ripple rings, each phase-shifted, scaling + fading
+    [ring1, ring2, ring3].forEach((ref, i) => {
+      if (!ref.current) return;
+      const phase = (tCycle + i / 3) % 1;
+      const scale = 0.4 + phase * 1.6;
+      ref.current.position.copy(stallPoint);
+      ref.current.quaternion.copy(ringQuat);
+      ref.current.scale.set(scale, scale, scale);
+      const mat = ref.current.material as THREE.MeshBasicMaterial;
+      mat.opacity = (1 - phase) * 0.45;
+    });
+  });
+
+  return (
+    <group>
+      <mesh ref={stallRef}>
+        <sphereGeometry args={[0.08, 16, 16]} />
+        <meshBasicMaterial color={color} transparent opacity={0.85} />
+      </mesh>
+      {[ring1, ring2, ring3].map((ref, i) => (
+        <mesh key={i} ref={ref}>
+          <torusGeometry args={[0.32, 0.01, 8, 64]} />
+          <meshBasicMaterial color={color} transparent opacity={0.4} depthWrite={false} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+/** Dispatcher — chooses motion archetype by signal.state and (when active)
+ *  the path's kind. Active+handoff is the handoff archetype; everything else
+ *  routes by state alone. */
+function TravelingSignal({
+  from,
+  to,
+  state,
+  pathKind,
+  offset,
+}: {
+  from: [number, number, number];
+  to: [number, number, number];
+  state: CortexSignalState;
+  pathKind: CortexPath["kind"];
+  offset: number;
+}) {
+  const curve = useMemo(
+    () => curveBetween(new THREE.Vector3(...from), new THREE.Vector3(...to), 1),
+    [from, to],
+  );
+  const dur = durationFor(state);
+  const color = STATE_COLOR[state];
+  if (state === "blocked") return <BlockedSignal curve={curve} color={color} dur={dur} offset={offset} />;
+  if (state === "pending") return <PendingSignal curve={curve} color={color} dur={dur} offset={offset} />;
+  if ((state === "active" || state === "healthy") && pathKind === "handoff") {
+    return <HandoffSignal curve={curve} color={color} dur={dur} offset={offset} />;
+  }
+  return <HealthySignal curve={curve} color={color} dur={dur} offset={offset} />;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1733,6 +1980,7 @@ function Scene({
             from={from}
             to={to}
             state={signal.state}
+            pathKind={path.kind}
             offset={idx * 1.2}
           />
         );

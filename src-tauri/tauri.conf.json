@@ -1,6 +1,6 @@
 {
   "productName": "TeamForge",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "identifier": "com.thoughtseed.teamforge",
   "build": {
     "beforeDevCommand": "pnpm dev",

@@ -1,6 +1,6 @@
 {
   "name": "team-forge-ts",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Command Cortex desktop app with a Cloudflare-backed TeamForge project control plane for GitHub, Huly, and Paperclip.",
   "private": true,
   "type": "module",
