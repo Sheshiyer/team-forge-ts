@@ -199,42 +199,42 @@ function Nucleus() {
 
   return (
     <group>
-      <pointLight intensity={120} distance={22} color="#18d7ff" decay={1.6} />
+      <pointLight intensity={45} distance={16} color="#18d7ff" decay={1.8} />
 
       <mesh ref={innerRef}>
-        <icosahedronGeometry args={[1.05, 5]} />
+        <icosahedronGeometry args={[0.62, 5]} />
         <meshStandardMaterial
           color={new THREE.Color("#9ff0ff")}
           emissive={new THREE.Color("#18d7ff")}
-          emissiveIntensity={4.5}
-          roughness={0.18}
+          emissiveIntensity={2.2}
+          roughness={0.22}
           metalness={0.12}
         />
       </mesh>
 
       <mesh>
-        <sphereGeometry args={[1.32, 48, 48]} />
-        <meshBasicMaterial color="#7ee9ff" transparent opacity={0.18} side={THREE.BackSide} />
+        <sphereGeometry args={[0.82, 48, 48]} />
+        <meshBasicMaterial color="#7ee9ff" transparent opacity={0.14} side={THREE.BackSide} />
       </mesh>
 
       <mesh ref={haloRef}>
-        <sphereGeometry args={[2.1, 48, 48]} />
-        <meshBasicMaterial color="#18d7ff" transparent opacity={0.12} side={THREE.BackSide} depthWrite={false} />
+        <sphereGeometry args={[1.45, 48, 48]} />
+        <meshBasicMaterial color="#18d7ff" transparent opacity={0.08} side={THREE.BackSide} depthWrite={false} />
       </mesh>
 
       <mesh ref={ringARef} rotation={[Math.PI / 2.2, 0, 0]}>
-        <torusGeometry args={[2.6, 0.018, 16, 160]} />
-        <meshBasicMaterial color="#9ff0ff" transparent opacity={0.45} />
+        <torusGeometry args={[1.8, 0.012, 16, 160]} />
+        <meshBasicMaterial color="#9ff0ff" transparent opacity={0.4} />
       </mesh>
 
       <mesh ref={ringBRef} rotation={[Math.PI / 2, Math.PI / 5, 0]}>
-        <torusGeometry args={[3.4, 0.012, 16, 200]} />
-        <meshBasicMaterial color="#18d7ff" transparent opacity={0.28} />
+        <torusGeometry args={[2.4, 0.008, 16, 200]} />
+        <meshBasicMaterial color="#18d7ff" transparent opacity={0.24} />
       </mesh>
 
       <mesh rotation={[0, 0, 0]}>
-        <torusGeometry args={[4.4, 0.006, 12, 240]} />
-        <meshBasicMaterial color="#39ff88" transparent opacity={0.18} />
+        <torusGeometry args={[3.1, 0.005, 12, 240]} />
+        <meshBasicMaterial color="#39ff88" transparent opacity={0.15} />
       </mesh>
     </group>
   );
@@ -359,12 +359,12 @@ function NodeForm({ kind, color, emissive, innerEmissive }: NodeFormProps) {
       return (
         <group>
           <mesh>
-            <octahedronGeometry args={[0.36, 0]} />
+            <octahedronGeometry args={[0.22, 0]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.35} transparent opacity={0.16} roughness={0.4} metalness={0.5} side={THREE.DoubleSide} />
             <Edges color={color} threshold={1} linewidth={1.2} />
           </mesh>
           <mesh>
-            <octahedronGeometry args={[0.17, 1]} />
+            <octahedronGeometry args={[0.11, 1]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={innerEmissive} roughness={0.25} metalness={0.3} />
           </mesh>
         </group>
@@ -375,12 +375,12 @@ function NodeForm({ kind, color, emissive, innerEmissive }: NodeFormProps) {
       return (
         <group>
           <mesh rotation={[0, Math.PI / 6, 0]}>
-            <cylinderGeometry args={[0.24, 0.24, 0.36, 6, 1]} />
+            <cylinderGeometry args={[0.16, 0.16, 0.26, 6, 1]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.4} transparent opacity={0.22} roughness={0.4} metalness={0.4} />
             <Edges color={color} threshold={15} linewidth={1.2} />
           </mesh>
-          <mesh position={[0, 0.32, 0]} rotation={[0, Math.PI / 6, 0]}>
-            <coneGeometry args={[0.24, 0.26, 6]} />
+          <mesh position={[0, 0.22, 0]} rotation={[0, Math.PI / 6, 0]}>
+            <coneGeometry args={[0.16, 0.18, 6]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.7} transparent opacity={0.4} roughness={0.3} />
             <Edges color={color} threshold={15} linewidth={1.2} />
           </mesh>
@@ -396,7 +396,7 @@ function NodeForm({ kind, color, emissive, innerEmissive }: NodeFormProps) {
       return (
         <group>
           <mesh>
-            <dodecahedronGeometry args={[0.32, 0]} />
+            <dodecahedronGeometry args={[0.2, 0]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.3} transparent opacity={0.18} roughness={0.35} metalness={0.5} side={THREE.DoubleSide} />
             <Edges color={color} threshold={15} linewidth={1.2} />
           </mesh>
@@ -412,7 +412,7 @@ function NodeForm({ kind, color, emissive, innerEmissive }: NodeFormProps) {
       return (
         <group>
           <mesh rotation={[0.3, 0.6, 0]}>
-            <tetrahedronGeometry args={[0.4, 0]} />
+            <tetrahedronGeometry args={[0.26, 0]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.4} transparent opacity={0.2} roughness={0.45} metalness={0.45} side={THREE.DoubleSide} />
             <Edges color={color} threshold={1} linewidth={1.4} />
           </mesh>
@@ -428,12 +428,12 @@ function NodeForm({ kind, color, emissive, innerEmissive }: NodeFormProps) {
       return (
         <group>
           <mesh rotation={[0, 0, 0]}>
-            <cylinderGeometry args={[0.22, 0.22, 0.38, 3, 1]} />
+            <cylinderGeometry args={[0.15, 0.15, 0.28, 3, 1]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.4} transparent opacity={0.22} roughness={0.4} metalness={0.4} />
             <Edges color={color} threshold={15} linewidth={1.2} />
           </mesh>
-          <mesh position={[0, 0.28, 0]}>
-            <coneGeometry args={[0.2, 0.22, 3]} />
+          <mesh position={[0, 0.2, 0]}>
+            <coneGeometry args={[0.14, 0.16, 3]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.7} transparent opacity={0.4} roughness={0.3} />
             <Edges color={color} threshold={15} linewidth={1.2} />
           </mesh>
@@ -468,7 +468,7 @@ function NodeForm({ kind, color, emissive, innerEmissive }: NodeFormProps) {
       return (
         <group>
           <mesh>
-            <octahedronGeometry args={[0.32, 0]} />
+            <octahedronGeometry args={[0.22, 0]} />
             <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.4} transparent opacity={0.22} roughness={0.35} metalness={0.5} side={THREE.DoubleSide} />
             <Edges color={color} threshold={1} linewidth={1.3} />
           </mesh>
@@ -730,7 +730,55 @@ function MetricBadge({
   );
 }
 
-function TaskSwarm({
+/** A labeled leaf node — one real datum sprouted from a parent. */
+function LeafBranch({
+  end,
+  color,
+  label,
+  size = 0.05,
+  trunk = true,
+}: {
+  end: [number, number, number];
+  color: string;
+  label: string;
+  size?: number;
+  trunk?: boolean;
+}) {
+  const curve = useMemo(() => {
+    const start = new THREE.Vector3(0, 0, 0);
+    const e = new THREE.Vector3(...end);
+    const mid = e
+      .clone()
+      .multiplyScalar(0.5)
+      .add(new THREE.Vector3(0, e.y > 0 ? 0.25 : -0.25, 0));
+    return new THREE.QuadraticBezierCurve3(start, mid, e);
+  }, [end]);
+  return (
+    <group>
+      {trunk ? (
+        <mesh>
+          <tubeGeometry args={[curve, 18, 0.012, 5, false]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.1} transparent opacity={0.55} roughness={0.5} />
+        </mesh>
+      ) : null}
+      <mesh position={end}>
+        <icosahedronGeometry args={[size, 1]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2.6} roughness={0.3} />
+      </mesh>
+      <Html
+        position={[end[0] + (end[0] >= 0 ? 0.14 : -0.14), end[1] - 0.04, end[2]]}
+        center={false}
+        distanceFactor={11}
+        zIndexRange={[18, 6]}
+        style={{ pointerEvents: "none", transform: end[0] >= 0 ? "none" : "translateX(-100%)" }}
+      >
+        <div className="cortex-3d-leaf">{label}</div>
+      </Html>
+    </group>
+  );
+}
+
+function TaskBranches({
   color,
   count,
   intensity,
@@ -741,53 +789,29 @@ function TaskSwarm({
   intensity: number;
   label?: string;
 }) {
-  // Agents: an orbital RING with N task particles glowing on it. The ring
-  // makes the swarm read as a swarm even at low task counts; emissive
-  // material punches through the bloom.
-  const ringRef = useRef<THREE.Group>(null);
-  const orbits = useMemo(
-    () =>
-      Array.from({ length: count }, (_, i) => ({
-        ringIdx: i % 2,
-        phase: (i / count) * Math.PI * 2 + (i % 2) * 0.5,
-        speed: 0.42 + (i % 3) * 0.07,
-        tilt: ((i % 4) - 1.5) * 0.18,
-      })),
-    [count],
-  );
-  useFrame(({ clock }) => {
-    if (!ringRef.current) return;
-    const t = clock.elapsedTime;
-    ringRef.current.children.forEach((child, i) => {
-      if (i >= orbits.length) return;
-      const o = orbits[i];
-      const r = o.ringIdx === 0 ? 0.95 : 1.25;
-      const a = t * o.speed + o.phase;
-      child.position.set(r * Math.cos(a), o.tilt, r * Math.sin(a));
+  // Agents: each task becomes its own labeled leaf at the end of a curving
+  // branch fanning outward — matches the V3 "agent swarm" cluster shape.
+  const leaves = useMemo(() => {
+    return Array.from({ length: count }, (_, i) => {
+      // Distribute across a wide spherical wedge AWAY from the parent
+      const phi = (i / count) * Math.PI * 1.6 - Math.PI * 0.8; // -PI*0.8 to PI*0.8
+      const tilt = ((i % 5) - 2) * 0.22;
+      const r = 1.7 + ((i * 7) % 5) * 0.16;
+      const end: [number, number, number] = [
+        r * Math.sin(phi) * Math.cos(tilt),
+        tilt * 0.9 + ((i % 3) - 1) * 0.14,
+        -r * Math.cos(phi) * Math.cos(tilt) - 0.15,
+      ];
+      return { end, label: `T${String(i + 1).padStart(2, "0")}` };
     });
-  });
+  }, [count]);
+
   return (
     <group>
-      {/* Track rings — visible orbital paths */}
-      <mesh rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[0.95, 0.008, 8, 96]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.9} transparent opacity={0.45} />
-      </mesh>
-      <mesh rotation={[Math.PI / 2.2, Math.PI / 6, 0]}>
-        <torusGeometry args={[1.25, 0.006, 8, 96]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.6} transparent opacity={0.32} />
-      </mesh>
-      {/* Task particles */}
-      <group ref={ringRef}>
-        {orbits.map((_, i) => (
-          <mesh key={i}>
-            <sphereGeometry args={[0.07, 12, 12]} />
-            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2.4} roughness={0.3} />
-          </mesh>
-        ))}
-      </group>
-      <MetricBadge text={label ? `${count} ${label}` : `${count} tasks`} position={[0, 1.55, 0]} tone="good" />
-      {/* underscore intentionally unused vars */}
+      {leaves.map((l, i) => (
+        <LeafBranch key={i} end={l.end} color={color} label={l.label} size={0.055} />
+      ))}
+      <MetricBadge text={label ? `${count} ${label}` : `${count} TASKS`} position={[0, 1.45, 0]} tone="good" />
       {(() => {
         void intensity;
         return null;
@@ -807,37 +831,27 @@ function BranchFan({
   intensity: number;
   label?: string;
 }) {
-  // Clients: each active branch is a real tube + emissive leaf node fanned
-  // outward from the client. Far more prominent than the prior thin lines.
-  const filaments = useMemo(() => {
-    const out: Array<{ curve: THREE.QuadraticBezierCurve3; end: THREE.Vector3 }> = [];
-    for (let i = 0; i < count; i++) {
-      const angle = (i / Math.max(1, count - 1) - 0.5) * 1.4; // wider fan
-      const elev = ((i % 2) - 0.5) * 0.5;
-      const r = 1.3 + (i % 3) * 0.18;
-      const start = new THREE.Vector3(0, 0, 0);
-      const end = new THREE.Vector3(r * Math.sin(angle), elev, -r * Math.cos(angle));
-      const mid = end.clone().multiplyScalar(0.55).add(new THREE.Vector3(0, elev * 0.4, 0));
-      out.push({ curve: new THREE.QuadraticBezierCurve3(start, mid, end), end });
-    }
-    return out;
+  // Clients: each active branch becomes its own labeled leaf B1..BN.
+  const leaves = useMemo(() => {
+    return Array.from({ length: count }, (_, i) => {
+      const angle = (i / Math.max(1, count - 1) - 0.5) * 1.6; // wide fan
+      const elev = ((i % 2) - 0.5) * 0.7;
+      const r = 1.9 + (i % 3) * 0.18;
+      const end: [number, number, number] = [
+        r * Math.sin(angle),
+        elev,
+        -r * Math.cos(angle),
+      ];
+      return { end, label: `B${i + 1}` };
+    });
   }, [count]);
 
   return (
     <group>
-      {filaments.map((f, i) => (
-        <group key={i}>
-          <mesh>
-            <tubeGeometry args={[f.curve, 24, 0.018, 6, false]} />
-            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.4} transparent opacity={0.85} />
-          </mesh>
-          <mesh position={f.end.toArray()}>
-            <sphereGeometry args={[0.085, 14, 14]} />
-            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2.6} roughness={0.3} />
-          </mesh>
-        </group>
+      {leaves.map((l, i) => (
+        <LeafBranch key={i} end={l.end} color={color} label={l.label} size={0.062} />
       ))}
-      <MetricBadge text={label ? `${count} ${label}` : `${count} branches`} position={[0, 1.05, -0.6]} tone="good" />
+      <MetricBadge text={label ? `${count} ${label}` : `${count} BRANCHES`} position={[0, 1.05, -0.6]} tone="good" />
       {(() => {
         void intensity;
         return null;
@@ -855,26 +869,27 @@ function PendingStack({
   count: number;
   label?: string;
 }) {
-  // Issues / approvals: N glowing pending tags stacked below the node. Each
-  // tag is a flat panel that catches the bloom — reads as queue depth.
+  // Issues/approvals: each pending item is its own labeled leaf below + outward.
+  const leaves = useMemo(() => {
+    return Array.from({ length: count }, (_, i) => {
+      const angle = (i / Math.max(1, count - 1) - 0.5) * 1.0;
+      const r = 1.5 + (i % 2) * 0.2;
+      const end: [number, number, number] = [
+        r * Math.sin(angle),
+        -0.65 - i * 0.18,
+        r * Math.cos(angle) * 0.5 + 0.3,
+      ];
+      return { end, label: `P${i + 1}` };
+    });
+  }, [count]);
   return (
-    <group position={[0, -0.65, 0]}>
-      {Array.from({ length: count }, (_, i) => (
-        <group key={i} position={[0, -i * 0.22, 0]}>
-          <mesh>
-            <boxGeometry args={[0.36, 0.08, 0.22]} />
-            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.6 - i * 0.18} roughness={0.3} />
-          </mesh>
-          {/* underline strip */}
-          <mesh position={[0, -0.05, 0.115]} rotation={[Math.PI / 2, 0, 0]}>
-            <planeGeometry args={[0.32, 0.012]} />
-            <meshBasicMaterial color={color} transparent opacity={0.85} />
-          </mesh>
-        </group>
+    <group>
+      {leaves.map((l, i) => (
+        <LeafBranch key={i} end={l.end} color={color} label={l.label} size={0.058} />
       ))}
       <MetricBadge
-        text={label ? `${count} ${label}` : `${count} pending`}
-        position={[0, 0.35, 0]}
+        text={label ? `${count} ${label}` : `${count} PENDING`}
+        position={[0, 0.7, 0]}
         tone="warn"
       />
     </group>
@@ -990,70 +1005,65 @@ function FlowLoop({ color, intensity, label }: { color: string; intensity: numbe
 }
 
 function MemoryRings() {
-  // Memory: 3 concentric tilted bands at clearly readable sizes.
+  // Memory: 3 concentric rings + 5 labeled memory shards spread around.
   const tilts = [0, Math.PI / 5, -Math.PI / 6];
+  const shards = useMemo(() => {
+    return [0, 1, 2, 3, 4].map((i) => {
+      const a = (i / 5) * Math.PI * 2 + 0.2;
+      const r = 1.55 + (i % 2) * 0.22;
+      const end: [number, number, number] = [
+        r * Math.cos(a),
+        (i % 2 === 0 ? 0.18 : -0.18) + (i * 0.04 - 0.08),
+        r * Math.sin(a),
+      ];
+      return { end, label: `M${i + 1}` };
+    });
+  }, []);
   return (
     <group>
       {tilts.map((tilt, i) => {
-        const r = 0.72 + i * 0.28;
+        const r = 0.6 + i * 0.16;
         return (
           <mesh key={i} rotation={[Math.PI / 2 + tilt, 0, 0]}>
-            <torusGeometry args={[r, 0.012, 8, 96]} />
+            <torusGeometry args={[r, 0.008, 8, 96]} />
             <meshStandardMaterial
               color={i === 0 ? "#39ff88" : "#83918c"}
               emissive={i === 0 ? "#39ff88" : "#83918c"}
-              emissiveIntensity={1.4 - i * 0.3}
+              emissiveIntensity={1.0 - i * 0.22}
               transparent
-              opacity={0.7 - i * 0.12}
+              opacity={0.6 - i * 0.12}
             />
           </mesh>
         );
       })}
-      <mesh>
-        <icosahedronGeometry args={[0.22, 2]} />
-        <meshStandardMaterial
-          color="#83918c"
-          emissive="#39ff88"
-          emissiveIntensity={0.6}
-          roughness={0.5}
-        />
-      </mesh>
-      <MetricBadge text="MEMORY · DORMANT" position={[0, 1.45, 0]} tone="neutral" />
+      {shards.map((s, i) => (
+        <LeafBranch key={i} end={s.end} color="#83918c" label={s.label} size={0.046} />
+      ))}
+      <MetricBadge text="MEMORY · DORMANT" position={[0, 1.3, 0]} tone="neutral" />
     </group>
   );
 }
 
 function HumanAnchor({ color }: { color: string }) {
-  // Humans: 4 sturdy anchor cylinders downward with terminal nodes.
+  // Humans: 4 labeled responsibility anchors fanning down + out.
   const anchors = useMemo(() => {
-    const out: Array<[number, number, number]> = [];
-    for (let i = 0; i < 4; i++) {
+    return ["R1", "R2", "R3", "R4"].map((label, i) => {
       const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
-      const r = 0.62;
-      out.push([r * Math.cos(a), -0.65, r * Math.sin(a)]);
-    }
-    return out;
+      const r = 1.5;
+      const end: [number, number, number] = [
+        r * Math.cos(a),
+        -0.55 + (i % 2) * 0.18,
+        r * Math.sin(a) * 0.65 + 0.25,
+      ];
+      return { end, label };
+    });
   }, []);
   return (
     <group>
-      {anchors.map((pos, i) => {
-        const start = new THREE.Vector3(pos[0] * 0.4, -0.15, pos[2] * 0.4);
-        const end = new THREE.Vector3(...pos);
-        const curve = new THREE.LineCurve3(start, end);
-        return (
-          <group key={i}>
-            <mesh>
-              <tubeGeometry args={[curve, 1, 0.018, 6, false]} />
-              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.4} transparent opacity={0.8} />
-            </mesh>
-            <mesh position={pos}>
-              <sphereGeometry args={[0.06, 10, 10]} />
-              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2.4} />
-            </mesh>
-          </group>
-        );
-      })}
-      <MetricBadge text="HUMAN · ANCHOR" position={[0, 0.9, 0]} tone="good" />
+      {anchors.map((a, i) => (
+        <LeafBranch key={i} end={a.end} color={color} label={a.label} size={0.052} />
+      ))}
+      <MetricBadge text="HUMAN · ANCHOR" position={[0, 0.85, 0]} tone="good" />
     </group>
   );
 }
@@ -1062,7 +1072,7 @@ function NodeContext({ node, color }: { node: CortexNode; color: string }) {
   const spec = useMemo(() => deriveContext(node), [node]);
   switch (spec.kind) {
     case "task-swarm":
-      return <TaskSwarm color={color} count={spec.count} intensity={spec.intensity} label={spec.label} />;
+      return <TaskBranches color={color} count={spec.count} intensity={spec.intensity} label={spec.label} />;
     case "branch-fan":
       return <BranchFan color={color} count={spec.count} intensity={spec.intensity} label={spec.label} />;
     case "pending-stack":
@@ -1361,7 +1371,7 @@ export default function NeuralField({ graph, activeLens, selectedNodeId, onSelec
   return (
     <div className="cortex-neural-field cortex-neural-field--3d" data-lens={activeLens}>
       <Canvas
-        camera={{ position: [0, 1.2, 12], fov: 45, near: 0.1, far: 200 }}
+        camera={{ position: [0, 1.4, 17], fov: 46, near: 0.1, far: 200 }}
         dpr={[1, 2]}
         gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
         shadows={false}
