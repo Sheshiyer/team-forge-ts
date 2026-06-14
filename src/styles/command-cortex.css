@@ -448,6 +448,12 @@
 .cortex-3d-label[data-state="pending"] { border-color: rgba(255, 176, 46, 0.5); }
 .cortex-3d-label[data-state="blocked"] { border-color: rgba(255, 47, 122, 0.55); }
 
+.cortex-3d-label.is-dimmed {
+  opacity: 0.32;
+  filter: saturate(0.4);
+  transition: opacity 280ms ease, filter 280ms ease;
+}
+
 .cortex-3d-label.is-selected {
   background: rgba(24, 215, 255, 0.18);
   border-color: var(--cortex-cyan);

@@ -15,7 +15,7 @@
  *   - Click-to-select a node; drag-to-move it freely in 3D space.
  */
 import { Canvas, useFrame, type ThreeEvent } from "@react-three/fiber";
-import { Html, OrbitControls, Stars } from "@react-three/drei";
+import { Edges, Html, OrbitControls, Stars } from "@react-three/drei";
 import { Bloom, ChromaticAberration, EffectComposer, Vignette } from "@react-three/postprocessing";
 import { BlendFunction } from "postprocessing";
 import { useMemo, useRef, useState, type ReactNode } from "react";
@@ -341,12 +341,205 @@ function TravelingSignal({
 }
 
 /* -------------------------------------------------------------------------- */
+/* NodeForm — kind-specific geometric form (the V3 visual identity).           */
+/* Each kind is built from: glass outer shell (transparent + wireframe edges)  */
+/* + emissive inner core. Pure spheres are reserved for the nucleus.           */
+/* -------------------------------------------------------------------------- */
+interface NodeFormProps {
+  kind: string;
+  color: string;
+  emissive: number;
+  innerEmissive: number;
+}
+
+function NodeForm({ kind, color, emissive, innerEmissive }: NodeFormProps) {
+  switch (kind) {
+    case "agent": {
+      // Twin octahedron — outer wireframe shell, inner solid core.
+      return (
+        <group>
+          <mesh>
+            <octahedronGeometry args={[0.36, 0]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.35} transparent opacity={0.16} roughness={0.4} metalness={0.5} side={THREE.DoubleSide} />
+            <Edges color={color} threshold={1} linewidth={1.2} />
+          </mesh>
+          <mesh>
+            <octahedronGeometry args={[0.17, 1]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={innerEmissive} roughness={0.25} metalness={0.3} />
+          </mesh>
+        </group>
+      );
+    }
+    case "client": {
+      // Hexagonal column with crystal cap — the "organism cluster".
+      return (
+        <group>
+          <mesh rotation={[0, Math.PI / 6, 0]}>
+            <cylinderGeometry args={[0.24, 0.24, 0.36, 6, 1]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.4} transparent opacity={0.22} roughness={0.4} metalness={0.4} />
+            <Edges color={color} threshold={15} linewidth={1.2} />
+          </mesh>
+          <mesh position={[0, 0.32, 0]} rotation={[0, Math.PI / 6, 0]}>
+            <coneGeometry args={[0.24, 0.26, 6]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.7} transparent opacity={0.4} roughness={0.3} />
+            <Edges color={color} threshold={15} linewidth={1.2} />
+          </mesh>
+          <mesh>
+            <icosahedronGeometry args={[0.11, 1]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={innerEmissive} />
+          </mesh>
+        </group>
+      );
+    }
+    case "project": {
+      // Dodecahedron — the "work pathway" node.
+      return (
+        <group>
+          <mesh>
+            <dodecahedronGeometry args={[0.32, 0]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.3} transparent opacity={0.18} roughness={0.35} metalness={0.5} side={THREE.DoubleSide} />
+            <Edges color={color} threshold={15} linewidth={1.2} />
+          </mesh>
+          <mesh>
+            <icosahedronGeometry args={[0.14, 2]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={innerEmissive} />
+          </mesh>
+        </group>
+      );
+    }
+    case "issue": {
+      // Tetrahedron — sharp, "edge case" angularity.
+      return (
+        <group>
+          <mesh rotation={[0.3, 0.6, 0]}>
+            <tetrahedronGeometry args={[0.4, 0]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.4} transparent opacity={0.2} roughness={0.45} metalness={0.45} side={THREE.DoubleSide} />
+            <Edges color={color} threshold={1} linewidth={1.4} />
+          </mesh>
+          <mesh>
+            <icosahedronGeometry args={[0.13, 1]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={innerEmissive} />
+          </mesh>
+        </group>
+      );
+    }
+    case "human": {
+      // Vertical triangular pillar — anchor surface for handoffs.
+      return (
+        <group>
+          <mesh rotation={[0, 0, 0]}>
+            <cylinderGeometry args={[0.22, 0.22, 0.38, 3, 1]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.4} transparent opacity={0.22} roughness={0.4} metalness={0.4} />
+            <Edges color={color} threshold={15} linewidth={1.2} />
+          </mesh>
+          <mesh position={[0, 0.28, 0]}>
+            <coneGeometry args={[0.2, 0.22, 3]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.7} transparent opacity={0.4} roughness={0.3} />
+            <Edges color={color} threshold={15} linewidth={1.2} />
+          </mesh>
+          <mesh>
+            <sphereGeometry args={[0.12, 16, 16]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={innerEmissive} />
+          </mesh>
+        </group>
+      );
+    }
+    case "memory": {
+      // Stacked discs — knowledge layers; central deposit core.
+      const layers = [-1, 0, 1];
+      return (
+        <group>
+          {layers.map((i) => (
+            <mesh key={i} position={[0, i * 0.13, 0]} rotation={[(i % 2) * 0.18, 0, 0]}>
+              <cylinderGeometry args={[0.26 - Math.abs(i) * 0.04, 0.26 - Math.abs(i) * 0.04, 0.018, 36, 1]} />
+              <meshStandardMaterial color={i === 0 ? color : "#83918c"} emissive={i === 0 ? color : "#83918c"} emissiveIntensity={emissive * (i === 0 ? 0.6 : 0.3)} transparent opacity={0.55} roughness={0.5} metalness={0.3} />
+              <Edges color={i === 0 ? color : "#83918c"} threshold={15} linewidth={1} />
+            </mesh>
+          ))}
+          <mesh>
+            <sphereGeometry args={[0.09, 12, 12]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={innerEmissive * 0.75} />
+          </mesh>
+        </group>
+      );
+    }
+    case "approval": {
+      // Vertically oriented octahedron (diamond) — the synapse gate.
+      return (
+        <group>
+          <mesh>
+            <octahedronGeometry args={[0.32, 0]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.4} transparent opacity={0.22} roughness={0.35} metalness={0.5} side={THREE.DoubleSide} />
+            <Edges color={color} threshold={1} linewidth={1.3} />
+          </mesh>
+          <mesh>
+            <octahedronGeometry args={[0.15, 1]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={innerEmissive} />
+          </mesh>
+        </group>
+      );
+    }
+    case "routine": {
+      // Torus-knot — a closed pulse loop.
+      return (
+        <group>
+          <mesh>
+            <torusGeometry args={[0.26, 0.05, 12, 64]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive * 0.6} roughness={0.35} metalness={0.4} transparent opacity={0.55} />
+            <Edges color={color} threshold={15} linewidth={1} />
+          </mesh>
+          <mesh>
+            <sphereGeometry args={[0.07, 12, 12]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={innerEmissive} />
+          </mesh>
+        </group>
+      );
+    }
+    default: {
+      return (
+        <mesh>
+          <icosahedronGeometry args={[0.28, 2]} />
+          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={emissive} roughness={0.32} metalness={0.2} />
+        </mesh>
+      );
+    }
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* ClickRipple — single-shot expanding ring fired on every node click          */
+/* -------------------------------------------------------------------------- */
+function ClickRipple({ color, triggerKey }: { color: string; triggerKey: number }) {
+  const ref = useRef<THREE.Mesh>(null);
+  const startRef = useRef<number>(0);
+  useFrame(({ clock }) => {
+    if (!ref.current) return;
+    if (startRef.current === 0) startRef.current = clock.elapsedTime;
+    const elapsed = clock.elapsedTime - startRef.current;
+    const dur = 0.85;
+    const t = Math.min(elapsed / dur, 1);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const scale = 1 + eased * 3.2;
+    ref.current.scale.setScalar(scale);
+    const m = ref.current.material as THREE.MeshBasicMaterial;
+    m.opacity = (1 - t) * 0.8;
+  });
+  return (
+    <mesh key={triggerKey} ref={ref} rotation={[Math.PI / 2, 0, 0]}>
+      <torusGeometry args={[0.42, 0.012, 12, 80]} />
+      <meshBasicMaterial color={color} transparent opacity={0.8} depthWrite={false} />
+    </mesh>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* Node3D — interactive draggable graph node                                   */
 /* -------------------------------------------------------------------------- */
 function Node3D({
   node,
   position,
   selected,
+  dimmed,
   emphasized,
   onSelect,
   onMove,
@@ -355,21 +548,27 @@ function Node3D({
   node: CortexNode;
   position: [number, number, number];
   selected: boolean;
+  dimmed: boolean;
   emphasized: boolean;
   onSelect: (id: string) => void;
   onMove: (id: string, pos: [number, number, number]) => void;
   setOrbit: (enabled: boolean) => void;
 }) {
-  const meshRef = useRef<THREE.Mesh>(null);
   const groupRef = useRef<THREE.Group>(null);
+  const scaleRef = useRef<THREE.Group>(null);
   const [hovered, setHovered] = useState(false);
+  const [clickKey, setClickKey] = useState(0);
   const dragRef = useRef<{
     dragging: boolean;
+    didDrag: boolean;
+    pointerStart: { x: number; y: number };
     plane: THREE.Plane;
     intersect: THREE.Vector3;
     offset: THREE.Vector3;
   }>({
     dragging: false,
+    didDrag: false,
+    pointerStart: { x: 0, y: 0 },
     plane: new THREE.Plane(),
     intersect: new THREE.Vector3(),
     offset: new THREE.Vector3(),
@@ -377,16 +576,24 @@ function Node3D({
 
   const color = STATE_COLOR[node.state];
   const baseY = position[1];
+  const targetScale = selected ? 1.4 : hovered ? 1.15 : dimmed ? 0.78 : 1;
 
   useFrame(({ clock }) => {
-    if (!groupRef.current || dragRef.current.dragging) return;
-    const t = clock.elapsedTime + node.id.length * 0.21;
-    groupRef.current.position.y = baseY + Math.sin(t * 0.55) * 0.07;
+    if (!groupRef.current) return;
+    if (!dragRef.current.dragging) {
+      const t = clock.elapsedTime + node.id.length * 0.21;
+      groupRef.current.position.y = baseY + Math.sin(t * 0.55) * 0.07;
+    }
+    if (scaleRef.current) {
+      // Smoothly interpolate scale to target — no hard pops
+      const current = scaleRef.current.scale.x;
+      const next = current + (targetScale - current) * 0.18;
+      scaleRef.current.scale.setScalar(next);
+    }
   });
 
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
-    onSelect(node.id);
     if (!groupRef.current) return;
     const cam = e.camera as THREE.Camera;
     const planeNormal = new THREE.Vector3();
@@ -395,12 +602,20 @@ function Node3D({
     dragRef.current.plane.setFromNormalAndCoplanarPoint(planeNormal, groupRef.current.position);
     dragRef.current.offset.subVectors(groupRef.current.position, e.point);
     dragRef.current.dragging = true;
+    dragRef.current.didDrag = false;
+    dragRef.current.pointerStart = { x: e.clientX, y: e.clientY };
     setOrbit(false);
     (e.target as Element)?.setPointerCapture?.(e.pointerId);
   };
 
   const handlePointerMove = (e: ThreeEvent<PointerEvent>) => {
     if (!dragRef.current.dragging || !groupRef.current) return;
+    const dx = e.clientX - dragRef.current.pointerStart.x;
+    const dy = e.clientY - dragRef.current.pointerStart.y;
+    if (Math.hypot(dx, dy) > 6) {
+      dragRef.current.didDrag = true;
+    }
+    if (!dragRef.current.didDrag) return;
     e.stopPropagation();
     const raycaster = e.ray ? new THREE.Raycaster() : null;
     if (raycaster) {
@@ -417,16 +632,22 @@ function Node3D({
   const handlePointerUp = (e: ThreeEvent<PointerEvent>) => {
     if (!dragRef.current.dragging) return;
     e.stopPropagation();
+    const wasDrag = dragRef.current.didDrag;
     dragRef.current.dragging = false;
+    dragRef.current.didDrag = false;
     setOrbit(true);
     (e.target as Element)?.releasePointerCapture?.(e.pointerId);
+    if (!wasDrag) {
+      // It was a click, not a drag — select + fire ripple
+      onSelect(node.id);
+      setClickKey((k) => k + 1);
+    }
   };
 
   if (node.kind === "mission") {
-    // Mission is the nucleus — render only a floating label
     return (
       <Html
-        position={[position[0], position[1] - 1.8, position[2]]}
+        position={[position[0], position[1] - 2.05, position[2]]}
         center
         distanceFactor={9}
         zIndexRange={[40, 30]}
@@ -438,43 +659,40 @@ function Node3D({
     );
   }
 
-  const scale = selected ? 1.45 : hovered ? 1.2 : 1;
+  const emissive = dimmed ? 0.5 : emphasized ? 1.4 : 0.9;
+  const innerEmissive = dimmed ? 0.8 : emphasized ? 2.6 : 1.8;
+
   return (
     <group ref={groupRef} position={position}>
-      <mesh
-        ref={meshRef}
-        scale={scale}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerOver={() => setHovered(true)}
-        onPointerOut={() => setHovered(false)}
-      >
-        <icosahedronGeometry args={[0.28, 2]} />
-        <meshStandardMaterial
-          color={color}
-          emissive={color}
-          emissiveIntensity={emphasized ? 2.6 : 1.4}
-          roughness={0.32}
-          metalness={0.2}
-        />
-      </mesh>
+      <group ref={scaleRef}>
+        {/* Hit target — the actual geometric form */}
+        <group
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerOver={() => setHovered(true)}
+          onPointerOut={() => setHovered(false)}
+        >
+          <NodeForm kind={node.kind} color={color} emissive={emissive} innerEmissive={innerEmissive} />
+        </group>
 
-      {selected ? <PulseSelection color={color} /> : null}
+        {selected ? <PulseSelection color={color} /> : null}
+        {clickKey > 0 ? <ClickRipple color={color} triggerKey={clickKey} /> : null}
 
-      {/* Data-derived sub-structure: every visible element below maps to a real
-          node.metric value (active branches, task count, pending depth, etc.).
-          See deriveContext() for the data → visual mapping contract. */}
-      <NodeContext node={node} color={color} />
+        {/* Data-derived sub-structure — every element below maps to a real
+            node.metric. See deriveContext(). */}
+        <NodeContext node={node} color={color} />
+      </group>
 
       <Html
-        position={[0.38, -0.42, 0]}
+        position={[0, -0.72, 0]}
+        center
         zIndexRange={[30, 10]}
         distanceFactor={9}
         occlude="blending"
         style={{ pointerEvents: "none" }}
       >
-        <div className={`cortex-3d-label${selected ? " is-selected" : ""}`} data-state={node.state}>
+        <div className={`cortex-3d-label${selected ? " is-selected" : ""}${dimmed ? " is-dimmed" : ""}`} data-state={node.state}>
           <strong>{node.label}</strong>
           <em>
             {node.kind} · {node.state}
@@ -1058,12 +1276,16 @@ function Scene({
       {graph.nodes.map((node) => {
         const pos = positions.get(node.id);
         if (!pos) return null;
+        const isSelected = selectedNodeId === node.id;
+        const hasSelection = selectedNodeId !== null;
+        const isDimmed = hasSelection && !isSelected && node.kind !== "mission";
         return (
           <Node3D
             key={node.id}
             node={node}
             position={pos}
-            selected={selectedNodeId === node.id}
+            selected={isSelected}
+            dimmed={isDimmed}
             emphasized={isNodeEmphasized(node)}
             onSelect={onSelectNode}
             onMove={setPosition}
