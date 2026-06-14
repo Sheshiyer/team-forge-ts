@@ -369,6 +369,117 @@
   perspective-origin: 50% 56%;
 }
 
+/* ============== 3D mode (NeuralField R3F implementation) ============== */
+.cortex-neural-field--3d {
+  padding: 0;
+  perspective: none;
+  background: radial-gradient(ellipse at 50% 50%, #07111f 0%, #02060a 80%);
+}
+
+.cortex-neural-field--3d > canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  outline: none;
+}
+
+/* In 3D mode the 2D overlays that depend on viewbox coords are hidden */
+.cortex-shell:has(.cortex-neural-field--3d) .cortex-quadrant-labels,
+.cortex-shell:has(.cortex-neural-field--3d) .cortex-command-ring {
+  display: none;
+}
+
+/* 3D HTML labels — overlay tags pinned to world positions */
+.cortex-3d-label {
+  font-family: var(--cortex-font-mono);
+  letter-spacing: var(--cortex-letterspace-tight);
+  color: var(--cortex-bone);
+  background: rgba(3, 7, 7, 0.62);
+  border: 1px solid rgba(24, 215, 255, 0.32);
+  padding: 4px 7px;
+  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+  backdrop-filter: blur(4px);
+  white-space: nowrap;
+  transform: translate(0, -50%);
+  user-select: none;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.05;
+}
+
+.cortex-3d-label strong {
+  font-family: var(--cortex-font-body);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cortex-bone);
+}
+
+.cortex-3d-label em {
+  font-size: 8px;
+  letter-spacing: var(--cortex-letterspace-wide);
+  font-style: normal;
+  color: var(--cortex-muted);
+  text-transform: uppercase;
+}
+
+.cortex-3d-label[data-state="healthy"] { border-color: rgba(57, 255, 136, 0.5); }
+.cortex-3d-label[data-state="active"] { border-color: rgba(24, 215, 255, 0.5); }
+.cortex-3d-label[data-state="pending"] { border-color: rgba(255, 176, 46, 0.5); }
+.cortex-3d-label[data-state="blocked"] { border-color: rgba(255, 47, 122, 0.55); }
+
+.cortex-3d-label.is-selected {
+  background: rgba(24, 215, 255, 0.18);
+  border-color: var(--cortex-cyan);
+  box-shadow: var(--cortex-glow-cyan);
+}
+
+.cortex-3d-label--mission {
+  background: linear-gradient(135deg, rgba(24, 215, 255, 0.32), rgba(24, 215, 255, 0.08));
+  border-color: var(--cortex-cyan);
+  font-family: var(--cortex-font-display);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  padding: 6px 14px;
+  box-shadow: var(--cortex-glow-cyan);
+}
+
+/* Controls hint in the bottom-left corner of the 3D field */
+.cortex-3d-hint {
+  position: absolute;
+  bottom: 84px;
+  left: 36px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  pointer-events: none;
+  font-family: var(--cortex-font-mono);
+  font-size: 9px;
+  letter-spacing: var(--cortex-letterspace-wide);
+  color: rgba(131, 145, 140, 0.7);
+  text-transform: uppercase;
+}
+
+.cortex-3d-hint span::before {
+  content: "›  ";
+  color: var(--cortex-cyan);
+  opacity: 0.6;
+}
+
+.cortex-3d-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--cortex-muted);
+  font-family: var(--cortex-font-mono);
+  font-size: 12px;
+}
+
 /* Camera holder — V3 is essentially orthographic; only a whisper of mouse parallax */
 .cortex-camera {
   --cortex-tilt-x: 0deg;

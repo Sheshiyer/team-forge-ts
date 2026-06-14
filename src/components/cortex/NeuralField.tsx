@@ -1,5 +1,26 @@
-import { useMemo, useRef, type CSSProperties } from "react";
-import type { CortexGraph, CortexLensId, CortexNode, CortexPath, CortexSignal } from "../../lib/commandCortex/types";
+/**
+ * NeuralField — real 3D Mission Cortex.
+ *
+ * Replaces the prior SVG/CSS implementation (preserved at
+ * NeuralField.svg.bak.tsx) with a Three.js + React-Three-Fiber scene.
+ *
+ * Features:
+ *   - Volumetric glowing nucleus with bloom post-fx.
+ *   - 3D node spheres (state-coloured emissive) connected by curving tube
+ *     synapses.
+ *   - Particles travel along the synapses as live signals.
+ *   - Ambient dendrite cloud: thousands of small lit dots filling the
+ *     surrounding space → the "living organism" feel.
+ *   - Camera: OrbitControls (left-drag rotate, scroll zoom, right-drag pan).
+ *   - Click-to-select a node; drag-to-move it freely in 3D space.
+ */
+import { Canvas, useFrame, type ThreeEvent } from "@react-three/fiber";
+import { Html, OrbitControls, Stars } from "@react-three/drei";
+import { Bloom, ChromaticAberration, EffectComposer, Vignette } from "@react-three/postprocessing";
+import { BlendFunction } from "postprocessing";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import * as THREE from "three";
+import type { CortexGraph, CortexLensId, CortexNode, CortexPath, CortexSignal, CortexSignalState } from "../../lib/commandCortex/types";
 
 export interface NeuralFieldProps {
   graph: CortexGraph;
@@ -8,692 +29,619 @@ export interface NeuralFieldProps {
   onSelectNode?: (nodeId: string) => void;
 }
 
-const VIEW_W = 1000;
-const VIEW_H = 680;
-const CENTER = { x: 500, y: 340 };
+const STATE_COLOR: Record<CortexSignalState, string> = {
+  healthy: "#39ff88",
+  active: "#18d7ff",
+  pending: "#ffb02e",
+  blocked: "#ff2f7a",
+  dormant: "#56615f",
+  archived: "#3b4742",
+};
 
-interface Point {
-  x: number;
-  y: number;
+const KIND_DEPTH: Record<string, number> = {
+  mission: 0,
+  client: 0.6,
+  project: -0.4,
+  issue: 0.9,
+  agent: -0.8,
+  human: 0.3,
+  memory: -0.3,
+  routine: 0.1,
+  approval: 0.7,
+};
+
+const SVG_W = 1000;
+const SVG_H = 680;
+const SCALE = 70;
+
+function toWorld(p: { x: number; y: number }, kind: string): [number, number, number] {
+  return [
+    (p.x - SVG_W / 2) / SCALE,
+    -(p.y - SVG_H / 2) / SCALE,
+    KIND_DEPTH[kind] ?? 0,
+  ];
 }
 
-function mulberry32(seed: number) {
-  let a = seed | 0;
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+/* -------------------------------------------------------------------------- */
+/* Nucleus — the volumetric glowing centerpiece                                */
+/* -------------------------------------------------------------------------- */
+function Nucleus() {
+  const innerRef = useRef<THREE.Mesh>(null);
+  const ringARef = useRef<THREE.Mesh>(null);
+  const ringBRef = useRef<THREE.Mesh>(null);
+  const haloRef = useRef<THREE.Mesh>(null);
 
-function hashSeed(id: string): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
-  return h >>> 0;
-}
-
-function pointAlongQuad(from: Point, control: Point, to: Point, t: number): Point {
-  const mt = 1 - t;
-  return {
-    x: mt * mt * from.x + 2 * mt * t * control.x + t * t * to.x,
-    y: mt * mt * from.y + 2 * mt * t * control.y + t * t * to.y,
-  };
-}
-
-function quadControl(from: Point, to: Point, arch = -40): Point {
-  return { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 + arch };
-}
-
-function offsetAlongNormal(from: Point, control: Point, to: Point) {
-  const mid = pointAlongQuad(from, control, to, 0.5);
-  const ahead = pointAlongQuad(from, control, to, 0.55);
-  const dx = ahead.x - mid.x;
-  const dy = ahead.y - mid.y;
-  const len = Math.max(0.001, Math.sqrt(dx * dx + dy * dy));
-  return { nx: -dy / len, ny: dx / len, mid };
-}
-
-// Ambient dendrite tree — generates ~70 curving branches from nucleus into all
-// quadrants, each with sub-branches, stipple, and a terminal leaf node. This is
-// what creates the V3 "neural tissue" density: not straight spike-rays but a
-// fractal-tree pattern matching mockup 02-mission-cortex-field.png.
-type QuadColor = "emerald" | "amber" | "cyan" | "rose";
-
-interface DendriteSub {
-  d: string;
-  stipples: Array<{ x: number; y: number; r: number }>;
-  leafX: number;
-  leafY: number;
-  leafR: number;
-}
-
-interface AmbientDendrite {
-  trunkD: string;
-  trunkStipples: Array<{ x: number; y: number; r: number }>;
-  subs: DendriteSub[];
-  leafX: number;
-  leafY: number;
-  leafR: number;
-  color: QuadColor;
-}
-
-function quadColorFromAngle(endX: number, endY: number): QuadColor {
-  if (endY < CENTER.y) {
-    return endX < CENTER.x ? "emerald" : "amber";
-  }
-  return endX < CENTER.x ? "cyan" : "rose";
-}
-
-function buildAmbientDendrites(count: number, seed: number): AmbientDendrite[] {
-  const rand = mulberry32(seed);
-  const dendrites: AmbientDendrite[] = [];
-  for (let i = 0; i < count; i++) {
-    const angleBase = (i / count) * Math.PI * 2 - Math.PI;
-    const angleJitter = (rand() - 0.5) * ((Math.PI * 2) / count) * 1.6;
-    const angle = angleBase + angleJitter;
-
-    const innerR = 56 + rand() * 14;
-    const trunkLen = 130 + rand() * 240;
-    const start = {
-      x: CENTER.x + Math.cos(angle) * innerR,
-      y: CENTER.y + Math.sin(angle) * innerR,
-    };
-
-    const curlSign = rand() < 0.5 ? -1 : 1;
-    const curlAmt = (0.25 + rand() * 0.5) * curlSign;
-    const endAngle = angle + curlAmt * 0.65;
-    const end = {
-      x: CENTER.x + Math.cos(endAngle) * (innerR + trunkLen),
-      y: CENTER.y + Math.sin(endAngle) * (innerR + trunkLen),
-    };
-    const ctrlAngle = angle + curlAmt * 0.28;
-    const ctrlR = innerR + trunkLen * 0.55;
-    const control = {
-      x: CENTER.x + Math.cos(ctrlAngle) * ctrlR,
-      y: CENTER.y + Math.sin(ctrlAngle) * ctrlR,
-    };
-    const trunkD = `M ${start.x.toFixed(1)} ${start.y.toFixed(1)} Q ${control.x.toFixed(1)} ${control.y.toFixed(1)} ${end.x.toFixed(1)} ${end.y.toFixed(1)}`;
-
-    const stippleCount = 8 + Math.floor(rand() * 9);
-    const trunkStipples = [];
-    for (let s = 0; s < stippleCount; s++) {
-      const t = (s + 0.6) / (stippleCount + 1);
-      const p = pointAlongQuad(start, control, end, t);
-      trunkStipples.push({
-        x: p.x + (rand() - 0.5) * 2.5,
-        y: p.y + (rand() - 0.5) * 2.5,
-        r: 0.7 + rand() * 1.0,
-      });
+  useFrame(({ clock }) => {
+    const t = clock.elapsedTime;
+    if (innerRef.current) {
+      innerRef.current.scale.setScalar(1 + Math.sin(t * 1.4) * 0.05);
+      innerRef.current.rotation.y = t * 0.15;
+      innerRef.current.rotation.x = Math.sin(t * 0.2) * 0.1;
     }
-
-    const subCount = Math.floor(rand() * 2.7); // 0, 1, or 2
-    const subs: DendriteSub[] = [];
-    for (let s = 0; s < subCount; s++) {
-      const branchT = 0.45 + rand() * 0.4;
-      const origin = pointAlongQuad(start, control, end, branchT);
-      const ahead = pointAlongQuad(start, control, end, Math.min(0.99, branchT + 0.05));
-      const dx = ahead.x - origin.x;
-      const dy = ahead.y - origin.y;
-      const tlen = Math.max(0.001, Math.sqrt(dx * dx + dy * dy));
-      const nx = -dy / tlen;
-      const ny = dx / tlen;
-      const side = s === 0 ? 1 : -1;
-      const subLen = 44 + rand() * 70;
-      const subEnd = {
-        x: origin.x + (dx / tlen) * subLen * 0.42 + nx * side * subLen * 0.72,
-        y: origin.y + (dy / tlen) * subLen * 0.42 + ny * side * subLen * 0.72,
-      };
-      const subCtrl = {
-        x: (origin.x + subEnd.x) / 2 + nx * side * 7,
-        y: (origin.y + subEnd.y) / 2 + ny * side * 7,
-      };
-      const subD = `M ${origin.x.toFixed(1)} ${origin.y.toFixed(1)} Q ${subCtrl.x.toFixed(1)} ${subCtrl.y.toFixed(1)} ${subEnd.x.toFixed(1)} ${subEnd.y.toFixed(1)}`;
-      const subStippleCount = 4 + Math.floor(rand() * 5);
-      const subStipples = [];
-      for (let k = 0; k < subStippleCount; k++) {
-        const t = (k + 0.5) / subStippleCount;
-        const p = pointAlongQuad(origin, subCtrl, subEnd, t);
-        subStipples.push({ x: p.x, y: p.y, r: 0.55 + rand() * 0.85 });
-      }
-      subs.push({ d: subD, stipples: subStipples, leafX: subEnd.x, leafY: subEnd.y, leafR: 1.3 + rand() * 1.0 });
+    if (haloRef.current) {
+      const m = haloRef.current.material as THREE.MeshBasicMaterial;
+      m.opacity = 0.1 + (Math.sin(t * 1.2) + 1) * 0.04;
     }
-
-    dendrites.push({
-      trunkD,
-      trunkStipples,
-      subs,
-      leafX: end.x,
-      leafY: end.y,
-      leafR: 1.6 + rand() * 1.4,
-      color: quadColorFromAngle(end.x, end.y),
-    });
-  }
-  return dendrites;
-}
-
-const AMBIENT_DENDRITES = buildAmbientDendrites(72, 0xc0ffee);
-
-interface StrandSpec {
-  d: string;
-  offset: number;
-  stipples: Array<{ x: number; y: number; r: number }>;
-}
-
-interface PathGeom {
-  path: CortexPath;
-  from: CortexNode;
-  to: CortexNode;
-  trunkD: string;
-  strands: StrandSpec[];
-  labelP: Point;
-  mpathId: string;
-}
-
-function buildStrands(from: Point, to: Point, seed: number): StrandSpec[] {
-  const rand = mulberry32(seed);
-  const trunkControl = quadControl(from, to, -40 - rand() * 20);
-  const { nx, ny } = offsetAlongNormal(from, trunkControl, to);
-  const strandCount = 3;
-  const strands: StrandSpec[] = [];
-  for (let s = 0; s < strandCount; s++) {
-    const offset = (s - (strandCount - 1) / 2) * 6;
-    const ctrl = { x: trunkControl.x + nx * offset, y: trunkControl.y + ny * offset };
-    const fromP = { x: from.x + nx * offset * 0.18, y: from.y + ny * offset * 0.18 };
-    const toP = { x: to.x + nx * offset * 0.18, y: to.y + ny * offset * 0.18 };
-    const d = `M ${fromP.x.toFixed(1)} ${fromP.y.toFixed(1)} Q ${ctrl.x.toFixed(1)} ${ctrl.y.toFixed(1)} ${toP.x.toFixed(1)} ${toP.y.toFixed(1)}`;
-    const stippleCount = 14 + Math.floor(rand() * 6);
-    const stipples = [];
-    for (let i = 0; i < stippleCount; i++) {
-      const t = (i + 0.5 + (rand() - 0.5) * 0.6) / stippleCount;
-      const p = pointAlongQuad(fromP, ctrl, toP, Math.max(0.04, Math.min(0.96, t)));
-      stipples.push({ x: p.x, y: p.y, r: 0.7 + rand() * 1.2 });
-    }
-    strands.push({ d, offset, stipples });
-  }
-  return strands;
-}
-
-function motionDurFor(state: string): number {
-  switch (state) {
-    case "active":
-      return 4.0;
-    case "healthy":
-      return 5.6;
-    case "pending":
-      return 5.0;
-    case "blocked":
-      return 7.0;
-    default:
-      return 8.0;
-  }
-}
-
-function renderGlyph(kind: string, isMission: boolean) {
-  if (isMission) {
-    // Mission nucleus is rendered separately in the nucleus layer.
-    return null;
-  }
-  switch (kind) {
-    case "client":
-      return (
-        <>
-          <circle className="cortex-node__orbit" r={24} />
-          <circle className="cortex-node__orbit" r={18} opacity={0.6} />
-          <path className="cortex-node__ring" d="M 0 -20 L 17 -10 L 17 10 L 0 20 L -17 10 L -17 -10 Z" />
-          <circle className="cortex-node__core" r={6} />
-        </>
-      );
-    case "project":
-      return (
-        <>
-          <path className="cortex-node__ring" d="M 0 -21 L 19 0 L 0 21 L -19 0 Z" />
-          <path className="cortex-node__fork" d="M 0 -7 V 4 M 0 4 L -8 12 M 0 4 L 8 12" />
-          <circle className="cortex-node__core" r={5} />
-        </>
-      );
-    case "issue":
-      return (
-        <>
-          {Array.from({ length: 10 }, (_, i) => {
-            const a = (i * Math.PI * 2) / 10;
-            const r1 = 22;
-            const r2 = i % 2 === 0 ? 30 : 26;
-            return (
-              <line
-                key={i}
-                className="cortex-node__inflammation-ray"
-                x1={Math.cos(a) * r1}
-                y1={Math.sin(a) * r1}
-                x2={Math.cos(a) * r2}
-                y2={Math.sin(a) * r2}
-              />
-            );
-          })}
-          <path className="cortex-node__ring" d="M 0 -18 L 16 0 L 0 18 L -16 0 Z" />
-          <circle className="cortex-node__core" r={6} />
-        </>
-      );
-    case "agent":
-      return (
-        <>
-          {Array.from({ length: 6 }, (_, i) => {
-            const a = (i * Math.PI * 2) / 6;
-            return (
-              <line
-                key={i}
-                className="cortex-node__pulse-ray"
-                x1={Math.cos(a) * 9}
-                y1={Math.sin(a) * 9}
-                x2={Math.cos(a) * 20}
-                y2={Math.sin(a) * 20}
-              />
-            );
-          })}
-          <path className="cortex-node__ring" d="M -20 12 L 0 -22 L 20 12 Z" />
-          <circle className="cortex-node__core" r={6} />
-        </>
-      );
-    case "human":
-      return (
-        <>
-          {Array.from({ length: 6 }, (_, i) => {
-            const a = (i * Math.PI * 2) / 6 + Math.PI / 6;
-            const r1 = 13;
-            const r2 = 24;
-            const ctrlR = 19;
-            const ctrlA = a + 0.18;
-            return (
-              <path
-                key={i}
-                className="cortex-node__tendril"
-                d={`M ${Math.cos(a) * r1} ${Math.sin(a) * r1} Q ${Math.cos(ctrlA) * ctrlR} ${Math.sin(ctrlA) * ctrlR} ${Math.cos(a) * r2} ${Math.sin(a) * r2}`}
-              />
-            );
-          })}
-          <circle className="cortex-node__ring" r={14} />
-          <circle className="cortex-node__core" r={5} />
-        </>
-      );
-    case "memory":
-      return (
-        <>
-          {[24, 18, 13].map((r, i) => (
-            <ellipse
-              key={r}
-              className="cortex-node__memory-layer"
-              rx={r}
-              ry={r * 0.6}
-              opacity={0.32 + i * 0.22}
-            />
-          ))}
-          <circle className="cortex-node__core" r={5} />
-        </>
-      );
-    case "approval":
-      return (
-        <>
-          <path className="cortex-node__ring" d="M 0 -20 L 17 0 L 0 20 L -17 0 Z" />
-          <path className="cortex-node__mark" d="M -7 0 L -2 5 L 8 -6" />
-          <circle className="cortex-node__core" r={5} />
-        </>
-      );
-    default:
-      return (
-        <>
-          <circle className="cortex-node__ring" r={17} />
-          <circle className="cortex-node__core" r={5} />
-        </>
-      );
-  }
-}
-
-export default function NeuralField({ graph, activeLens, selectedNodeId, onSelectNode }: NeuralFieldProps) {
-  const cameraRef = useRef<HTMLDivElement>(null);
-
-  // Mouse parallax — whisper of tilt (±1.5°) preserves V3's orthographic feel
-  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    const node = cameraRef.current;
-    if (!node) return;
-    const rect = node.getBoundingClientRect();
-    const dx = (e.clientX - rect.left) / rect.width - 0.5;
-    const dy = (e.clientY - rect.top) / rect.height - 0.5;
-    node.style.setProperty("--cortex-tilt-x", `${(-dy * 1.5).toFixed(2)}deg`);
-    node.style.setProperty("--cortex-tilt-y", `${(dx * 1.5).toFixed(2)}deg`);
-  };
-  const handleMouseLeave = () => {
-    const node = cameraRef.current;
-    if (!node) return;
-    node.style.setProperty("--cortex-tilt-x", "0deg");
-    node.style.setProperty("--cortex-tilt-y", "0deg");
-  };
-
-  const isNodeEmphasized = (node: CortexNode) =>
-    node.lensAffinity?.includes(activeLens) || node.kind === "mission" || node.id === selectedNodeId;
-
-  const isPathEmphasized = (path: CortexPath) => {
-    const from = graph.nodes.find((node) => node.id === path.from);
-    const to = graph.nodes.find((node) => node.id === path.to);
-    return Boolean(from && to && (isNodeEmphasized(from) || isNodeEmphasized(to)));
-  };
-
-  const pathGeometry: PathGeom[] = useMemo(() => {
-    return graph.paths
-      .map((path) => {
-        const from = graph.nodes.find((n) => n.id === path.from);
-        const to = graph.nodes.find((n) => n.id === path.to);
-        if (!from || !to) return null;
-        const seed = hashSeed(path.id);
-        const strands = buildStrands(from.position, to.position, seed);
-        const trunkControl = quadControl(from.position, to.position, -40);
-        const trunkD = `M ${from.position.x} ${from.position.y} Q ${trunkControl.x.toFixed(1)} ${trunkControl.y.toFixed(1)} ${to.position.x} ${to.position.y}`;
-        const labelP = pointAlongQuad(from.position, trunkControl, to.position, 0.5);
-        return {
-          path,
-          from,
-          to,
-          trunkD,
-          strands,
-          labelP,
-          mpathId: `cortex-mpath-${path.id}`,
-        } as PathGeom;
-      })
-      .filter(Boolean) as PathGeom[];
-  }, [graph.paths, graph.nodes]);
-
-  const signalAssignments = useMemo(() => {
-    return graph.signals
-      .map((signal, index) => {
-        const geom = pathGeometry.find((g) => g.path.id === signal.pathId);
-        if (!geom) return null;
-        return { signal, geom, idx: index };
-      })
-      .filter(Boolean) as Array<{ signal: CortexSignal; geom: PathGeom; idx: number }>;
-  }, [graph.signals, pathGeometry]);
-
-  const sharedSvgProps = {
-    viewBox: `0 0 ${VIEW_W} ${VIEW_H}`,
-    preserveAspectRatio: "xMidYMid meet",
-  } as const;
-
-  const layerStyle = (z: number): CSSProperties => ({
-    transform: `translateZ(${z}px)`,
+    if (ringARef.current) ringARef.current.rotation.z = t * 0.08;
+    if (ringBRef.current) ringBRef.current.rotation.z = -t * 0.05;
   });
 
   return (
-    <div className="cortex-neural-field" data-lens={activeLens}>
-      <div
-        ref={cameraRef}
-        className="cortex-camera"
-        onMouseMove={handleMouseMove}
-        onMouseLeave={handleMouseLeave}
+    <group>
+      <pointLight intensity={120} distance={22} color="#18d7ff" decay={1.6} />
+
+      <mesh ref={innerRef}>
+        <icosahedronGeometry args={[1.05, 5]} />
+        <meshStandardMaterial
+          color={new THREE.Color("#9ff0ff")}
+          emissive={new THREE.Color("#18d7ff")}
+          emissiveIntensity={4.5}
+          roughness={0.18}
+          metalness={0.12}
+        />
+      </mesh>
+
+      <mesh>
+        <sphereGeometry args={[1.32, 48, 48]} />
+        <meshBasicMaterial color="#7ee9ff" transparent opacity={0.18} side={THREE.BackSide} />
+      </mesh>
+
+      <mesh ref={haloRef}>
+        <sphereGeometry args={[2.1, 48, 48]} />
+        <meshBasicMaterial color="#18d7ff" transparent opacity={0.12} side={THREE.BackSide} depthWrite={false} />
+      </mesh>
+
+      <mesh ref={ringARef} rotation={[Math.PI / 2.2, 0, 0]}>
+        <torusGeometry args={[2.6, 0.018, 16, 160]} />
+        <meshBasicMaterial color="#9ff0ff" transparent opacity={0.45} />
+      </mesh>
+
+      <mesh ref={ringBRef} rotation={[Math.PI / 2, Math.PI / 5, 0]}>
+        <torusGeometry args={[3.4, 0.012, 16, 200]} />
+        <meshBasicMaterial color="#18d7ff" transparent opacity={0.28} />
+      </mesh>
+
+      <mesh rotation={[0, 0, 0]}>
+        <torusGeometry args={[4.4, 0.006, 12, 240]} />
+        <meshBasicMaterial color="#39ff88" transparent opacity={0.18} />
+      </mesh>
+    </group>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Synapse — curving glowing tube between two world points                     */
+/* -------------------------------------------------------------------------- */
+function curveBetween(from: THREE.Vector3, to: THREE.Vector3, lift: number): THREE.QuadraticBezierCurve3 {
+  const mid = from.clone().add(to).multiplyScalar(0.5);
+  const dir = to.clone().sub(from);
+  const offset = new THREE.Vector3(0, 0, lift * Math.max(1, dir.length() * 0.18));
+  mid.add(offset);
+  return new THREE.QuadraticBezierCurve3(from, mid, to);
+}
+
+function Synapse({
+  from,
+  to,
+  state,
+  emphasized,
+}: {
+  from: [number, number, number];
+  to: [number, number, number];
+  state: CortexSignalState;
+  emphasized: boolean;
+}) {
+  const curve = useMemo(
+    () => curveBetween(new THREE.Vector3(...from), new THREE.Vector3(...to), 1),
+    [from, to],
+  );
+  const color = STATE_COLOR[state];
+  const isHot = state === "active" || state === "blocked";
+  return (
+    <mesh>
+      <tubeGeometry args={[curve, 56, emphasized ? 0.025 : 0.018, 8, false]} />
+      <meshStandardMaterial
+        color={color}
+        emissive={color}
+        emissiveIntensity={isHot ? 3 : 1.6}
+        transparent
+        opacity={emphasized ? 0.85 : 0.45}
+        roughness={0.4}
+      />
+    </mesh>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* TravelingSignal — particle that loops along a curve                         */
+/* -------------------------------------------------------------------------- */
+function durationFor(state: CortexSignalState): number {
+  switch (state) {
+    case "active":
+      return 3.2;
+    case "healthy":
+      return 4.8;
+    case "pending":
+      return 4.2;
+    case "blocked":
+      return 6.0;
+    default:
+      return 7.5;
+  }
+}
+
+function TravelingSignal({
+  from,
+  to,
+  state,
+  offset,
+}: {
+  from: [number, number, number];
+  to: [number, number, number];
+  state: CortexSignalState;
+  offset: number;
+}) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const trailRef = useRef<THREE.Mesh>(null);
+  const curve = useMemo(
+    () => curveBetween(new THREE.Vector3(...from), new THREE.Vector3(...to), 1),
+    [from, to],
+  );
+  const dur = durationFor(state);
+  useFrame(({ clock }) => {
+    const t = ((clock.elapsedTime + offset) / dur) % 1;
+    const p = curve.getPointAt(t);
+    if (meshRef.current) meshRef.current.position.copy(p);
+    if (trailRef.current) trailRef.current.position.copy(p);
+  });
+  const color = STATE_COLOR[state];
+  return (
+    <group>
+      <mesh ref={trailRef}>
+        <sphereGeometry args={[0.18, 16, 16]} />
+        <meshBasicMaterial color={color} transparent opacity={0.18} depthWrite={false} />
+      </mesh>
+      <mesh ref={meshRef}>
+        <sphereGeometry args={[0.06, 16, 16]} />
+        <meshBasicMaterial color={color} />
+      </mesh>
+    </group>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Node3D — interactive draggable graph node                                   */
+/* -------------------------------------------------------------------------- */
+function Node3D({
+  node,
+  position,
+  selected,
+  emphasized,
+  onSelect,
+  onMove,
+  setOrbit,
+}: {
+  node: CortexNode;
+  position: [number, number, number];
+  selected: boolean;
+  emphasized: boolean;
+  onSelect: (id: string) => void;
+  onMove: (id: string, pos: [number, number, number]) => void;
+  setOrbit: (enabled: boolean) => void;
+}) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const groupRef = useRef<THREE.Group>(null);
+  const [hovered, setHovered] = useState(false);
+  const dragRef = useRef<{
+    dragging: boolean;
+    plane: THREE.Plane;
+    intersect: THREE.Vector3;
+    offset: THREE.Vector3;
+  }>({
+    dragging: false,
+    plane: new THREE.Plane(),
+    intersect: new THREE.Vector3(),
+    offset: new THREE.Vector3(),
+  });
+
+  const color = STATE_COLOR[node.state];
+  const baseY = position[1];
+
+  useFrame(({ clock }) => {
+    if (!groupRef.current || dragRef.current.dragging) return;
+    const t = clock.elapsedTime + node.id.length * 0.21;
+    groupRef.current.position.y = baseY + Math.sin(t * 0.55) * 0.07;
+  });
+
+  const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    onSelect(node.id);
+    if (!groupRef.current) return;
+    const cam = e.camera as THREE.Camera;
+    const planeNormal = new THREE.Vector3();
+    cam.getWorldDirection(planeNormal);
+    planeNormal.negate();
+    dragRef.current.plane.setFromNormalAndCoplanarPoint(planeNormal, groupRef.current.position);
+    dragRef.current.offset.subVectors(groupRef.current.position, e.point);
+    dragRef.current.dragging = true;
+    setOrbit(false);
+    (e.target as Element)?.setPointerCapture?.(e.pointerId);
+  };
+
+  const handlePointerMove = (e: ThreeEvent<PointerEvent>) => {
+    if (!dragRef.current.dragging || !groupRef.current) return;
+    e.stopPropagation();
+    const raycaster = e.ray ? new THREE.Raycaster() : null;
+    if (raycaster) {
+      raycaster.set(e.ray.origin, e.ray.direction);
+      const hit = raycaster.ray.intersectPlane(dragRef.current.plane, dragRef.current.intersect);
+      if (hit) {
+        const next = hit.clone().add(dragRef.current.offset);
+        groupRef.current.position.copy(next);
+        onMove(node.id, [next.x, next.y, next.z]);
+      }
+    }
+  };
+
+  const handlePointerUp = (e: ThreeEvent<PointerEvent>) => {
+    if (!dragRef.current.dragging) return;
+    e.stopPropagation();
+    dragRef.current.dragging = false;
+    setOrbit(true);
+    (e.target as Element)?.releasePointerCapture?.(e.pointerId);
+  };
+
+  if (node.kind === "mission") {
+    // Mission is the nucleus — render only a floating label
+    return (
+      <Html
+        position={[position[0], position[1] - 1.8, position[2]]}
+        center
+        distanceFactor={9}
+        zIndexRange={[40, 30]}
       >
-        {/* Quadrant tint layer (deepest back) */}
-        <div className="cortex-field-layer cortex-field-layer--quadrants" style={layerStyle(-160)} aria-hidden="true">
-          <svg {...sharedSvgProps}>
-            <defs>
-              <radialGradient id="quad-nw" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="rgba(57, 255, 136, 0.16)" />
-                <stop offset="100%" stopColor="rgba(57, 255, 136, 0)" />
-              </radialGradient>
-              <radialGradient id="quad-ne" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="rgba(255, 176, 46, 0.14)" />
-                <stop offset="100%" stopColor="rgba(255, 176, 46, 0)" />
-              </radialGradient>
-              <radialGradient id="quad-sw" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="rgba(24, 215, 255, 0.16)" />
-                <stop offset="100%" stopColor="rgba(24, 215, 255, 0)" />
-              </radialGradient>
-              <radialGradient id="quad-se" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="rgba(255, 47, 122, 0.14)" />
-                <stop offset="100%" stopColor="rgba(255, 47, 122, 0)" />
-              </radialGradient>
-            </defs>
-            <ellipse cx={260} cy={200} rx={340} ry={240} fill="url(#quad-nw)" />
-            <ellipse cx={740} cy={200} rx={340} ry={240} fill="url(#quad-ne)" />
-            <ellipse cx={260} cy={490} rx={340} ry={240} fill="url(#quad-sw)" />
-            <ellipse cx={740} cy={490} rx={340} ry={240} fill="url(#quad-se)" />
-          </svg>
+        <div className="cortex-3d-label cortex-3d-label--mission">
+          <span>{node.label.toUpperCase()}</span>
         </div>
+      </Html>
+    );
+  }
 
-        {/* Background strata — blurred for depth */}
-        <div className="cortex-field-layer cortex-field-layer--strata" style={layerStyle(-100)} aria-hidden="true">
-          <svg {...sharedSvgProps}>
-            <defs>
-              <linearGradient id="cortex-strata-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="rgba(24, 215, 255, 0.2)" />
-                <stop offset="50%" stopColor="rgba(57, 255, 136, 0.1)" />
-                <stop offset="100%" stopColor="rgba(255, 47, 122, 0.12)" />
-              </linearGradient>
-            </defs>
-            <g className="cortex-field-strata">
-              <path d="M 104 480 C 235 320 353 263 500 332 C 645 400 762 372 910 236" />
-              <path d="M 180 188 C 322 66 488 92 642 182 C 767 255 848 318 920 470" />
-              <path d="M 268 596 C 382 490 482 462 616 508 C 736 548 824 536 914 456" />
-              <ellipse cx="500" cy="340" rx="320" ry="220" />
-              <ellipse cx="500" cy="340" rx="220" ry="140" opacity={0.5} />
-              <ellipse cx="500" cy="340" rx="130" ry="86" opacity={0.4} />
-            </g>
-          </svg>
-        </div>
+  const scale = selected ? 1.45 : hovered ? 1.2 : 1;
+  return (
+    <group ref={groupRef} position={position}>
+      <mesh
+        ref={meshRef}
+        scale={scale}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerOver={() => setHovered(true)}
+        onPointerOut={() => setHovered(false)}
+      >
+        <icosahedronGeometry args={[0.28, 2]} />
+        <meshStandardMaterial
+          color={color}
+          emissive={color}
+          emissiveIntensity={emphasized ? 2.6 : 1.4}
+          roughness={0.32}
+          metalness={0.2}
+        />
+      </mesh>
 
-        {/* Ambient dendrite trees radiating from nucleus into all quadrants */}
-        <div className="cortex-field-layer cortex-field-layer--dendrites" style={layerStyle(-60)} aria-hidden="true">
-          <svg {...sharedSvgProps}>
-            {(["emerald", "amber", "cyan", "rose"] as const).map((color) => (
-              <g key={color} className={`cortex-dendrite-zone cortex-dendrite-zone--${color}`}>
-                {AMBIENT_DENDRITES.filter((d) => d.color === color).map((d, i) => (
-                  <g key={i} className="cortex-dendrite">
-                    <path className="cortex-dendrite__trunk" d={d.trunkD} fill="none" />
-                    {d.trunkStipples.map((s, si) => (
-                      <circle key={`t${si}`} className="cortex-dendrite__dot" cx={s.x} cy={s.y} r={s.r} />
-                    ))}
-                    {d.subs.map((sub, sj) => (
-                      <g key={`sub${sj}`}>
-                        <path className="cortex-dendrite__sub" d={sub.d} fill="none" />
-                        {sub.stipples.map((s, ssi) => (
-                          <circle key={`ss${ssi}`} className="cortex-dendrite__dot" cx={s.x} cy={s.y} r={s.r} />
-                        ))}
-                        <circle className="cortex-dendrite__leaf" cx={sub.leafX} cy={sub.leafY} r={sub.leafR} />
-                      </g>
-                    ))}
-                    <circle className="cortex-dendrite__leaf cortex-dendrite__leaf--terminal" cx={d.leafX} cy={d.leafY} r={d.leafR} />
-                  </g>
-                ))}
-              </g>
-            ))}
-          </svg>
-        </div>
+      {selected ? (
+        <mesh>
+          <torusGeometry args={[0.55, 0.012, 8, 64]} />
+          <meshBasicMaterial color={color} transparent opacity={0.65} />
+        </mesh>
+      ) : null}
 
-        {/* Stippled micro-nodes layer (lightweight — no filter) */}
-        <div className="cortex-field-layer cortex-field-layer--stipple" style={layerStyle(-20)} aria-hidden="true">
-          <svg {...sharedSvgProps}>
-            {pathGeometry.map((g) => (
-              <g
-                key={`stip-${g.path.id}`}
-                className={`cortex-stipple cortex-stipple--${g.path.state}${isPathEmphasized(g.path) ? " is-emphasized" : " is-muted"}`}
-              >
-                {g.strands.flatMap((strand) =>
-                  strand.stipples.map((s, i) => (
-                    <circle key={`${strand.offset}-${i}`} cx={s.x} cy={s.y} r={s.r} />
-                  )),
-                )}
-              </g>
-            ))}
-          </svg>
+      <Html
+        position={[0.38, -0.42, 0]}
+        zIndexRange={[30, 10]}
+        distanceFactor={9}
+        occlude="blending"
+        style={{ pointerEvents: "none" }}
+      >
+        <div className={`cortex-3d-label${selected ? " is-selected" : ""}`} data-state={node.state}>
+          <strong>{node.label}</strong>
+          <em>
+            {node.kind} · {node.state}
+          </em>
         </div>
+      </Html>
+    </group>
+  );
+}
 
-        {/* Main multi-strand paths */}
-        <div className="cortex-field-layer cortex-field-layer--paths" style={layerStyle(0)}>
-          <svg {...sharedSvgProps}>
-            <defs>
-              <filter id="cortex-soft-glow" x="-50%" y="-50%" width="200%" height="200%">
-                <feGaussianBlur stdDeviation="3" result="b" />
-                <feMerge>
-                  <feMergeNode in="b" />
-                  <feMergeNode in="SourceGraphic" />
-                </feMerge>
-              </filter>
-            </defs>
-            {/* Hidden motion paths (referenced by animateMotion below) */}
-            <g aria-hidden="true" style={{ display: "none" }}>
-              {pathGeometry.map((g) => (
-                <path key={g.mpathId} id={g.mpathId} d={g.trunkD} />
-              ))}
-            </g>
-            {pathGeometry.map((g) => {
-              const emphasized = isPathEmphasized(g.path);
-              return (
-                <g
-                  key={g.path.id}
-                  className={`cortex-path-group${emphasized ? " is-emphasized" : " is-muted"}`}
-                >
-                  {/* sheath behind all strands */}
-                  <path className="cortex-path-sheath" d={g.trunkD} fill="none" />
-                  {g.strands.map((strand, si) => (
-                    <path
-                      key={si}
-                      className={`cortex-path cortex-path--${g.path.state} cortex-strand cortex-strand--${si}`}
-                      d={strand.d}
-                      fill="none"
-                    />
-                  ))}
-                  {g.path.label || g.path.kind ? (
-                    <text className="cortex-path-label" x={g.labelP.x + 8} y={g.labelP.y - 12}>
-                      {g.path.label ?? g.path.kind}
-                    </text>
-                  ) : null}
-                </g>
-              );
-            })}
-          </svg>
-        </div>
+/* -------------------------------------------------------------------------- */
+/* AmbientDendrites — sea of tiny lit points around the nucleus (living tissue)*/
+/* -------------------------------------------------------------------------- */
+function AmbientDendrites({ count = 1800, radius = 14 }: { count?: number; radius?: number }) {
+  const ref = useRef<THREE.Points>(null);
 
-        {/* Signals — animateMotion along trunk */}
-        <div className="cortex-field-layer cortex-field-layer--signals" style={layerStyle(30)} aria-hidden="true">
-          <svg {...sharedSvgProps}>
-            {signalAssignments.map(({ signal, geom, idx }) => {
-              const dur = motionDurFor(signal.state);
-              const begin = `${(idx * 0.9) % dur}s`;
-              return (
-                <g key={signal.id}>
-                  <circle className={`cortex-signal-trail cortex-signal-trail--${signal.state}`} r={8}>
-                    <animateMotion dur={`${dur}s`} repeatCount="indefinite" begin={begin}>
-                      <mpath href={`#${geom.mpathId}`} />
-                    </animateMotion>
-                  </circle>
-                  <circle className={`cortex-signal cortex-signal--${signal.state}`} r={3.4}>
-                    <animateMotion dur={`${dur}s`} repeatCount="indefinite" begin={begin}>
-                      <mpath href={`#${geom.mpathId}`} />
-                    </animateMotion>
-                  </circle>
-                </g>
-              );
-            })}
-          </svg>
-        </div>
+  const { geometry, material } = useMemo(() => {
+    const positions = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3);
+    const palette = ["#39ff88", "#18d7ff", "#ffb02e", "#ff2f7a"];
+    for (let i = 0; i < count; i++) {
+      // Spherical cloud biased toward the equatorial plane
+      const phi = Math.acos(2 * Math.random() - 1);
+      const theta = Math.random() * Math.PI * 2;
+      const r = 2.6 + Math.pow(Math.random(), 1.6) * radius;
+      const x = r * Math.sin(phi) * Math.cos(theta);
+      const y = r * Math.sin(phi) * Math.sin(theta) * 0.55;
+      const z = r * Math.cos(phi) * 0.55;
+      positions[i * 3 + 0] = x;
+      positions[i * 3 + 1] = y;
+      positions[i * 3 + 2] = z;
+      const c = new THREE.Color(palette[Math.floor(Math.random() * palette.length)]);
+      colors[i * 3 + 0] = c.r;
+      colors[i * 3 + 1] = c.g;
+      colors[i * 3 + 2] = c.b;
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    const mat = new THREE.PointsMaterial({
+      size: 0.035,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.75,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    return { geometry: geom, material: mat };
+  }, [count, radius]);
 
-        {/* Volumetric nucleus (the centerpiece — looks like a glowing 3D sphere) */}
-        <div className="cortex-field-layer cortex-field-layer--nucleus" style={layerStyle(50)} aria-hidden="true">
-          <svg {...sharedSvgProps}>
-            <defs>
-              <radialGradient id="nucleus-outer" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="rgba(24, 215, 255, 0.45)" />
-                <stop offset="55%" stopColor="rgba(24, 215, 255, 0.12)" />
-                <stop offset="100%" stopColor="rgba(24, 215, 255, 0)" />
-              </radialGradient>
-              <radialGradient id="nucleus-mid" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="rgba(140, 240, 255, 0.85)" />
-                <stop offset="50%" stopColor="rgba(24, 215, 255, 0.55)" />
-                <stop offset="100%" stopColor="rgba(24, 215, 255, 0)" />
-              </radialGradient>
-              <radialGradient id="nucleus-core" cx="45%" cy="40%" r="55%">
-                <stop offset="0%" stopColor="rgba(255, 255, 255, 1)" />
-                <stop offset="30%" stopColor="rgba(180, 245, 255, 0.95)" />
-                <stop offset="70%" stopColor="rgba(24, 215, 255, 0.6)" />
-                <stop offset="100%" stopColor="rgba(24, 215, 255, 0)" />
-              </radialGradient>
-              <radialGradient id="nucleus-edge" cx="55%" cy="58%" r="50%">
-                <stop offset="60%" stopColor="rgba(0, 0, 0, 0)" />
-                <stop offset="92%" stopColor="rgba(7, 17, 31, 0.4)" />
-                <stop offset="100%" stopColor="rgba(7, 17, 31, 0.85)" />
-              </radialGradient>
-            </defs>
-            {/* atmospheric halo */}
-            <circle cx={CENTER.x} cy={CENTER.y} r={180} fill="url(#nucleus-outer)" />
-            {/* concentric tactical rings */}
-            <circle cx={CENTER.x} cy={CENTER.y} r={88} className="cortex-nucleus-ring" />
-            <circle cx={CENTER.x} cy={CENTER.y} r={64} className="cortex-nucleus-ring" opacity={0.7} />
-            <circle cx={CENTER.x} cy={CENTER.y} r={46} className="cortex-nucleus-ring" opacity={0.5} />
-            {/* lens-flare cross */}
-            <line className="cortex-nucleus-flare" x1={CENTER.x - 140} y1={CENTER.y} x2={CENTER.x + 140} y2={CENTER.y} />
-            <line className="cortex-nucleus-flare" x1={CENTER.x} y1={CENTER.y - 140} x2={CENTER.x} y2={CENTER.y + 140} />
-            <line
-              className="cortex-nucleus-flare cortex-nucleus-flare--soft"
-              x1={CENTER.x - 90}
-              y1={CENTER.y - 90}
-              x2={CENTER.x + 90}
-              y2={CENTER.y + 90}
-            />
-            <line
-              className="cortex-nucleus-flare cortex-nucleus-flare--soft"
-              x1={CENTER.x - 90}
-              y1={CENTER.y + 90}
-              x2={CENTER.x + 90}
-              y2={CENTER.y - 90}
-            />
-            {/* volumetric core */}
-            <circle cx={CENTER.x} cy={CENTER.y} r={44} fill="url(#nucleus-mid)" />
-            <circle cx={CENTER.x} cy={CENTER.y} r={30} fill="url(#nucleus-core)" />
-            <circle cx={CENTER.x} cy={CENTER.y} r={44} fill="url(#nucleus-edge)" />
-            {/* breathing pulse — single, subtle */}
-            <circle cx={CENTER.x} cy={CENTER.y} r={46} className="cortex-nucleus-pulse" />
-          </svg>
-        </div>
+  useFrame(({ clock }) => {
+    if (ref.current) {
+      ref.current.rotation.y = clock.elapsedTime * 0.012;
+      ref.current.rotation.x = Math.sin(clock.elapsedTime * 0.05) * 0.06;
+    }
+  });
 
-        {/* Nodes layer (interactive — front-most) */}
-        <div className="cortex-field-layer cortex-field-layer--nodes" style={layerStyle(80)}>
-          <svg {...sharedSvgProps}>
-            {graph.nodes.map((node) => {
-              const isMission = node.kind === "mission";
-              return (
-                <g
-                  key={node.id}
-                  className={`cortex-node cortex-node--${node.kind} cortex-node--${node.state}${selectedNodeId === node.id ? " is-selected" : ""}`}
-                  data-emphasis={isNodeEmphasized(node) ? "primary" : "muted"}
-                  role="button"
-                  tabIndex={0}
-                  transform={`translate(${node.position.x} ${node.position.y})`}
-                  onClick={() => onSelectNode?.(node.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      onSelectNode?.(node.id);
-                    }
-                  }}
-                >
-                  {isMission ? (
-                    <text className="cortex-node__label cortex-node__label--mission" textAnchor="middle" y={62}>
-                      {node.label.toUpperCase()}
-                    </text>
-                  ) : (
-                    <>
-                      <circle className="cortex-node__halo" r={26} />
-                      {renderGlyph(node.kind, false)}
-                      <text className="cortex-node__label" x={18} y={4}>
-                        {node.label}
-                      </text>
-                      <text className="cortex-node__meta" x={18} y={18}>
-                        {node.kind} / {node.state}
-                      </text>
-                    </>
-                  )}
-                </g>
-              );
-            })}
-          </svg>
-        </div>
+  return <points ref={ref} geometry={geometry} material={material} />;
+}
+
+/* -------------------------------------------------------------------------- */
+/* RadialPulses — slow concentric ring pulses emitting from nucleus            */
+/* -------------------------------------------------------------------------- */
+function RadialPulse({ delay }: { delay: number }) {
+  const ref = useRef<THREE.Mesh>(null);
+  useFrame(({ clock }) => {
+    if (!ref.current) return;
+    const period = 6.0;
+    const t = ((clock.elapsedTime + delay) % period) / period;
+    const r = 1.4 + t * 7.0;
+    ref.current.scale.set(r, r, r);
+    const m = ref.current.material as THREE.MeshBasicMaterial;
+    m.opacity = Math.max(0, (1 - t) * 0.35);
+  });
+  return (
+    <mesh ref={ref} rotation={[Math.PI / 2, 0, 0]}>
+      <torusGeometry args={[1, 0.01, 12, 80]} />
+      <meshBasicMaterial color="#18d7ff" transparent opacity={0.3} depthWrite={false} />
+    </mesh>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Scene wrapper                                                               */
+/* -------------------------------------------------------------------------- */
+interface SceneProps {
+  graph: CortexGraph;
+  activeLens: CortexLensId;
+  selectedNodeId: string | null;
+  positions: Map<string, [number, number, number]>;
+  setPosition: (id: string, pos: [number, number, number]) => void;
+  onSelectNode: (id: string) => void;
+  orbitEnabled: boolean;
+  setOrbit: (enabled: boolean) => void;
+}
+
+function Scene({
+  graph,
+  activeLens,
+  selectedNodeId,
+  positions,
+  setPosition,
+  onSelectNode,
+  orbitEnabled,
+  setOrbit,
+}: SceneProps) {
+  const isNodeEmphasized = (n: CortexNode) =>
+    n.lensAffinity?.includes(activeLens) || n.kind === "mission" || n.id === selectedNodeId;
+
+  const pathRenderable = (path: CortexPath) => {
+    const from = positions.get(path.from);
+    const to = positions.get(path.to);
+    if (!from || !to) return null;
+    const fromN = graph.nodes.find((n) => n.id === path.from);
+    const toN = graph.nodes.find((n) => n.id === path.to);
+    const emph = Boolean(fromN && toN && (isNodeEmphasized(fromN) || isNodeEmphasized(toN)));
+    return { from, to, emph };
+  };
+
+  return (
+    <>
+      <color attach="background" args={["#02060a"]} />
+      <fog attach="fog" args={["#02060a", 12, 60]} />
+
+      <ambientLight intensity={0.45} />
+      <hemisphereLight intensity={0.4} color="#18d7ff" groundColor="#06110f" />
+      <directionalLight position={[6, 8, 5]} intensity={0.6} color="#f4f1e8" />
+
+      <Stars radius={80} depth={50} count={600} factor={3} fade speed={0.4} />
+
+      <Nucleus />
+
+      <RadialPulse delay={0} />
+      <RadialPulse delay={2} />
+      <RadialPulse delay={4} />
+
+      <AmbientDendrites count={1800} radius={14} />
+
+      {graph.paths.map((path) => {
+        const r = pathRenderable(path);
+        if (!r) return null;
+        return (
+          <Synapse
+            key={path.id}
+            from={r.from}
+            to={r.to}
+            state={path.state}
+            emphasized={r.emph}
+          />
+        );
+      })}
+
+      {graph.signals.map((signal: CortexSignal, idx) => {
+        const path = graph.paths.find((p) => p.id === signal.pathId);
+        if (!path) return null;
+        const from = positions.get(path.from);
+        const to = positions.get(path.to);
+        if (!from || !to) return null;
+        return (
+          <TravelingSignal
+            key={signal.id}
+            from={from}
+            to={to}
+            state={signal.state}
+            offset={idx * 1.2}
+          />
+        );
+      })}
+
+      {graph.nodes.map((node) => {
+        const pos = positions.get(node.id);
+        if (!pos) return null;
+        return (
+          <Node3D
+            key={node.id}
+            node={node}
+            position={pos}
+            selected={selectedNodeId === node.id}
+            emphasized={isNodeEmphasized(node)}
+            onSelect={onSelectNode}
+            onMove={setPosition}
+            setOrbit={setOrbit}
+          />
+        );
+      })}
+
+      <OrbitControls
+        enabled={orbitEnabled}
+        enablePan
+        enableZoom
+        enableRotate
+        minDistance={4}
+        maxDistance={45}
+        zoomSpeed={0.7}
+        rotateSpeed={0.45}
+        panSpeed={0.6}
+        target={[0, 0, 0]}
+        makeDefault
+      />
+
+      <EffectComposer multisampling={2}>
+        <Bloom intensity={1.0} luminanceThreshold={0.22} luminanceSmoothing={0.85} mipmapBlur radius={0.7} />
+        <ChromaticAberration offset={[0.0006, 0.0006]} radialModulation modulationOffset={0.5} blendFunction={BlendFunction.NORMAL} />
+        <Vignette eskil={false} offset={0.18} darkness={1.0} />
+      </EffectComposer>
+    </>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Public component                                                            */
+/* -------------------------------------------------------------------------- */
+function FallbackOverlay({ children }: { children: ReactNode }) {
+  return <div className="cortex-3d-fallback">{children}</div>;
+}
+
+export default function NeuralField({ graph, activeLens, selectedNodeId, onSelectNode }: NeuralFieldProps) {
+  const [orbitEnabled, setOrbitEnabled] = useState(true);
+
+  const initialPositions = useMemo(() => {
+    const map = new Map<string, [number, number, number]>();
+    for (const n of graph.nodes) {
+      map.set(n.id, toWorld(n.position, n.kind));
+    }
+    return map;
+  }, [graph.nodes]);
+
+  // Per-node position state (so drag-to-move actually mutates the world).
+  const [positions, setPositions] = useState<Map<string, [number, number, number]>>(initialPositions);
+
+  // Sync when graph changes
+  useMemo(() => {
+    setPositions((prev) => {
+      const next = new Map(prev);
+      for (const n of graph.nodes) {
+        if (!next.has(n.id)) next.set(n.id, toWorld(n.position, n.kind));
+      }
+      // Drop nodes no longer in graph
+      for (const id of next.keys()) {
+        if (!graph.nodes.find((n) => n.id === id)) next.delete(id);
+      }
+      return next;
+    });
+  }, [graph.nodes]);
+
+  const setPosition = (id: string, pos: [number, number, number]) => {
+    setPositions((prev) => {
+      const next = new Map(prev);
+      next.set(id, pos);
+      return next;
+    });
+  };
+
+  return (
+    <div className="cortex-neural-field cortex-neural-field--3d" data-lens={activeLens}>
+      <Canvas
+        camera={{ position: [0, 1.2, 12], fov: 45, near: 0.1, far: 200 }}
+        dpr={[1, 2]}
+        gl={{ antialias: true, alpha: false, powerPreference: "high-performance" }}
+        shadows={false}
+        fallback={<FallbackOverlay>WebGL unavailable — falling back to static cortex view.</FallbackOverlay>}
+      >
+        <Scene
+          graph={graph}
+          activeLens={activeLens}
+          selectedNodeId={selectedNodeId ?? null}
+          positions={positions}
+          setPosition={setPosition}
+          onSelectNode={onSelectNode ?? (() => {})}
+          orbitEnabled={orbitEnabled}
+          setOrbit={setOrbitEnabled}
+        />
+      </Canvas>
+      <div className="cortex-3d-hint" aria-hidden="true">
+        <span>drag · rotate</span>
+        <span>scroll · zoom</span>
+        <span>click · select</span>
+        <span>drag node · move</span>
       </div>
     </div>
   );

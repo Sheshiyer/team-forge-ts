@@ -22,18 +22,25 @@
     "parity:labs-vault": "node scripts/teamforge-vault-parity.mjs"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.1",
+    "@react-three/postprocessing": "^3.0.4",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-shell": "^2",
     "@tauri-apps/plugin-sql": "^2",
+    "postprocessing": "^6.39.1",
     "react": "^19",
     "react-dom": "^19",
     "react-router-dom": "^7",
+    "three": "^0.184.0",
+    "three-stdlib": "^2.36.1",
     "zustand": "^5"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "^0.184.1",
     "@vitejs/plugin-react": "^4",
     "typescript": "^5.7",
     "vite": "^6"
