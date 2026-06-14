@@ -524,6 +524,60 @@
   box-shadow: var(--cortex-glow-cyan);
 }
 
+/* Zoom-stage HUD — discrete altitude stops. Replaces free-zoom slider. */
+.cortex-3d-zoom {
+  position: absolute;
+  bottom: 84px;
+  right: 36px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: auto;
+  font-family: var(--cortex-font-mono);
+}
+.cortex-3d-zoom button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 132px;
+  padding: 5px 10px;
+  background: rgba(3, 7, 7, 0.62);
+  border: 1px solid rgba(131, 145, 140, 0.32);
+  color: var(--cortex-muted);
+  font-family: inherit;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+.cortex-3d-zoom button:hover {
+  border-color: rgba(24, 215, 255, 0.5);
+  color: var(--cortex-bone);
+}
+.cortex-3d-zoom button.is-active {
+  background: rgba(24, 215, 255, 0.18);
+  border-color: var(--cortex-cyan);
+  color: var(--cortex-bone);
+  box-shadow: var(--cortex-glow-cyan);
+  transform: translateX(-4px);
+}
+.cortex-3d-zoom__index {
+  display: inline-block;
+  min-width: 14px;
+  text-align: center;
+  color: var(--cortex-cyan);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.65;
+}
+.cortex-3d-zoom button.is-active .cortex-3d-zoom__index { opacity: 1; }
+.cortex-3d-zoom__name {
+  flex: 1;
+  font-weight: 600;
+}
+
 /* Controls hint in the bottom-left corner of the 3D field */
 .cortex-3d-hint {
   position: absolute;

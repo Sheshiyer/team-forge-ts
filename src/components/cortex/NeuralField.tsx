@@ -14,13 +14,84 @@
  *   - Camera: OrbitControls (left-drag rotate, scroll zoom, right-drag pan).
  *   - Click-to-select a node; drag-to-move it freely in 3D space.
  */
-import { Canvas, useFrame, type ThreeEvent } from "@react-three/fiber";
+import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { Edges, Html, OrbitControls, Stars } from "@react-three/drei";
 import { Bloom, ChromaticAberration, EffectComposer, Vignette } from "@react-three/postprocessing";
 import { BlendFunction } from "postprocessing";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
 import type { CortexGraph, CortexLensId, CortexNode, CortexPath, CortexSignal, CortexSignalState } from "../../lib/commandCortex/types";
+
+/* ---- Locked zoom stages ---------------------------------------------------
+ * V3 design implies four distinct "altitude" reads, not free zoom:
+ *   0 OVERVIEW — distance ~32, see the whole field, only nucleus + parent
+ *               dots + quadrant labels visible.
+ *   1 MISSION  — distance ~17, default; metric badges + parent labels read.
+ *   2 CLUSTER  — distance ~9,  parent shells + every leaf shard label read.
+ *   3 FOCUS    — distance ~5,  selected node's local neighborhood; pull right
+ *               panel into the cortex's attention.
+ *
+ * Scroll-wheel snaps between stops with a smooth lerp; OrbitControls.zoom
+ * is disabled so the user can't slide between them.
+ */
+interface ZoomStage {
+  name: string;
+  distance: number;
+  lod: 0 | 1 | 2 | 3;
+}
+const ZOOM_STAGES: ZoomStage[] = [
+  { name: "OVERVIEW", distance: 32, lod: 0 },
+  { name: "MISSION", distance: 17, lod: 1 },
+  { name: "CLUSTER", distance: 9, lod: 2 },
+  { name: "FOCUS", distance: 5.5, lod: 3 },
+];
+
+/** LODContext propagates the current detail level (0..3) to every renderer
+ *  so they can decide what to show/hide at each zoom stop. */
+const LODContext = createContext<number>(1);
+const useLOD = () => useContext(LODContext);
+
+function WheelSnap({ stage, setStage }: { stage: number; setStage: (n: number) => void }) {
+  const { gl } = useThree();
+  const lockRef = useRef<number>(0);
+  useEffect(() => {
+    const canvas = gl.domElement;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const now = performance.now();
+      if (now - lockRef.current < 220) return; // debounce so a single scroll = one stop
+      lockRef.current = now;
+      const dir = e.deltaY > 0 ? -1 : 1; // wheel up = zoom in (higher LOD)
+      const next = Math.max(0, Math.min(ZOOM_STAGES.length - 1, stage + dir));
+      if (next !== stage) setStage(next);
+    };
+    canvas.addEventListener("wheel", handler, { passive: false });
+    return () => canvas.removeEventListener("wheel", handler);
+  }, [gl, stage, setStage]);
+  return null;
+}
+
+function ZoomController({ stage }: { stage: number }) {
+  const { camera, gl } = useThree();
+  const targetRef = useRef(camera.position.length());
+  useEffect(() => {
+    targetRef.current = ZOOM_STAGES[stage].distance;
+  }, [stage]);
+  useEffect(() => {
+    // Smoothly clamp on mount too
+    targetRef.current = ZOOM_STAGES[stage].distance;
+    void gl;
+  }, [gl, stage]);
+  useFrame(() => {
+    const t = targetRef.current;
+    const cur = camera.position.length();
+    if (cur < 0.001) return;
+    const next = cur + (t - cur) * 0.09;
+    camera.position.normalize().multiplyScalar(next);
+    camera.lookAt(0, 0, 0);
+  });
+  return null;
+}
 
 export interface NeuralFieldProps {
   graph: CortexGraph;
@@ -721,6 +792,8 @@ function MetricBadge({
   state?: CortexSignalState;
   tone?: "neutral" | "warn" | "danger" | "good";
 }) {
+  const lod = useLOD();
+  if (lod < 1) return null; // hide at OVERVIEW
   return (
     <Html position={position} center distanceFactor={9} zIndexRange={[20, 5]} style={{ pointerEvents: "none" }}>
       <div className="cortex-3d-metric" data-state={state} data-tone={tone}>
@@ -730,20 +803,33 @@ function MetricBadge({
   );
 }
 
-/** A labeled leaf node — one real datum sprouted from a parent. */
+interface SubLeafSpec {
+  offset: [number, number, number]; // relative to parent leaf
+  label: string;
+  size?: number;
+}
+
+/** A labeled leaf node — one real datum sprouted from a parent. Recursive:
+ *  each leaf may carry its own sub-leaves which render at smaller scale via
+ *  the same component. Labels only appear at LOD >= 2 (CLUSTER+). */
 function LeafBranch({
   end,
   color,
   label,
   size = 0.05,
   trunk = true,
+  subLeaves,
+  depth = 0,
 }: {
   end: [number, number, number];
   color: string;
   label: string;
   size?: number;
   trunk?: boolean;
+  subLeaves?: SubLeafSpec[];
+  depth?: number;
 }) {
+  const lod = useLOD();
   const curve = useMemo(() => {
     const start = new THREE.Vector3(0, 0, 0);
     const e = new THREE.Vector3(...end);
@@ -753,28 +839,91 @@ function LeafBranch({
       .add(new THREE.Vector3(0, e.y > 0 ? 0.25 : -0.25, 0));
     return new THREE.QuadraticBezierCurve3(start, mid, e);
   }, [end]);
+
+  // Visibility decisions per LOD level
+  const showTrunk = trunk && lod >= 1;
+  const showLabel = lod >= 2 && depth < 2; // only label at CLUSTER+ and not at the deepest level
+  const labelOffset: [number, number, number] = [
+    end[0] + (end[0] >= 0 ? 0.14 : -0.14),
+    end[1] - 0.04,
+    end[2],
+  ];
+
   return (
     <group>
-      {trunk ? (
+      {showTrunk ? (
         <mesh>
-          <tubeGeometry args={[curve, 18, 0.012, 5, false]} />
-          <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.1} transparent opacity={0.55} roughness={0.5} />
+          <tubeGeometry args={[curve, 16, 0.012 - depth * 0.003, 5, false]} />
+          <meshStandardMaterial
+            color={color}
+            emissive={color}
+            emissiveIntensity={1.1 - depth * 0.25}
+            transparent
+            opacity={0.55 - depth * 0.1}
+            roughness={0.5}
+          />
         </mesh>
       ) : null}
       <mesh position={end}>
         <icosahedronGeometry args={[size, 1]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2.6} roughness={0.3} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2.6 - depth * 0.4} roughness={0.3} />
       </mesh>
-      <Html
-        position={[end[0] + (end[0] >= 0 ? 0.14 : -0.14), end[1] - 0.04, end[2]]}
-        center={false}
-        distanceFactor={11}
-        zIndexRange={[18, 6]}
-        style={{ pointerEvents: "none", transform: end[0] >= 0 ? "none" : "translateX(-100%)" }}
-      >
-        <div className="cortex-3d-leaf">{label}</div>
-      </Html>
+      {showLabel ? (
+        <Html
+          position={labelOffset}
+          center={false}
+          distanceFactor={11}
+          zIndexRange={[18, 6]}
+          style={{ pointerEvents: "none", transform: end[0] >= 0 ? "none" : "translateX(-100%)" }}
+        >
+          <div className="cortex-3d-leaf">{label}</div>
+        </Html>
+      ) : null}
+
+      {/* Recursive sub-leaves, anchored at this leaf's endpoint */}
+      {subLeaves && lod >= 2 && depth < 1 ? (
+        <group position={end}>
+          {subLeaves.map((sub, i) => (
+            <LeafBranch
+              key={i}
+              end={sub.offset}
+              color={color}
+              label={sub.label}
+              size={(sub.size ?? size) * 0.72}
+              trunk={true}
+              depth={depth + 1}
+            />
+          ))}
+        </group>
+      ) : null}
     </group>
+  );
+}
+
+/** Sibling filaments — thin lines connecting nearby leaves of the same parent.
+ *  Hides at LOD 0 (overview). */
+function SiblingFilaments({ leaves, color }: { leaves: Array<[number, number, number]>; color: string }) {
+  const lod = useLOD();
+  const geom = useMemo(() => {
+    const positions: number[] = [];
+    // Connect each leaf to its nearest-by-index neighbor (organic-feel cross-ties)
+    for (let i = 0; i < leaves.length - 1; i++) {
+      // Probabilistic via deterministic hash so not every pair connects
+      if (((i * 7 + 3) % 5) === 0 || (i % 3 === 0 && i + 2 < leaves.length)) {
+        const a = leaves[i];
+        const b = leaves[(i + 1) % leaves.length];
+        positions.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    return g;
+  }, [leaves]);
+  if (lod < 1) return null;
+  return (
+    <lineSegments geometry={geom}>
+      <lineBasicMaterial color={color} transparent opacity={0.22} depthWrite={false} />
+    </lineSegments>
   );
 }
 
@@ -789,12 +938,11 @@ function TaskBranches({
   intensity: number;
   label?: string;
 }) {
-  // Agents: each task becomes its own labeled leaf at the end of a curving
-  // branch fanning outward — matches the V3 "agent swarm" cluster shape.
+  // Agents: each task is its own labeled leaf. Every 3rd task carries 2
+  // sub-tasks (T03.A, T03.B) so the tree has visible depth at CLUSTER+.
   const leaves = useMemo(() => {
     return Array.from({ length: count }, (_, i) => {
-      // Distribute across a wide spherical wedge AWAY from the parent
-      const phi = (i / count) * Math.PI * 1.6 - Math.PI * 0.8; // -PI*0.8 to PI*0.8
+      const phi = (i / count) * Math.PI * 1.6 - Math.PI * 0.8;
       const tilt = ((i % 5) - 2) * 0.22;
       const r = 1.7 + ((i * 7) % 5) * 0.16;
       const end: [number, number, number] = [
@@ -802,15 +950,27 @@ function TaskBranches({
         tilt * 0.9 + ((i % 3) - 1) * 0.14,
         -r * Math.cos(phi) * Math.cos(tilt) - 0.15,
       ];
-      return { end, label: `T${String(i + 1).padStart(2, "0")}` };
+      const tag = String(i + 1).padStart(2, "0");
+      const hasSubs = i % 3 === 1; // ~33% have sub-tasks
+      const subLeaves: SubLeafSpec[] | undefined = hasSubs
+        ? [
+            { offset: [0.35, 0.1, 0.1], label: `${tag}.A` },
+            { offset: [-0.3, 0.04, 0.2], label: `${tag}.B` },
+            ...(i % 5 === 0
+              ? [{ offset: [0.05, -0.18, 0.32] as [number, number, number], label: `${tag}.C` }]
+              : []),
+          ]
+        : undefined;
+      return { end, label: `T${tag}`, subLeaves };
     });
   }, [count]);
 
   return (
     <group>
       {leaves.map((l, i) => (
-        <LeafBranch key={i} end={l.end} color={color} label={l.label} size={0.055} />
+        <LeafBranch key={i} end={l.end} color={color} label={l.label} size={0.055} subLeaves={l.subLeaves} />
       ))}
+      <SiblingFilaments leaves={leaves.map((l) => l.end)} color={color} />
       <MetricBadge text={label ? `${count} ${label}` : `${count} TASKS`} position={[0, 1.45, 0]} tone="good" />
       {(() => {
         void intensity;
@@ -831,26 +991,28 @@ function BranchFan({
   intensity: number;
   label?: string;
 }) {
-  // Clients: each active branch becomes its own labeled leaf B1..BN.
+  // Clients: each active branch carries 2 sub-projects so the cluster reads
+  // as a tree, not a fan.
   const leaves = useMemo(() => {
     return Array.from({ length: count }, (_, i) => {
-      const angle = (i / Math.max(1, count - 1) - 0.5) * 1.6; // wide fan
+      const angle = (i / Math.max(1, count - 1) - 0.5) * 1.6;
       const elev = ((i % 2) - 0.5) * 0.7;
       const r = 1.9 + (i % 3) * 0.18;
-      const end: [number, number, number] = [
-        r * Math.sin(angle),
-        elev,
-        -r * Math.cos(angle),
+      const end: [number, number, number] = [r * Math.sin(angle), elev, -r * Math.cos(angle)];
+      const subLeaves: SubLeafSpec[] = [
+        { offset: [0.3, 0.05, 0.05], label: `B${i + 1}.P1` },
+        { offset: [-0.25, -0.05, 0.18], label: `B${i + 1}.P2` },
       ];
-      return { end, label: `B${i + 1}` };
+      return { end, label: `B${i + 1}`, subLeaves };
     });
   }, [count]);
 
   return (
     <group>
       {leaves.map((l, i) => (
-        <LeafBranch key={i} end={l.end} color={color} label={l.label} size={0.062} />
+        <LeafBranch key={i} end={l.end} color={color} label={l.label} size={0.062} subLeaves={l.subLeaves} />
       ))}
+      <SiblingFilaments leaves={leaves.map((l) => l.end)} color={color} />
       <MetricBadge text={label ? `${count} ${label}` : `${count} BRANCHES`} position={[0, 1.05, -0.6]} tone="good" />
       {(() => {
         void intensity;
@@ -869,7 +1031,6 @@ function PendingStack({
   count: number;
   label?: string;
 }) {
-  // Issues/approvals: each pending item is its own labeled leaf below + outward.
   const leaves = useMemo(() => {
     return Array.from({ length: count }, (_, i) => {
       const angle = (i / Math.max(1, count - 1) - 0.5) * 1.0;
@@ -879,14 +1040,18 @@ function PendingStack({
         -0.65 - i * 0.18,
         r * Math.cos(angle) * 0.5 + 0.3,
       ];
-      return { end, label: `P${i + 1}` };
+      const subLeaves: SubLeafSpec[] = [
+        { offset: [0.22, -0.05, 0.05], label: `P${i + 1}.R` },
+      ];
+      return { end, label: `P${i + 1}`, subLeaves };
     });
   }, [count]);
   return (
     <group>
       {leaves.map((l, i) => (
-        <LeafBranch key={i} end={l.end} color={color} label={l.label} size={0.058} />
+        <LeafBranch key={i} end={l.end} color={color} label={l.label} size={0.058} subLeaves={l.subLeaves} />
       ))}
+      <SiblingFilaments leaves={leaves.map((l) => l.end)} color={color} />
       <MetricBadge
         text={label ? `${count} ${label}` : `${count} PENDING`}
         position={[0, 0.7, 0]}
@@ -1130,9 +1295,15 @@ function AmbientDendrites({ count = 1800, radius = 14 }: { count?: number; radiu
   const { geometry, material } = useMemo(() => {
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
-    const palette = ["#39ff88", "#18d7ff", "#ffb02e", "#ff2f7a"];
+    // Quadrant palette — particles inherit their octant's tone instead of a
+    // random mix. NW emerald, NE amber, SW cyan, SE rose.
+    const palette = {
+      nw: new THREE.Color("#39ff88"),
+      ne: new THREE.Color("#ffb02e"),
+      sw: new THREE.Color("#18d7ff"),
+      se: new THREE.Color("#ff2f7a"),
+    };
     for (let i = 0; i < count; i++) {
-      // Spherical cloud biased toward the equatorial plane
       const phi = Math.acos(2 * Math.random() - 1);
       const theta = Math.random() * Math.PI * 2;
       const r = 2.6 + Math.pow(Math.random(), 1.6) * radius;
@@ -1142,10 +1313,14 @@ function AmbientDendrites({ count = 1800, radius = 14 }: { count?: number; radiu
       positions[i * 3 + 0] = x;
       positions[i * 3 + 1] = y;
       positions[i * 3 + 2] = z;
-      const c = new THREE.Color(palette[Math.floor(Math.random() * palette.length)]);
-      colors[i * 3 + 0] = c.r;
-      colors[i * 3 + 1] = c.g;
-      colors[i * 3 + 2] = c.b;
+      let c: THREE.Color;
+      if (y >= 0) c = x < 0 ? palette.nw : palette.ne;
+      else c = x < 0 ? palette.sw : palette.se;
+      // Random luminance jitter
+      const j = 0.75 + Math.random() * 0.4;
+      colors[i * 3 + 0] = c.r * j;
+      colors[i * 3 + 1] = c.g * j;
+      colors[i * 3 + 2] = c.b * j;
     }
     const geom = new THREE.BufferGeometry();
     geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
@@ -1205,6 +1380,8 @@ interface SceneProps {
   onSelectNode: (id: string) => void;
   orbitEnabled: boolean;
   setOrbit: (enabled: boolean) => void;
+  zoomStage: number;
+  setZoomStage: (n: number) => void;
 }
 
 function Scene({
@@ -1216,6 +1393,8 @@ function Scene({
   onSelectNode,
   orbitEnabled,
   setOrbit,
+  zoomStage,
+  setZoomStage,
 }: SceneProps) {
   const isNodeEmphasized = (n: CortexNode) =>
     n.lensAffinity?.includes(activeLens) || n.kind === "mission" || n.id === selectedNodeId;
@@ -1304,16 +1483,16 @@ function Scene({
         );
       })}
 
+      {/* Locked zoom controller + wheel snap handler */}
+      <ZoomController stage={zoomStage} />
+      <WheelSnap stage={zoomStage} setStage={setZoomStage} />
       <OrbitControls
         enabled={orbitEnabled}
         enablePan
-        enableZoom
+        enableZoom={false}
         enableRotate
-        minDistance={4}
-        maxDistance={45}
-        zoomSpeed={0.7}
         rotateSpeed={0.45}
-        panSpeed={0.6}
+        panSpeed={0.5}
         target={[0, 0, 0]}
         makeDefault
       />
@@ -1336,6 +1515,13 @@ function FallbackOverlay({ children }: { children: ReactNode }) {
 
 export default function NeuralField({ graph, activeLens, selectedNodeId, onSelectNode }: NeuralFieldProps) {
   const [orbitEnabled, setOrbitEnabled] = useState(true);
+  const [zoomStage, setZoomStage] = useState(1); // default MISSION
+
+  // Auto-advance to FOCUS when a node gets selected (if user was already
+  // at MISSION or closer). Stays at OVERVIEW if they explicitly chose it.
+  useEffect(() => {
+    if (selectedNodeId && zoomStage < 2) setZoomStage(2);
+  }, [selectedNodeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Semantic 3D placement — every kind clusters in its V3 quadrant. Multiple
   // nodes of the same kind fan within the quadrant; not derived from the SVG
@@ -1377,20 +1563,41 @@ export default function NeuralField({ graph, activeLens, selectedNodeId, onSelec
         shadows={false}
         fallback={<FallbackOverlay>WebGL unavailable — falling back to static cortex view.</FallbackOverlay>}
       >
-        <Scene
-          graph={graph}
-          activeLens={activeLens}
-          selectedNodeId={selectedNodeId ?? null}
-          positions={positions}
-          setPosition={setPosition}
-          onSelectNode={onSelectNode ?? (() => {})}
-          orbitEnabled={orbitEnabled}
-          setOrbit={setOrbitEnabled}
-        />
+        <LODContext.Provider value={ZOOM_STAGES[zoomStage].lod}>
+          <Scene
+            graph={graph}
+            activeLens={activeLens}
+            selectedNodeId={selectedNodeId ?? null}
+            positions={positions}
+            setPosition={setPosition}
+            onSelectNode={onSelectNode ?? (() => {})}
+            orbitEnabled={orbitEnabled}
+            setOrbit={setOrbitEnabled}
+            zoomStage={zoomStage}
+            setZoomStage={setZoomStage}
+          />
+        </LODContext.Provider>
       </Canvas>
+
+      {/* Zoom-stage HUD — clickable stops + current */}
+      <div className="cortex-3d-zoom" aria-label="Cortex zoom altitude">
+        {ZOOM_STAGES.map((s, i) => (
+          <button
+            key={s.name}
+            type="button"
+            className={i === zoomStage ? "is-active" : undefined}
+            onClick={() => setZoomStage(i)}
+            title={`${s.name} · distance ${s.distance}`}
+          >
+            <span className="cortex-3d-zoom__index">{i}</span>
+            <span className="cortex-3d-zoom__name">{s.name}</span>
+          </button>
+        ))}
+      </div>
+
       <div className="cortex-3d-hint" aria-hidden="true">
         <span>drag · rotate</span>
-        <span>scroll · zoom</span>
+        <span>scroll · zoom stage</span>
         <span>click · select</span>
         <span>drag node · move</span>
       </div>
