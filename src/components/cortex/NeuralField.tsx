@@ -270,14 +270,14 @@ function Nucleus() {
 
   return (
     <group>
-      <pointLight intensity={45} distance={16} color="#18d7ff" decay={1.8} />
+      <pointLight intensity={28} distance={14} color="#18d7ff" decay={1.9} />
 
       <mesh ref={innerRef}>
         <icosahedronGeometry args={[0.62, 5]} />
         <meshStandardMaterial
           color={new THREE.Color("#9ff0ff")}
           emissive={new THREE.Color("#18d7ff")}
-          emissiveIntensity={2.2}
+          emissiveIntensity={1.4}
           roughness={0.22}
           metalness={0.12}
         />
@@ -341,14 +341,14 @@ function Synapse({
   const isHot = state === "active" || state === "blocked";
   return (
     <mesh>
-      <tubeGeometry args={[curve, 56, emphasized ? 0.025 : 0.018, 8, false]} />
+      <tubeGeometry args={[curve, 56, emphasized ? 0.018 : 0.012, 8, false]} />
       <meshStandardMaterial
         color={color}
         emissive={color}
-        emissiveIntensity={isHot ? 3 : 1.6}
+        emissiveIntensity={isHot ? 1.8 : 0.9}
         transparent
-        opacity={emphasized ? 0.85 : 0.45}
-        roughness={0.4}
+        opacity={emphasized ? 0.7 : 0.35}
+        roughness={0.5}
       />
     </mesh>
   );
@@ -866,7 +866,7 @@ function LeafBranch({
       ) : null}
       <mesh position={end}>
         <icosahedronGeometry args={[size, 1]} />
-        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2.6 - depth * 0.4} roughness={0.3} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.6 - depth * 0.3} roughness={0.42} />
       </mesh>
       {showLabel ? (
         <Html
@@ -1295,14 +1295,32 @@ function AmbientDendrites({ count = 1800, radius = 14 }: { count?: number; radiu
   const { geometry, material } = useMemo(() => {
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
-    // Quadrant palette — particles inherit their octant's tone instead of a
-    // random mix. NW emerald, NE amber, SW cyan, SE rose.
-    const palette = {
-      nw: new THREE.Color("#39ff88"),
-      ne: new THREE.Color("#ffb02e"),
-      sw: new THREE.Color("#18d7ff"),
-      se: new THREE.Color("#ff2f7a"),
-    };
+    // Smooth quadrant palette — colors interpolate around the circle so
+    // there are no hard sector cuts at the octant boundaries (the prior
+    // hard-cut approach felt jarring; V3 mockup zones blend through center).
+    const stops: Array<{ angle: number; c: THREE.Color }> = [
+      { angle: -(3 * Math.PI) / 4, c: new THREE.Color("#18d7ff") },           // SW cyan
+      { angle: -Math.PI / 4, c: new THREE.Color("#ff2f7a") },                // SE rose
+      { angle: Math.PI / 4, c: new THREE.Color("#ffb02e") },                 // NE amber
+      { angle: (3 * Math.PI) / 4, c: new THREE.Color("#39ff88") },           // NW emerald
+      { angle: (3 * Math.PI) / 4 + 2 * Math.PI, c: new THREE.Color("#18d7ff") }, // wrap → SW
+    ];
+    // Move the wrap stop to be just-above the first one so the segment search
+    // is contiguous. Easier path: clone and shift the first stop by 2π.
+    const segments: Array<{ aStart: number; aEnd: number; cStart: THREE.Color; cEnd: THREE.Color }> = [];
+    for (let i = 0; i < stops.length - 1; i++) {
+      segments.push({ aStart: stops[i].angle, aEnd: stops[i + 1].angle, cStart: stops[i].c, cEnd: stops[i + 1].c });
+    }
+    function smoothColor(x: number, y: number, out: THREE.Color): void {
+      const a = Math.atan2(y, x);
+      const seg = segments.find((s) => a >= s.aStart && a < s.aEnd) ?? segments[segments.length - 1];
+      const t = (a - seg.aStart) / (seg.aEnd - seg.aStart);
+      // Smoothstep so transitions ease, not linear hard
+      const e = t * t * (3 - 2 * t);
+      out.copy(seg.cStart).lerp(seg.cEnd, e);
+    }
+
+    const tmp = new THREE.Color();
     for (let i = 0; i < count; i++) {
       const phi = Math.acos(2 * Math.random() - 1);
       const theta = Math.random() * Math.PI * 2;
@@ -1313,14 +1331,12 @@ function AmbientDendrites({ count = 1800, radius = 14 }: { count?: number; radiu
       positions[i * 3 + 0] = x;
       positions[i * 3 + 1] = y;
       positions[i * 3 + 2] = z;
-      let c: THREE.Color;
-      if (y >= 0) c = x < 0 ? palette.nw : palette.ne;
-      else c = x < 0 ? palette.sw : palette.se;
-      // Random luminance jitter
-      const j = 0.75 + Math.random() * 0.4;
-      colors[i * 3 + 0] = c.r * j;
-      colors[i * 3 + 1] = c.g * j;
-      colors[i * 3 + 2] = c.b * j;
+      smoothColor(x, y, tmp);
+      // Reduced luminance + jitter — the field stays DARK, accents are thin
+      const j = 0.55 + Math.random() * 0.35;
+      colors[i * 3 + 0] = tmp.r * j;
+      colors[i * 3 + 1] = tmp.g * j;
+      colors[i * 3 + 2] = tmp.b * j;
     }
     const geom = new THREE.BufferGeometry();
     geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
@@ -1498,9 +1514,9 @@ function Scene({
       />
 
       <EffectComposer multisampling={2}>
-        <Bloom intensity={1.0} luminanceThreshold={0.22} luminanceSmoothing={0.85} mipmapBlur radius={0.7} />
-        <ChromaticAberration offset={[0.0006, 0.0006]} radialModulation modulationOffset={0.5} blendFunction={BlendFunction.NORMAL} />
-        <Vignette eskil={false} offset={0.18} darkness={1.0} />
+        <Bloom intensity={0.5} luminanceThreshold={0.32} luminanceSmoothing={0.9} mipmapBlur radius={0.5} />
+        <ChromaticAberration offset={[0.0003, 0.0003]} radialModulation modulationOffset={0.5} blendFunction={BlendFunction.NORMAL} />
+        <Vignette eskil={false} offset={0.2} darkness={1.1} />
       </EffectComposer>
     </>
   );
