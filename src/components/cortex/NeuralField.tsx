@@ -38,29 +38,140 @@ const STATE_COLOR: Record<CortexSignalState, string> = {
   archived: "#3b4742",
 };
 
-const KIND_DEPTH: Record<string, number> = {
-  mission: 0,
-  client: 0.6,
-  project: -0.4,
-  issue: 0.9,
-  agent: -0.8,
-  human: 0.3,
-  memory: -0.3,
-  routine: 0.1,
-  approval: 0.7,
+/* ---- Semantic 3D positioning ----------------------------------------------
+ * Each node kind maps to a quadrant angle around the nucleus (3D world).
+ * Matches the V3 cluster zoning:
+ *   NW (top-left, ~135°)  → CLIENT CLUSTERS (emerald)
+ *   N  (top,      ~90°)   → PROJECT WORK (cyan-emerald)
+ *   NE (top-right, ~45°)  → PENDING JUDGMENTS / approvals (amber)
+ *   E  (right,     ~0°)   → ISSUE HOTSPOTS (rose)
+ *   SE (bottom-right, ~-45°) → HUMAN ANCHORS (cyan)
+ *   SW (bottom-left, ~-135°) → AI AGENT PULSES + routines (cyan)
+ *   W  (left,        ~180°)  → MEMORY TISSUE (graphite-emerald)
+ *
+ * angle convention: 0 = +X (right), PI/2 = +Y (up/N), PI = -X (left/W).
+ * In our world (camera looks toward -Z), X is screen-right and Y is up.
+ */
+const KIND_ANGLE: Record<string, number> = {
+  mission: 0, // unused; mission is at origin
+  client: (3 * Math.PI) / 4,   // NW
+  project: (2 * Math.PI) / 3,  // N-NW
+  issue: 0,                    // E
+  approval: Math.PI / 4,       // NE
+  agent: -(3 * Math.PI) / 4,   // SW
+  routine: -(2 * Math.PI) / 3, // S-SW
+  human: -Math.PI / 4,         // SE
+  memory: Math.PI,             // W
 };
 
-const SVG_W = 1000;
-const SVG_H = 680;
-const SCALE = 70;
+const KIND_RADIUS: Record<string, number> = {
+  mission: 0,
+  client: 4.6,
+  project: 3.6,  // nestled between client cluster and nucleus
+  issue: 4.4,
+  approval: 4.0,
+  agent: 4.6,
+  routine: 3.8,
+  human: 4.4,
+  memory: 4.8,
+};
 
-function toWorld(p: { x: number; y: number }, kind: string): [number, number, number] {
-  return [
-    (p.x - SVG_W / 2) / SCALE,
-    -(p.y - SVG_H / 2) / SCALE,
-    KIND_DEPTH[kind] ?? 0,
-  ];
+const KIND_DEPTH: Record<string, number> = {
+  mission: 0,
+  client: 0.4,
+  project: -0.3,
+  issue: 0.7,
+  agent: -0.7,
+  human: 0.2,
+  memory: -0.4,
+  routine: 0,
+  approval: 0.5,
+};
+
+function semanticPositions(nodes: CortexNode[]): Map<string, [number, number, number]> {
+  const out = new Map<string, [number, number, number]>();
+  const byKind = new Map<string, CortexNode[]>();
+  for (const n of nodes) {
+    const arr = byKind.get(n.kind) ?? [];
+    arr.push(n);
+    byKind.set(n.kind, arr);
+  }
+  for (const [kind, group] of byKind) {
+    if (kind === "mission") {
+      group.forEach((n) => out.set(n.id, [0, 0, 0]));
+      continue;
+    }
+    const base = KIND_ANGLE[kind] ?? 0;
+    const r = KIND_RADIUS[kind] ?? 4.4;
+    const z = KIND_DEPTH[kind] ?? 0;
+    // Fan multiple nodes of same kind across an arc within their quadrant
+    const span = Math.min(0.9, 0.32 * group.length);
+    group.forEach((n, i) => {
+      const t = group.length === 1 ? 0 : (i / (group.length - 1)) - 0.5;
+      const a = base + t * span;
+      const rJitter = r + ((Math.sin(n.id.length * 13.37) * 0.6));
+      out.set(n.id, [rJitter * Math.cos(a), rJitter * Math.sin(a), z]);
+    });
+  }
+  return out;
 }
+
+/* ---- Metric → semantic visualization derivation ---------------------------
+ * Every visible sub-element MUST map to a node.metric value.
+ * No synthetic decoration. */
+type ContextKind = "task-swarm" | "branch-fan" | "pending-stack" | "inflammation" | "flow-loop" | "memory-rings" | "human-anchor" | "none";
+
+interface NodeContextSpec {
+  kind: ContextKind;
+  count: number;        // for swarms/fans/stacks
+  intensity: number;    // 0-1 normalized
+  label?: string;       // optional metric name to render as a tiny tag
+}
+
+function parseLeadingInt(value: string): number | null {
+  const m = value.match(/^(\d+(?:\.\d+)?)/);
+  return m ? Math.floor(parseFloat(m[1])) : null;
+}
+
+function severityFromValue(value: string): number {
+  const v = value.toLowerCase();
+  if (v.includes("high") || v.includes("critical")) return 1;
+  if (v.includes("medium") || v.includes("med")) return 0.65;
+  if (v.includes("low")) return 0.35;
+  const pct = value.match(/(\d+)\s*%/);
+  if (pct) return parseInt(pct[1]) / 100;
+  return 0.5;
+}
+
+function deriveContext(node: CortexNode): NodeContextSpec {
+  const m = node.metrics?.[0];
+  // Default per-kind structure when no metrics
+  if (!m) {
+    if (node.kind === "memory") return { kind: "memory-rings", count: 3, intensity: 0.7 };
+    if (node.kind === "human") return { kind: "human-anchor", count: 0, intensity: 0.8 };
+    if (node.kind === "routine") return { kind: "flow-loop", count: 0, intensity: 0.5 };
+    return { kind: "none", count: 0, intensity: 0 };
+  }
+  const numeric = parseLeadingInt(m.value);
+  switch (node.kind) {
+    case "client":
+      return { kind: "branch-fan", count: Math.min(numeric ?? 0, 8), intensity: 0.8, label: m.label };
+    case "agent":
+      return { kind: "task-swarm", count: Math.min(numeric ?? 0, 12), intensity: 0.9, label: m.label };
+    case "issue":
+      if (node.state === "blocked") {
+        return { kind: "inflammation", count: 0, intensity: severityFromValue(m.value), label: m.label };
+      }
+      return { kind: "pending-stack", count: Math.min(numeric ?? 0, 8), intensity: 0.7, label: m.label };
+    case "project":
+      return { kind: "flow-loop", count: 0, intensity: severityFromValue(m.value), label: m.label };
+    case "approval":
+      return { kind: "pending-stack", count: Math.min(numeric ?? 0, 6), intensity: 0.85, label: m.label };
+    default:
+      return { kind: "none", count: 0, intensity: 0 };
+  }
+}
+
 
 /* -------------------------------------------------------------------------- */
 /* Nucleus — the volumetric glowing centerpiece                                */
@@ -351,13 +462,10 @@ function Node3D({
 
       {selected ? <PulseSelection color={color} /> : null}
 
-      {emphasized ? (
-        <Satellites
-          color={color}
-          count={node.kind === "agent" || node.kind === "human" ? 5 : 3}
-          seed={node.id.length * 7919 + node.label.length * 31}
-        />
-      ) : null}
+      {/* Data-derived sub-structure: every visible element below maps to a real
+          node.metric value (active branches, task count, pending depth, etc.).
+          See deriveContext() for the data → visual mapping contract. */}
+      <NodeContext node={node} color={color} />
 
       <Html
         position={[0.38, -0.42, 0]}
@@ -375,6 +483,208 @@ function Node3D({
       </Html>
     </group>
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* NodeContext — data-derived visualization of a node's metrics                */
+/* Every sub-element is anchored to a specific metric.                          */
+/* -------------------------------------------------------------------------- */
+function TaskSwarm({ color, count, intensity }: { color: string; count: number; intensity: number }) {
+  // Agents: each task is a small orbiting dot on a deterministic helix.
+  // Visualizes the agent's CURRENT WORKLOAD as actual particle bodies.
+  const ref = useRef<THREE.Group>(null);
+  const orbits = useMemo(
+    () =>
+      Array.from({ length: count }, (_, i) => ({
+        r: 0.42 + (i % 3) * 0.08,
+        height: ((i / count) - 0.5) * 0.55,
+        phase: (i / count) * Math.PI * 2,
+        speed: 0.35 + (i % 4) * 0.08,
+      })),
+    [count],
+  );
+  useFrame(({ clock }) => {
+    if (!ref.current) return;
+    const t = clock.elapsedTime;
+    ref.current.children.forEach((child, i) => {
+      const o = orbits[i];
+      const a = t * o.speed + o.phase;
+      child.position.set(o.r * Math.cos(a), o.height, o.r * Math.sin(a));
+    });
+  });
+  return (
+    <group ref={ref}>
+      {orbits.map((_, i) => (
+        <mesh key={i}>
+          <sphereGeometry args={[0.022, 8, 8]} />
+          <meshBasicMaterial color={color} transparent opacity={0.75 + intensity * 0.25} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function BranchFan({ color, count, intensity }: { color: string; count: number; intensity: number }) {
+  // Clients: each "active branch" is a leaf node connected to the client by a
+  // thin filament. Cone-shaped fan outward (away from nucleus).
+  const filaments = useMemo(() => {
+    const out: Array<{ end: [number, number, number]; mid: [number, number, number] }> = [];
+    for (let i = 0; i < count; i++) {
+      const angle = (i / Math.max(1, count - 1) - 0.5) * 0.9;
+      const elev = ((i % 2) - 0.5) * 0.25;
+      const r = 0.85 + (i % 3) * 0.08;
+      const end: [number, number, number] = [
+        r * Math.sin(angle),
+        elev,
+        -r * Math.cos(angle), // fan outward (-Z from node toward viewer when seen from origin)
+      ];
+      const mid: [number, number, number] = [end[0] * 0.5, end[1] * 0.5, end[2] * 0.5];
+      out.push({ end, mid });
+    }
+    return out;
+  }, [count]);
+
+  const lineGeom = useMemo(() => {
+    const positions: number[] = [];
+    for (const f of filaments) {
+      positions.push(0, 0, 0, f.mid[0], f.mid[1], f.mid[2]);
+      positions.push(f.mid[0], f.mid[1], f.mid[2], f.end[0], f.end[1], f.end[2]);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    return g;
+  }, [filaments]);
+
+  return (
+    <group>
+      <lineSegments geometry={lineGeom}>
+        <lineBasicMaterial color={color} transparent opacity={0.5 * intensity} />
+      </lineSegments>
+      {filaments.map((f, i) => (
+        <mesh key={i} position={f.end}>
+          <sphereGeometry args={[0.028, 10, 10]} />
+          <meshBasicMaterial color={color} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function PendingStack({ color, count }: { color: string; count: number }) {
+  // Issues / approvals: N tags stacked vertically below the node (queue depth).
+  return (
+    <group position={[0, -0.45, 0]}>
+      {Array.from({ length: count }, (_, i) => (
+        <mesh key={i} position={[0, -i * 0.12, 0]}>
+          <boxGeometry args={[0.16, 0.04, 0.16]} />
+          <meshBasicMaterial color={color} transparent opacity={0.65 - i * 0.05} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function InflammationHalo({ intensity }: { intensity: number }) {
+  // Blocked issues: volumetric magenta halo whose radius scales with severity.
+  // Slow pulse synchronized to risk amplification.
+  const haloRef = useRef<THREE.Mesh>(null);
+  const lightRef = useRef<THREE.PointLight>(null);
+  const baseR = 0.55 + intensity * 0.55;
+  useFrame(({ clock }) => {
+    const t = clock.elapsedTime;
+    if (haloRef.current) {
+      const s = 1 + Math.sin(t * (1.3 + intensity)) * (0.04 + intensity * 0.06);
+      haloRef.current.scale.setScalar(s);
+      (haloRef.current.material as THREE.MeshBasicMaterial).opacity = 0.18 + intensity * 0.15 + Math.sin(t * 1.1) * 0.05;
+    }
+    if (lightRef.current) {
+      lightRef.current.intensity = 6 * intensity + Math.sin(t * (1.8 + intensity)) * 2.4;
+    }
+  });
+  return (
+    <group>
+      <mesh ref={haloRef}>
+        <sphereGeometry args={[baseR, 32, 32]} />
+        <meshBasicMaterial color="#ff2f7a" transparent opacity={0.22} side={THREE.BackSide} depthWrite={false} />
+      </mesh>
+      <pointLight ref={lightRef} color="#ff2f7a" distance={baseR * 4} intensity={4 * intensity} decay={1.8} />
+    </group>
+  );
+}
+
+function FlowLoop({ color, intensity }: { color: string; intensity: number }) {
+  // Projects: a rotating ring whose speed reflects flow %.
+  const ref = useRef<THREE.Mesh>(null);
+  useFrame(({ clock }) => {
+    if (ref.current) ref.current.rotation.z = clock.elapsedTime * (0.4 + intensity * 1.0);
+  });
+  return (
+    <mesh ref={ref} rotation={[Math.PI / 2.2, 0, 0]}>
+      <torusGeometry args={[0.52, 0.008, 8, 96, Math.PI * 1.6 * intensity + Math.PI * 0.2]} />
+      <meshBasicMaterial color={color} transparent opacity={0.7} />
+    </mesh>
+  );
+}
+
+function MemoryRings() {
+  // Memory: 3 concentric loops at varying tilts (knowledge depth/recency).
+  const tilts = [0, Math.PI / 5, -Math.PI / 6];
+  return (
+    <group>
+      {tilts.map((tilt, i) => {
+        const r = 0.45 + i * 0.18;
+        return (
+          <mesh key={i} rotation={[Math.PI / 2 + tilt, 0, 0]}>
+            <torusGeometry args={[r, 0.006, 8, 80]} />
+            <meshBasicMaterial color="#83918c" transparent opacity={0.55 - i * 0.12} />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
+function HumanAnchor({ color }: { color: string }) {
+  // Humans: 4 short anchor lines downward — handoff-ready surface.
+  const lines = useMemo(() => {
+    const positions: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2;
+      const r = 0.42;
+      positions.push(r * Math.cos(a), -0.1, r * Math.sin(a));
+      positions.push(r * Math.cos(a), -0.55, r * Math.sin(a));
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    return g;
+  }, []);
+  return (
+    <lineSegments geometry={lines}>
+      <lineBasicMaterial color={color} transparent opacity={0.55} />
+    </lineSegments>
+  );
+}
+
+function NodeContext({ node, color }: { node: CortexNode; color: string }) {
+  const spec = useMemo(() => deriveContext(node), [node]);
+  switch (spec.kind) {
+    case "task-swarm":
+      return <TaskSwarm color={color} count={spec.count} intensity={spec.intensity} />;
+    case "branch-fan":
+      return <BranchFan color={color} count={spec.count} intensity={spec.intensity} />;
+    case "pending-stack":
+      return <PendingStack color={color} count={spec.count} />;
+    case "inflammation":
+      return <InflammationHalo intensity={spec.intensity} />;
+    case "flow-loop":
+      return <FlowLoop color={color} intensity={spec.intensity} />;
+    case "memory-rings":
+      return <MemoryRings />;
+    case "human-anchor":
+      return <HumanAnchor color={color} />;
+    default:
+      return null;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -404,243 +714,6 @@ function PulseSelection({ color }: { color: string }) {
         <torusGeometry args={[0.42, 0.008, 8, 64]} />
         <meshBasicMaterial color={color} transparent opacity={0.45} depthWrite={false} />
       </mesh>
-    </group>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Satellites — small orbiting dots around each major node (activity feel)     */
-/* -------------------------------------------------------------------------- */
-function Satellites({ color, count = 4, seed }: { color: string; count?: number; seed: number }) {
-  const ref = useRef<THREE.Group>(null);
-  const dots = useMemo(() => {
-    const rand = mulberry32(seed);
-    return Array.from({ length: count }, () => ({
-      r: 0.45 + rand() * 0.15,
-      speed: 0.4 + rand() * 0.5,
-      phase: rand() * Math.PI * 2,
-      tilt: (rand() - 0.5) * 0.4,
-      size: 0.018 + rand() * 0.012,
-    }));
-  }, [count, seed]);
-  useFrame(({ clock }) => {
-    if (!ref.current) return;
-    const t = clock.elapsedTime;
-    ref.current.children.forEach((child, i) => {
-      const d = dots[i];
-      const a = t * d.speed + d.phase;
-      child.position.set(d.r * Math.cos(a), Math.sin(a * 0.7) * d.tilt, d.r * Math.sin(a));
-    });
-  });
-  return (
-    <group ref={ref}>
-      {dots.map((d, i) => (
-        <mesh key={i}>
-          <sphereGeometry args={[d.size, 8, 8]} />
-          <meshBasicMaterial color={color} />
-        </mesh>
-      ))}
-    </group>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* AmbientBranches — curving 3D dendrite trees from nucleus into all octants   */
-/* (the V3 mockup's "living organism" texture — sub-branches + leaves)         */
-/* -------------------------------------------------------------------------- */
-function mulberry32(seed: number) {
-  let a = seed | 0;
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-const QUAD_COLORS = {
-  emerald: new THREE.Color("#39ff88"),
-  amber: new THREE.Color("#ffb02e"),
-  cyan: new THREE.Color("#18d7ff"),
-  rose: new THREE.Color("#ff2f7a"),
-};
-
-function colorForOctant(x: number, y: number): THREE.Color {
-  if (y >= 0) {
-    return x >= 0 ? QUAD_COLORS.amber : QUAD_COLORS.emerald;
-  }
-  return x >= 0 ? QUAD_COLORS.rose : QUAD_COLORS.cyan;
-}
-
-function AmbientBranches({ count = 64, seed = 0xc0ffee }: { count?: number; seed?: number }) {
-  const linesRef = useRef<THREE.LineSegments>(null);
-  const pointsRef = useRef<THREE.Points>(null);
-  const leavesRef = useRef<THREE.InstancedMesh>(null);
-
-  const { lineGeom, lineMat, pointGeom, pointMat, leaves } = useMemo(() => {
-    const rand = mulberry32(seed);
-    const lineVerts: number[] = [];
-    const lineCols: number[] = [];
-    const pointVerts: number[] = [];
-    const pointCols: number[] = [];
-    const leafData: Array<{ pos: THREE.Vector3; color: THREE.Color; size: number }> = [];
-
-    for (let i = 0; i < count; i++) {
-      // Distribute branches around the full sphere with slight equatorial bias
-      const angleBase = (i / count) * Math.PI * 2;
-      const angleJitter = (rand() - 0.5) * ((Math.PI * 2) / count) * 1.4;
-      const angle = angleBase + angleJitter;
-      const elev = (rand() - 0.5) * Math.PI * 0.45; // limit vertical spread
-
-      const innerR = 2.6 + rand() * 0.3;
-      const trunkLen = 3.8 + rand() * 4.5;
-      const start = new THREE.Vector3(
-        innerR * Math.cos(angle) * Math.cos(elev),
-        innerR * Math.sin(elev),
-        innerR * Math.sin(angle) * Math.cos(elev),
-      );
-
-      const endAngle = angle + (rand() - 0.5) * 0.35;
-      const endElev = elev + (rand() - 0.5) * 0.25;
-      const endR = innerR + trunkLen;
-      const end = new THREE.Vector3(
-        endR * Math.cos(endAngle) * Math.cos(endElev),
-        endR * Math.sin(endElev),
-        endR * Math.sin(endAngle) * Math.cos(endElev),
-      );
-
-      const midAngle = (angle + endAngle) / 2 + (rand() - 0.5) * 0.2;
-      const midElev = (elev + endElev) / 2 + (rand() - 0.5) * 0.15;
-      const midR = innerR + trunkLen * 0.55;
-      const ctrl = new THREE.Vector3(
-        midR * Math.cos(midAngle) * Math.cos(midElev),
-        midR * Math.sin(midElev),
-        midR * Math.sin(midAngle) * Math.cos(midElev),
-      );
-
-      const curve = new THREE.QuadraticBezierCurve3(start, ctrl, end);
-      const color = colorForOctant(end.x, end.z);
-
-      // Discretize trunk into line segments
-      const segs = 14;
-      const samples: THREE.Vector3[] = [];
-      for (let s = 0; s <= segs; s++) samples.push(curve.getPointAt(s / segs));
-      for (let s = 0; s < segs; s++) {
-        lineVerts.push(samples[s].x, samples[s].y, samples[s].z);
-        lineVerts.push(samples[s + 1].x, samples[s + 1].y, samples[s + 1].z);
-        lineCols.push(color.r, color.g, color.b, color.r, color.g, color.b);
-      }
-
-      // Stipple dots along trunk
-      const stippleN = 5 + Math.floor(rand() * 6);
-      for (let s = 0; s < stippleN; s++) {
-        const t = (s + 0.5) / stippleN;
-        const p = curve.getPointAt(t);
-        pointVerts.push(p.x + (rand() - 0.5) * 0.08, p.y + (rand() - 0.5) * 0.08, p.z + (rand() - 0.5) * 0.08);
-        pointCols.push(color.r, color.g, color.b);
-      }
-
-      // Sub-branches (0-2 per trunk)
-      const subN = Math.floor(rand() * 2.6);
-      for (let s = 0; s < subN; s++) {
-        const branchT = 0.45 + rand() * 0.35;
-        const origin = curve.getPointAt(branchT);
-        const ahead = curve.getPointAt(Math.min(0.99, branchT + 0.05));
-        const tangent = ahead.clone().sub(origin).normalize();
-        const up = new THREE.Vector3(0, 1, 0);
-        const right = tangent.clone().cross(up).normalize();
-        const side = s === 0 ? 1 : -1;
-        const subLen = 1.3 + rand() * 2.2;
-        const subDir = right.clone().multiplyScalar(side * 0.85).add(tangent.clone().multiplyScalar(0.4)).normalize();
-        const subEnd = origin.clone().add(subDir.clone().multiplyScalar(subLen));
-        const subCtrl = origin.clone()
-          .add(subDir.clone().multiplyScalar(subLen * 0.5))
-          .add(right.clone().multiplyScalar(side * 0.25));
-
-        const subCurve = new THREE.QuadraticBezierCurve3(origin, subCtrl, subEnd);
-        const subSegs = 10;
-        const subSamples: THREE.Vector3[] = [];
-        for (let k = 0; k <= subSegs; k++) subSamples.push(subCurve.getPointAt(k / subSegs));
-        for (let k = 0; k < subSegs; k++) {
-          lineVerts.push(subSamples[k].x, subSamples[k].y, subSamples[k].z);
-          lineVerts.push(subSamples[k + 1].x, subSamples[k + 1].y, subSamples[k + 1].z);
-          lineCols.push(color.r, color.g, color.b, color.r, color.g, color.b);
-        }
-        const subStippleN = 3 + Math.floor(rand() * 4);
-        for (let k = 0; k < subStippleN; k++) {
-          const t = (k + 0.5) / subStippleN;
-          const p = subCurve.getPointAt(t);
-          pointVerts.push(p.x, p.y, p.z);
-          pointCols.push(color.r, color.g, color.b);
-        }
-
-        leafData.push({ pos: subEnd, color, size: 0.028 + rand() * 0.018 });
-      }
-
-      leafData.push({ pos: end, color, size: 0.038 + rand() * 0.022 });
-    }
-
-    const lg = new THREE.BufferGeometry();
-    lg.setAttribute("position", new THREE.Float32BufferAttribute(lineVerts, 3));
-    lg.setAttribute("color", new THREE.Float32BufferAttribute(lineCols, 3));
-    const lm = new THREE.LineBasicMaterial({
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.5,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-
-    const pg = new THREE.BufferGeometry();
-    pg.setAttribute("position", new THREE.Float32BufferAttribute(pointVerts, 3));
-    pg.setAttribute("color", new THREE.Float32BufferAttribute(pointCols, 3));
-    const pm = new THREE.PointsMaterial({
-      vertexColors: true,
-      size: 0.07,
-      transparent: true,
-      opacity: 0.95,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      sizeAttenuation: true,
-    });
-
-    return { lineGeom: lg, lineMat: lm, pointGeom: pg, pointMat: pm, leaves: leafData };
-  }, [count, seed]);
-
-  // Animate leaves via InstancedMesh — populate matrices on first render
-  useMemo(() => {
-    if (!leavesRef.current) return;
-    const dummy = new THREE.Object3D();
-    const colorAttr = new THREE.Color();
-    leaves.forEach((leaf, i) => {
-      dummy.position.copy(leaf.pos);
-      dummy.scale.setScalar(leaf.size * 30);
-      dummy.updateMatrix();
-      leavesRef.current!.setMatrixAt(i, dummy.matrix);
-      colorAttr.copy(leaf.color);
-      leavesRef.current!.setColorAt(i, colorAttr);
-    });
-    leavesRef.current.instanceMatrix.needsUpdate = true;
-    if (leavesRef.current.instanceColor) leavesRef.current.instanceColor.needsUpdate = true;
-  }, [leaves]);
-
-  useFrame(({ clock }) => {
-    if (linesRef.current) {
-      const t = clock.elapsedTime;
-      const m = linesRef.current.material as THREE.LineBasicMaterial;
-      m.opacity = 0.42 + Math.sin(t * 0.4) * 0.06;
-    }
-  });
-
-  return (
-    <group>
-      <lineSegments ref={linesRef} geometry={lineGeom} material={lineMat} />
-      <points ref={pointsRef} geometry={pointGeom} material={pointMat} />
-      <instancedMesh ref={leavesRef} args={[undefined, undefined, leaves.length]}>
-        <sphereGeometry args={[0.012, 8, 8]} />
-        <meshBasicMaterial vertexColors />
-      </instancedMesh>
     </group>
   );
 }
@@ -771,8 +844,10 @@ function Scene({
       <RadialPulse delay={2} />
       <RadialPulse delay={4} />
 
-      <AmbientBranches count={64} seed={0xc0ffee} />
-      <AmbientDendrites count={1400} radius={14} />
+      {/* Background ambient dust — pure atmosphere, no semantic claim. Kept
+          sparse so the field reads as "data set against a quiet field" rather
+          than "data buried under decoration". */}
+      <AmbientDendrites count={900} radius={14} />
 
       {graph.paths.map((path) => {
         const r = pathRenderable(path);
@@ -855,25 +930,22 @@ function FallbackOverlay({ children }: { children: ReactNode }) {
 export default function NeuralField({ graph, activeLens, selectedNodeId, onSelectNode }: NeuralFieldProps) {
   const [orbitEnabled, setOrbitEnabled] = useState(true);
 
-  const initialPositions = useMemo(() => {
-    const map = new Map<string, [number, number, number]>();
-    for (const n of graph.nodes) {
-      map.set(n.id, toWorld(n.position, n.kind));
-    }
-    return map;
-  }, [graph.nodes]);
+  // Semantic 3D placement — every kind clusters in its V3 quadrant. Multiple
+  // nodes of the same kind fan within the quadrant; not derived from the SVG
+  // x,y coords (which were never intended for a 3D scene).
+  const initialPositions = useMemo(() => semanticPositions(graph.nodes), [graph.nodes]);
 
   // Per-node position state (so drag-to-move actually mutates the world).
   const [positions, setPositions] = useState<Map<string, [number, number, number]>>(initialPositions);
 
-  // Sync when graph changes
+  // Sync when graph changes — preserve user-dragged positions, only add new nodes.
   useMemo(() => {
     setPositions((prev) => {
+      const semantic = semanticPositions(graph.nodes);
       const next = new Map(prev);
       for (const n of graph.nodes) {
-        if (!next.has(n.id)) next.set(n.id, toWorld(n.position, n.kind));
+        if (!next.has(n.id)) next.set(n.id, semantic.get(n.id) ?? [0, 0, 0]);
       }
-      // Drop nodes no longer in graph
       for (const id of next.keys()) {
         if (!graph.nodes.find((n) => n.id === id)) next.delete(id);
       }

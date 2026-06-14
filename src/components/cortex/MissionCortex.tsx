@@ -138,19 +138,27 @@ export default function MissionCortex({
       <div className="cortex-quadrant-labels" aria-hidden="true">
         <div className="cortex-quadrant-labels__nw">
           <span className="cortex-quadrant-labels__title">CLIENT CLUSTERS</span>
-          <span className="cortex-quadrant-labels__sub">healthy organism</span>
+          <span className="cortex-quadrant-labels__sub">
+            {graph.nodes.filter((n) => n.kind === "client").length} client · {graph.nodes.filter((n) => n.kind === "project").length} project
+          </span>
         </div>
         <div className="cortex-quadrant-labels__ne">
           <span className="cortex-quadrant-labels__title">PENDING JUDGMENTS</span>
-          <span className="cortex-quadrant-labels__sub">awaiting synapse</span>
+          <span className="cortex-quadrant-labels__sub">
+            {graph.nodes.filter((n) => n.kind === "approval").length + graph.nodes.filter((n) => n.kind === "issue" && n.state === "pending").length} awaiting synapse
+          </span>
         </div>
         <div className="cortex-quadrant-labels__sw">
           <span className="cortex-quadrant-labels__title">AI AGENT PULSES</span>
-          <span className="cortex-quadrant-labels__sub">runtime coordinating</span>
+          <span className="cortex-quadrant-labels__sub">
+            {graph.nodes.filter((n) => n.kind === "agent").length} agent · {graph.nodes.filter((n) => n.kind === "routine").length} routine
+          </span>
         </div>
         <div className="cortex-quadrant-labels__se">
-          <span className="cortex-quadrant-labels__title">ISSUE HOTSPOTS</span>
-          <span className="cortex-quadrant-labels__sub">inflammation watch</span>
+          <span className="cortex-quadrant-labels__title">HUMAN ANCHORS</span>
+          <span className="cortex-quadrant-labels__sub">
+            {graph.nodes.filter((n) => n.kind === "human").length} anchor · {graph.nodes.filter((n) => n.kind === "issue" && n.state === "blocked").length} inflamed
+          </span>
         </div>
       </div>
 
