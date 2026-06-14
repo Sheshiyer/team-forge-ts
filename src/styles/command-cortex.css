@@ -383,11 +383,30 @@
   outline: none;
 }
 
-/* In 3D mode the 2D overlays that depend on viewbox coords are hidden */
-.cortex-shell:has(.cortex-neural-field--3d) .cortex-quadrant-labels,
+/* In 3D mode the 2D-coord-positioned overlays are hidden; quadrant labels stay
+   (they're independent of viewbox coords — just absolute corners of the shell). */
 .cortex-shell:has(.cortex-neural-field--3d) .cortex-command-ring {
   display: none;
 }
+
+/* Quadrant labels above the 3D canvas need higher z-index */
+.cortex-shell:has(.cortex-neural-field--3d) .cortex-quadrant-labels {
+  z-index: 4;
+}
+
+/* In 3D mode the quadrant label corners shift inward a touch and gain a glow chip */
+.cortex-shell:has(.cortex-neural-field--3d) .cortex-quadrant-labels > div {
+  background: rgba(3, 7, 7, 0.55);
+  border: 1px solid rgba(131, 145, 140, 0.18);
+  padding: 7px 11px;
+  clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+  backdrop-filter: blur(6px);
+}
+
+.cortex-shell:has(.cortex-neural-field--3d) .cortex-quadrant-labels__nw { top: 168px; left: 36px; }
+.cortex-shell:has(.cortex-neural-field--3d) .cortex-quadrant-labels__ne { top: 144px; right: 36px; }
+.cortex-shell:has(.cortex-neural-field--3d) .cortex-quadrant-labels__sw { bottom: 132px; left: 36px; }
+.cortex-shell:has(.cortex-neural-field--3d) .cortex-quadrant-labels__se { bottom: 132px; right: 36px; }
 
 /* 3D HTML labels — overlay tags pinned to world positions */
 .cortex-3d-label {

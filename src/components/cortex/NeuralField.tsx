@@ -349,11 +349,14 @@ function Node3D({
         />
       </mesh>
 
-      {selected ? (
-        <mesh>
-          <torusGeometry args={[0.55, 0.012, 8, 64]} />
-          <meshBasicMaterial color={color} transparent opacity={0.65} />
-        </mesh>
+      {selected ? <PulseSelection color={color} /> : null}
+
+      {emphasized ? (
+        <Satellites
+          color={color}
+          count={node.kind === "agent" || node.kind === "human" ? 5 : 3}
+          seed={node.id.length * 7919 + node.label.length * 31}
+        />
       ) : null}
 
       <Html
@@ -370,6 +373,274 @@ function Node3D({
           </em>
         </div>
       </Html>
+    </group>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* PulseSelection — pulsing animated ring around a selected node               */
+/* -------------------------------------------------------------------------- */
+function PulseSelection({ color }: { color: string }) {
+  const outerRef = useRef<THREE.Mesh>(null);
+  const innerRef = useRef<THREE.Mesh>(null);
+  useFrame(({ clock }) => {
+    const t = clock.elapsedTime * 1.4;
+    const s = 1 + Math.sin(t) * 0.08;
+    if (outerRef.current) {
+      outerRef.current.scale.set(s, s, s);
+      (outerRef.current.material as THREE.MeshBasicMaterial).opacity = 0.55 + Math.sin(t + 0.5) * 0.25;
+    }
+    if (innerRef.current) {
+      innerRef.current.rotation.z = t * 0.6;
+    }
+  });
+  return (
+    <group>
+      <mesh ref={outerRef}>
+        <torusGeometry args={[0.62, 0.014, 8, 80]} />
+        <meshBasicMaterial color={color} transparent opacity={0.6} depthWrite={false} />
+      </mesh>
+      <mesh ref={innerRef} rotation={[0, 0, 0]}>
+        <torusGeometry args={[0.42, 0.008, 8, 64]} />
+        <meshBasicMaterial color={color} transparent opacity={0.45} depthWrite={false} />
+      </mesh>
+    </group>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Satellites — small orbiting dots around each major node (activity feel)     */
+/* -------------------------------------------------------------------------- */
+function Satellites({ color, count = 4, seed }: { color: string; count?: number; seed: number }) {
+  const ref = useRef<THREE.Group>(null);
+  const dots = useMemo(() => {
+    const rand = mulberry32(seed);
+    return Array.from({ length: count }, () => ({
+      r: 0.45 + rand() * 0.15,
+      speed: 0.4 + rand() * 0.5,
+      phase: rand() * Math.PI * 2,
+      tilt: (rand() - 0.5) * 0.4,
+      size: 0.018 + rand() * 0.012,
+    }));
+  }, [count, seed]);
+  useFrame(({ clock }) => {
+    if (!ref.current) return;
+    const t = clock.elapsedTime;
+    ref.current.children.forEach((child, i) => {
+      const d = dots[i];
+      const a = t * d.speed + d.phase;
+      child.position.set(d.r * Math.cos(a), Math.sin(a * 0.7) * d.tilt, d.r * Math.sin(a));
+    });
+  });
+  return (
+    <group ref={ref}>
+      {dots.map((d, i) => (
+        <mesh key={i}>
+          <sphereGeometry args={[d.size, 8, 8]} />
+          <meshBasicMaterial color={color} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* AmbientBranches — curving 3D dendrite trees from nucleus into all octants   */
+/* (the V3 mockup's "living organism" texture — sub-branches + leaves)         */
+/* -------------------------------------------------------------------------- */
+function mulberry32(seed: number) {
+  let a = seed | 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const QUAD_COLORS = {
+  emerald: new THREE.Color("#39ff88"),
+  amber: new THREE.Color("#ffb02e"),
+  cyan: new THREE.Color("#18d7ff"),
+  rose: new THREE.Color("#ff2f7a"),
+};
+
+function colorForOctant(x: number, y: number): THREE.Color {
+  if (y >= 0) {
+    return x >= 0 ? QUAD_COLORS.amber : QUAD_COLORS.emerald;
+  }
+  return x >= 0 ? QUAD_COLORS.rose : QUAD_COLORS.cyan;
+}
+
+function AmbientBranches({ count = 64, seed = 0xc0ffee }: { count?: number; seed?: number }) {
+  const linesRef = useRef<THREE.LineSegments>(null);
+  const pointsRef = useRef<THREE.Points>(null);
+  const leavesRef = useRef<THREE.InstancedMesh>(null);
+
+  const { lineGeom, lineMat, pointGeom, pointMat, leaves } = useMemo(() => {
+    const rand = mulberry32(seed);
+    const lineVerts: number[] = [];
+    const lineCols: number[] = [];
+    const pointVerts: number[] = [];
+    const pointCols: number[] = [];
+    const leafData: Array<{ pos: THREE.Vector3; color: THREE.Color; size: number }> = [];
+
+    for (let i = 0; i < count; i++) {
+      // Distribute branches around the full sphere with slight equatorial bias
+      const angleBase = (i / count) * Math.PI * 2;
+      const angleJitter = (rand() - 0.5) * ((Math.PI * 2) / count) * 1.4;
+      const angle = angleBase + angleJitter;
+      const elev = (rand() - 0.5) * Math.PI * 0.45; // limit vertical spread
+
+      const innerR = 2.6 + rand() * 0.3;
+      const trunkLen = 3.8 + rand() * 4.5;
+      const start = new THREE.Vector3(
+        innerR * Math.cos(angle) * Math.cos(elev),
+        innerR * Math.sin(elev),
+        innerR * Math.sin(angle) * Math.cos(elev),
+      );
+
+      const endAngle = angle + (rand() - 0.5) * 0.35;
+      const endElev = elev + (rand() - 0.5) * 0.25;
+      const endR = innerR + trunkLen;
+      const end = new THREE.Vector3(
+        endR * Math.cos(endAngle) * Math.cos(endElev),
+        endR * Math.sin(endElev),
+        endR * Math.sin(endAngle) * Math.cos(endElev),
+      );
+
+      const midAngle = (angle + endAngle) / 2 + (rand() - 0.5) * 0.2;
+      const midElev = (elev + endElev) / 2 + (rand() - 0.5) * 0.15;
+      const midR = innerR + trunkLen * 0.55;
+      const ctrl = new THREE.Vector3(
+        midR * Math.cos(midAngle) * Math.cos(midElev),
+        midR * Math.sin(midElev),
+        midR * Math.sin(midAngle) * Math.cos(midElev),
+      );
+
+      const curve = new THREE.QuadraticBezierCurve3(start, ctrl, end);
+      const color = colorForOctant(end.x, end.z);
+
+      // Discretize trunk into line segments
+      const segs = 14;
+      const samples: THREE.Vector3[] = [];
+      for (let s = 0; s <= segs; s++) samples.push(curve.getPointAt(s / segs));
+      for (let s = 0; s < segs; s++) {
+        lineVerts.push(samples[s].x, samples[s].y, samples[s].z);
+        lineVerts.push(samples[s + 1].x, samples[s + 1].y, samples[s + 1].z);
+        lineCols.push(color.r, color.g, color.b, color.r, color.g, color.b);
+      }
+
+      // Stipple dots along trunk
+      const stippleN = 5 + Math.floor(rand() * 6);
+      for (let s = 0; s < stippleN; s++) {
+        const t = (s + 0.5) / stippleN;
+        const p = curve.getPointAt(t);
+        pointVerts.push(p.x + (rand() - 0.5) * 0.08, p.y + (rand() - 0.5) * 0.08, p.z + (rand() - 0.5) * 0.08);
+        pointCols.push(color.r, color.g, color.b);
+      }
+
+      // Sub-branches (0-2 per trunk)
+      const subN = Math.floor(rand() * 2.6);
+      for (let s = 0; s < subN; s++) {
+        const branchT = 0.45 + rand() * 0.35;
+        const origin = curve.getPointAt(branchT);
+        const ahead = curve.getPointAt(Math.min(0.99, branchT + 0.05));
+        const tangent = ahead.clone().sub(origin).normalize();
+        const up = new THREE.Vector3(0, 1, 0);
+        const right = tangent.clone().cross(up).normalize();
+        const side = s === 0 ? 1 : -1;
+        const subLen = 1.3 + rand() * 2.2;
+        const subDir = right.clone().multiplyScalar(side * 0.85).add(tangent.clone().multiplyScalar(0.4)).normalize();
+        const subEnd = origin.clone().add(subDir.clone().multiplyScalar(subLen));
+        const subCtrl = origin.clone()
+          .add(subDir.clone().multiplyScalar(subLen * 0.5))
+          .add(right.clone().multiplyScalar(side * 0.25));
+
+        const subCurve = new THREE.QuadraticBezierCurve3(origin, subCtrl, subEnd);
+        const subSegs = 10;
+        const subSamples: THREE.Vector3[] = [];
+        for (let k = 0; k <= subSegs; k++) subSamples.push(subCurve.getPointAt(k / subSegs));
+        for (let k = 0; k < subSegs; k++) {
+          lineVerts.push(subSamples[k].x, subSamples[k].y, subSamples[k].z);
+          lineVerts.push(subSamples[k + 1].x, subSamples[k + 1].y, subSamples[k + 1].z);
+          lineCols.push(color.r, color.g, color.b, color.r, color.g, color.b);
+        }
+        const subStippleN = 3 + Math.floor(rand() * 4);
+        for (let k = 0; k < subStippleN; k++) {
+          const t = (k + 0.5) / subStippleN;
+          const p = subCurve.getPointAt(t);
+          pointVerts.push(p.x, p.y, p.z);
+          pointCols.push(color.r, color.g, color.b);
+        }
+
+        leafData.push({ pos: subEnd, color, size: 0.028 + rand() * 0.018 });
+      }
+
+      leafData.push({ pos: end, color, size: 0.038 + rand() * 0.022 });
+    }
+
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute("position", new THREE.Float32BufferAttribute(lineVerts, 3));
+    lg.setAttribute("color", new THREE.Float32BufferAttribute(lineCols, 3));
+    const lm = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.5,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+
+    const pg = new THREE.BufferGeometry();
+    pg.setAttribute("position", new THREE.Float32BufferAttribute(pointVerts, 3));
+    pg.setAttribute("color", new THREE.Float32BufferAttribute(pointCols, 3));
+    const pm = new THREE.PointsMaterial({
+      vertexColors: true,
+      size: 0.07,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true,
+    });
+
+    return { lineGeom: lg, lineMat: lm, pointGeom: pg, pointMat: pm, leaves: leafData };
+  }, [count, seed]);
+
+  // Animate leaves via InstancedMesh — populate matrices on first render
+  useMemo(() => {
+    if (!leavesRef.current) return;
+    const dummy = new THREE.Object3D();
+    const colorAttr = new THREE.Color();
+    leaves.forEach((leaf, i) => {
+      dummy.position.copy(leaf.pos);
+      dummy.scale.setScalar(leaf.size * 30);
+      dummy.updateMatrix();
+      leavesRef.current!.setMatrixAt(i, dummy.matrix);
+      colorAttr.copy(leaf.color);
+      leavesRef.current!.setColorAt(i, colorAttr);
+    });
+    leavesRef.current.instanceMatrix.needsUpdate = true;
+    if (leavesRef.current.instanceColor) leavesRef.current.instanceColor.needsUpdate = true;
+  }, [leaves]);
+
+  useFrame(({ clock }) => {
+    if (linesRef.current) {
+      const t = clock.elapsedTime;
+      const m = linesRef.current.material as THREE.LineBasicMaterial;
+      m.opacity = 0.42 + Math.sin(t * 0.4) * 0.06;
+    }
+  });
+
+  return (
+    <group>
+      <lineSegments ref={linesRef} geometry={lineGeom} material={lineMat} />
+      <points ref={pointsRef} geometry={pointGeom} material={pointMat} />
+      <instancedMesh ref={leavesRef} args={[undefined, undefined, leaves.length]}>
+        <sphereGeometry args={[0.012, 8, 8]} />
+        <meshBasicMaterial vertexColors />
+      </instancedMesh>
     </group>
   );
 }
@@ -500,7 +771,8 @@ function Scene({
       <RadialPulse delay={2} />
       <RadialPulse delay={4} />
 
-      <AmbientDendrites count={1800} radius={14} />
+      <AmbientBranches count={64} seed={0xc0ffee} />
+      <AmbientDendrites count={1400} radius={14} />
 
       {graph.paths.map((path) => {
         const r = pathRenderable(path);
