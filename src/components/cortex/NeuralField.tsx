@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef, type CSSProperties } from "react";
 import type { CortexGraph, CortexLensId, CortexNode, CortexPath, CortexSignal } from "../../lib/commandCortex/types";
 
 export interface NeuralFieldProps {
@@ -7,6 +7,10 @@ export interface NeuralFieldProps {
   selectedNodeId?: string | null;
   onSelectNode?: (nodeId: string) => void;
 }
+
+const VIEW_W = 1000;
+const VIEW_H = 680;
+const CENTER = { x: 500, y: 340 };
 
 interface Point {
   x: number;
@@ -26,9 +30,7 @@ function mulberry32(seed: number) {
 
 function hashSeed(id: string): number {
   let h = 0;
-  for (let i = 0; i < id.length; i++) {
-    h = (h * 31 + id.charCodeAt(i)) | 0;
-  }
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
   return h >>> 0;
 }
 
@@ -44,151 +46,120 @@ function quadControl(from: Point, to: Point, arch = -40): Point {
   return { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 + arch };
 }
 
-function distance(a: Point, b: Point): number {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  return Math.sqrt(dx * dx + dy * dy);
+function offsetAlongNormal(from: Point, control: Point, to: Point) {
+  const mid = pointAlongQuad(from, control, to, 0.5);
+  const ahead = pointAlongQuad(from, control, to, 0.55);
+  const dx = ahead.x - mid.x;
+  const dy = ahead.y - mid.y;
+  const len = Math.max(0.001, Math.sqrt(dx * dx + dy * dy));
+  return { nx: -dy / len, ny: dx / len, mid };
 }
 
-interface StipplePoint {
-  t: number;
-  x: number;
-  y: number;
-  r: number;
-  opacity: number;
-}
+// Generate radial spike-rays from nucleus center filling the field — STATIC
+const NUCLEUS_RAYS = (() => {
+  const rand = mulberry32(0xc0fee);
+  return Array.from({ length: 220 }, (_, i) => {
+    const angle = (i / 220) * Math.PI * 2 + rand() * 0.04;
+    const innerR = 38 + rand() * 6;
+    const outerR = 110 + rand() * 340;
+    const opacity = 0.04 + rand() * 0.32;
+    const sw = 0.4 + rand() * 0.7;
+    return {
+      x1: CENTER.x + Math.cos(angle) * innerR,
+      y1: CENTER.y + Math.sin(angle) * innerR,
+      x2: CENTER.x + Math.cos(angle) * outerR,
+      y2: CENTER.y + Math.sin(angle) * outerR,
+      opacity,
+      sw,
+    };
+  });
+})();
 
-function stippleAlongQuad(from: Point, control: Point, to: Point, count: number, seed: number): StipplePoint[] {
-  const rand = mulberry32(seed);
-  const points: StipplePoint[] = [];
-  for (let i = 0; i < count; i++) {
-    const baseT = (i + 0.5) / count;
-    const jitter = (rand() - 0.5) * 0.35 * (1 / count);
-    const t = Math.max(0, Math.min(1, baseT + jitter));
-    const p = pointAlongQuad(from, control, to, t);
-    const lateralAngle = rand() * Math.PI * 2;
-    const lateralR = rand() * 6;
-    points.push({
-      t,
-      x: p.x + Math.cos(lateralAngle) * lateralR,
-      y: p.y + Math.sin(lateralAngle) * lateralR,
-      r: 0.6 + rand() * 1.6,
-      opacity: 0.28 + rand() * 0.5,
-    });
-  }
-  return points;
-}
-
-interface SubBranch {
-  from: Point;
-  control: Point;
-  to: Point;
+interface StrandSpec {
   d: string;
-  stipples: StipplePoint[];
+  offset: number;
+  stipples: Array<{ x: number; y: number; r: number }>;
 }
 
-function generateSubBranches(
-  from: Point,
-  control: Point,
-  to: Point,
-  count: number,
-  seed: number,
-): SubBranch[] {
-  const rand = mulberry32(seed * 9301 + 17);
-  const branches: SubBranch[] = [];
-  const trunkLen = distance(from, to);
-  const reach = Math.max(38, trunkLen * 0.28);
-  for (let i = 0; i < count; i++) {
-    const tStart = 0.18 + (i + rand() * 0.4) * (0.66 / count);
-    const start = pointAlongQuad(from, control, to, tStart);
-    const tangent = pointAlongQuad(from, control, to, Math.min(1, tStart + 0.05));
-    const dx = tangent.x - start.x;
-    const dy = tangent.y - start.y;
-    const tlen = Math.max(0.0001, Math.sqrt(dx * dx + dy * dy));
-    const nx = -dy / tlen;
-    const ny = dx / tlen;
-    const side = rand() < 0.5 ? -1 : 1;
-    const lenJitter = 0.7 + rand() * 0.6;
-    const len = reach * lenJitter;
-    const end = {
-      x: start.x + nx * side * len + dx / tlen * len * 0.45,
-      y: start.y + ny * side * len + dy / tlen * len * 0.45,
-    };
-    const ctrl = {
-      x: (start.x + end.x) / 2 + nx * side * 14,
-      y: (start.y + end.y) / 2 + ny * side * 14,
-    };
-    const d = `M ${start.x.toFixed(1)} ${start.y.toFixed(1)} Q ${ctrl.x.toFixed(1)} ${ctrl.y.toFixed(1)} ${end.x.toFixed(1)} ${end.y.toFixed(1)}`;
-    const stipples = stippleAlongQuad(start, ctrl, end, 14 + Math.floor(rand() * 8), seed * 17 + i + 3);
-    branches.push({ from: start, control: ctrl, to: end, d, stipples });
+interface PathGeom {
+  path: CortexPath;
+  from: CortexNode;
+  to: CortexNode;
+  trunkD: string;
+  strands: StrandSpec[];
+  labelP: Point;
+  mpathId: string;
+}
+
+function buildStrands(from: Point, to: Point, seed: number): StrandSpec[] {
+  const rand = mulberry32(seed);
+  const trunkControl = quadControl(from, to, -40 - rand() * 20);
+  const { nx, ny } = offsetAlongNormal(from, trunkControl, to);
+  const strandCount = 3;
+  const strands: StrandSpec[] = [];
+  for (let s = 0; s < strandCount; s++) {
+    const offset = (s - (strandCount - 1) / 2) * 6;
+    const ctrl = { x: trunkControl.x + nx * offset, y: trunkControl.y + ny * offset };
+    const fromP = { x: from.x + nx * offset * 0.18, y: from.y + ny * offset * 0.18 };
+    const toP = { x: to.x + nx * offset * 0.18, y: to.y + ny * offset * 0.18 };
+    const d = `M ${fromP.x.toFixed(1)} ${fromP.y.toFixed(1)} Q ${ctrl.x.toFixed(1)} ${ctrl.y.toFixed(1)} ${toP.x.toFixed(1)} ${toP.y.toFixed(1)}`;
+    const stippleCount = 14 + Math.floor(rand() * 6);
+    const stipples = [];
+    for (let i = 0; i < stippleCount; i++) {
+      const t = (i + 0.5 + (rand() - 0.5) * 0.6) / stippleCount;
+      const p = pointAlongQuad(fromP, ctrl, toP, Math.max(0.04, Math.min(0.96, t)));
+      stipples.push({ x: p.x, y: p.y, r: 0.7 + rand() * 1.2 });
+    }
+    strands.push({ d, offset, stipples });
   }
-  return branches;
+  return strands;
 }
 
-function motionDurationFor(state: string): number {
+function motionDurFor(state: string): number {
   switch (state) {
     case "active":
-      return 3.6;
+      return 4.0;
     case "healthy":
-      return 5.4;
+      return 5.6;
     case "pending":
-      return 4.8;
+      return 5.0;
     case "blocked":
-      return 6.8;
+      return 7.0;
     default:
-      return 7.2;
+      return 8.0;
   }
 }
 
-function renderGlyph(kind: string) {
+function renderGlyph(kind: string, isMission: boolean) {
+  if (isMission) {
+    // Mission nucleus is rendered separately in the nucleus layer.
+    return null;
+  }
   switch (kind) {
-    case "mission":
-      return (
-        <>
-          <circle className="cortex-node__ring" r={28} />
-          <circle className="cortex-node__ring" r={20} opacity={0.45} />
-          {Array.from({ length: 8 }, (_, i) => {
-            const a = (i * Math.PI * 2) / 8;
-            return (
-              <line
-                key={i}
-                className="cortex-node__spoke"
-                x1={Math.cos(a) * 16}
-                y1={Math.sin(a) * 16}
-                x2={Math.cos(a) * 26}
-                y2={Math.sin(a) * 26}
-              />
-            );
-          })}
-          <path className="cortex-node__mark" d="M -15 0 H 15 M 0 -15 V 15" />
-          <circle className="cortex-node__core" r={9} />
-          <circle className="cortex-node__core-inner" r={4} />
-        </>
-      );
     case "client":
       return (
         <>
-          <circle className="cortex-node__orbit" r={26} />
-          <circle className="cortex-node__orbit" r={20} opacity={0.55} />
-          <path className="cortex-node__ring" d="M 0 -22 L 19 -11 L 19 11 L 0 22 L -19 11 L -19 -11 Z" />
-          <circle className="cortex-node__core" r={7} />
+          <circle className="cortex-node__orbit" r={24} />
+          <circle className="cortex-node__orbit" r={18} opacity={0.6} />
+          <path className="cortex-node__ring" d="M 0 -20 L 17 -10 L 17 10 L 0 20 L -17 10 L -17 -10 Z" />
+          <circle className="cortex-node__core" r={6} />
         </>
       );
     case "project":
       return (
         <>
-          <path className="cortex-node__ring" d="M 0 -23 L 21 0 L 0 23 L -21 0 Z" />
-          <path className="cortex-node__fork" d="M 0 -8 V 6 M 0 6 L -9 16 M 0 6 L 9 16" />
-          <circle className="cortex-node__core" r={6} />
+          <path className="cortex-node__ring" d="M 0 -21 L 19 0 L 0 21 L -19 0 Z" />
+          <path className="cortex-node__fork" d="M 0 -7 V 4 M 0 4 L -8 12 M 0 4 L 8 12" />
+          <circle className="cortex-node__core" r={5} />
         </>
       );
     case "issue":
       return (
         <>
-          {Array.from({ length: 12 }, (_, i) => {
-            const a = (i * Math.PI * 2) / 12;
-            const r1 = i % 2 === 0 ? 24 : 28;
-            const r2 = i % 2 === 0 ? 30 : 36;
+          {Array.from({ length: 10 }, (_, i) => {
+            const a = (i * Math.PI * 2) / 10;
+            const r1 = 22;
+            const r2 = i % 2 === 0 ? 30 : 26;
             return (
               <line
                 key={i}
@@ -200,9 +171,8 @@ function renderGlyph(kind: string) {
               />
             );
           })}
-          <circle className="cortex-node__inflammation" r={25} />
-          <path className="cortex-node__ring" d="M 0 -20 L 18 0 L 0 20 L -18 0 Z" />
-          <circle className="cortex-node__core" r={7} />
+          <path className="cortex-node__ring" d="M 0 -18 L 16 0 L 0 18 L -16 0 Z" />
+          <circle className="cortex-node__core" r={6} />
         </>
       );
     case "agent":
@@ -214,27 +184,26 @@ function renderGlyph(kind: string) {
               <line
                 key={i}
                 className="cortex-node__pulse-ray"
-                x1={Math.cos(a) * 10}
-                y1={Math.sin(a) * 10}
-                x2={Math.cos(a) * 22}
-                y2={Math.sin(a) * 22}
+                x1={Math.cos(a) * 9}
+                y1={Math.sin(a) * 9}
+                x2={Math.cos(a) * 20}
+                y2={Math.sin(a) * 20}
               />
             );
           })}
-          <path className="cortex-node__ring" d="M -22 14 L 0 -24 L 22 14 Z" />
-          <path className="cortex-node__mark" d="M -7 5 H 7 M 0 -8 V 10" />
+          <path className="cortex-node__ring" d="M -20 12 L 0 -22 L 20 12 Z" />
           <circle className="cortex-node__core" r={6} />
         </>
       );
     case "human":
       return (
         <>
-          {Array.from({ length: 8 }, (_, i) => {
-            const a = (i * Math.PI * 2) / 8 + Math.PI / 8;
-            const r1 = 14;
-            const r2 = 26 + (i % 2 === 0 ? 4 : 0);
-            const ctrlR = 20;
-            const ctrlA = a + 0.15;
+          {Array.from({ length: 6 }, (_, i) => {
+            const a = (i * Math.PI * 2) / 6 + Math.PI / 6;
+            const r1 = 13;
+            const r2 = 24;
+            const ctrlR = 19;
+            const ctrlA = a + 0.18;
             return (
               <path
                 key={i}
@@ -243,54 +212,63 @@ function renderGlyph(kind: string) {
               />
             );
           })}
-          <circle className="cortex-node__ring" r={16} />
-          <path className="cortex-node__mark" d="M 0 -14 V 14 M -10 6 H 10" />
-          <circle className="cortex-node__core" r={6} />
+          <circle className="cortex-node__ring" r={14} />
+          <circle className="cortex-node__core" r={5} />
         </>
       );
     case "memory":
       return (
         <>
-          {[28, 22, 16].map((r, i) => (
+          {[24, 18, 13].map((r, i) => (
             <ellipse
               key={r}
               className="cortex-node__memory-layer"
-              cx={0}
-              cy={0}
               rx={r}
-              ry={r * 0.62}
+              ry={r * 0.6}
               opacity={0.32 + i * 0.22}
             />
           ))}
           <circle className="cortex-node__core" r={5} />
         </>
       );
-    case "routine":
-      return (
-        <>
-          <path className="cortex-node__ring" d="M -22 0 C -22 -16 -6 -16 0 0 C 6 16 22 16 22 0 C 22 -16 6 -16 0 0 C -6 16 -22 16 -22 0 Z" />
-          <circle className="cortex-node__core" r={5} />
-        </>
-      );
     case "approval":
       return (
         <>
-          <path className="cortex-node__ring" d="M 0 -22 L 19 0 L 0 22 L -19 0 Z" />
-          <path className="cortex-node__mark" d="M -8 0 L -2 6 L 9 -7" />
+          <path className="cortex-node__ring" d="M 0 -20 L 17 0 L 0 20 L -17 0 Z" />
+          <path className="cortex-node__mark" d="M -7 0 L -2 5 L 8 -6" />
           <circle className="cortex-node__core" r={5} />
         </>
       );
     default:
       return (
         <>
-          <circle className="cortex-node__ring" r={19} />
-          <circle className="cortex-node__core" r={6} />
+          <circle className="cortex-node__ring" r={17} />
+          <circle className="cortex-node__core" r={5} />
         </>
       );
   }
 }
 
 export default function NeuralField({ graph, activeLens, selectedNodeId, onSelectNode }: NeuralFieldProps) {
+  const cameraRef = useRef<HTMLDivElement>(null);
+
+  // Mouse parallax — sets CSS custom properties, no React re-render
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const node = cameraRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const dx = (e.clientX - rect.left) / rect.width - 0.5;
+    const dy = (e.clientY - rect.top) / rect.height - 0.5;
+    node.style.setProperty("--cortex-tilt-x", `${(-dy * 4).toFixed(2)}deg`);
+    node.style.setProperty("--cortex-tilt-y", `${(dx * 5).toFixed(2)}deg`);
+  };
+  const handleMouseLeave = () => {
+    const node = cameraRef.current;
+    if (!node) return;
+    node.style.setProperty("--cortex-tilt-x", "0deg");
+    node.style.setProperty("--cortex-tilt-y", "0deg");
+  };
+
   const isNodeEmphasized = (node: CortexNode) =>
     node.lensAffinity?.includes(activeLens) || node.kind === "mission" || node.id === selectedNodeId;
 
@@ -300,35 +278,28 @@ export default function NeuralField({ graph, activeLens, selectedNodeId, onSelec
     return Boolean(from && to && (isNodeEmphasized(from) || isNodeEmphasized(to)));
   };
 
-  const pathGeometry = useMemo(() => {
+  const pathGeometry: PathGeom[] = useMemo(() => {
     return graph.paths
       .map((path) => {
-        const from = graph.nodes.find((node) => node.id === path.from);
-        const to = graph.nodes.find((node) => node.id === path.to);
+        const from = graph.nodes.find((n) => n.id === path.from);
+        const to = graph.nodes.find((n) => n.id === path.to);
         if (!from || !to) return null;
-        const fromP = from.position;
-        const toP = to.position;
-        const control = quadControl(fromP, toP, -40);
-        const trunkLen = distance(fromP, toP);
-        const trunkStippleCount = Math.max(36, Math.floor(trunkLen / 9));
         const seed = hashSeed(path.id);
-        const stipples = stippleAlongQuad(fromP, control, toP, trunkStippleCount, seed);
-        const branches = generateSubBranches(fromP, control, toP, 2 + (seed % 3), seed + 211);
-        const d = `M ${fromP.x} ${fromP.y} Q ${control.x.toFixed(1)} ${control.y.toFixed(1)} ${toP.x} ${toP.y}`;
-        const labelP = pointAlongQuad(fromP, control, toP, 0.5);
-        return { path, from, to, control, d, stipples, branches, labelP, mpathId: `cortex-mpath-${path.id}` };
+        const strands = buildStrands(from.position, to.position, seed);
+        const trunkControl = quadControl(from.position, to.position, -40);
+        const trunkD = `M ${from.position.x} ${from.position.y} Q ${trunkControl.x.toFixed(1)} ${trunkControl.y.toFixed(1)} ${to.position.x} ${to.position.y}`;
+        const labelP = pointAlongQuad(from.position, trunkControl, to.position, 0.5);
+        return {
+          path,
+          from,
+          to,
+          trunkD,
+          strands,
+          labelP,
+          mpathId: `cortex-mpath-${path.id}`,
+        } as PathGeom;
       })
-      .filter(Boolean) as Array<{
-      path: CortexPath;
-      from: CortexNode;
-      to: CortexNode;
-      control: Point;
-      d: string;
-      stipples: StipplePoint[];
-      branches: SubBranch[];
-      labelP: Point;
-      mpathId: string;
-    }>;
+      .filter(Boolean) as PathGeom[];
   }, [graph.paths, graph.nodes]);
 
   const signalAssignments = useMemo(() => {
@@ -336,145 +307,285 @@ export default function NeuralField({ graph, activeLens, selectedNodeId, onSelec
       .map((signal, index) => {
         const geom = pathGeometry.find((g) => g.path.id === signal.pathId);
         if (!geom) return null;
-        return { signal, geom, idx: index } as { signal: CortexSignal; geom: typeof geom; idx: number };
+        return { signal, geom, idx: index };
       })
-      .filter(Boolean) as Array<{ signal: CortexSignal; geom: (typeof pathGeometry)[number]; idx: number }>;
+      .filter(Boolean) as Array<{ signal: CortexSignal; geom: PathGeom; idx: number }>;
   }, [graph.signals, pathGeometry]);
+
+  const sharedSvgProps = {
+    viewBox: `0 0 ${VIEW_W} ${VIEW_H}`,
+    preserveAspectRatio: "xMidYMid meet",
+  } as const;
+
+  const layerStyle = (z: number): CSSProperties => ({
+    transform: `translateZ(${z}px)`,
+  });
 
   return (
     <div className="cortex-neural-field" data-lens={activeLens}>
-      <svg viewBox="0 0 1000 680" role="img" aria-label={`${graph.label} neural field`}>
-        <defs>
-          <linearGradient id="cortex-field-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="rgba(24, 215, 255, 0.18)" />
-            <stop offset="48%" stopColor="rgba(57, 255, 136, 0.08)" />
-            <stop offset="100%" stopColor="rgba(255, 47, 122, 0.12)" />
-          </linearGradient>
-          <radialGradient id="cortex-core-pulse" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="rgba(24, 215, 255, 0.55)" />
-            <stop offset="60%" stopColor="rgba(24, 215, 255, 0.18)" />
-            <stop offset="100%" stopColor="rgba(24, 215, 255, 0)" />
-          </radialGradient>
-          <filter id="cortex-soft-glow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="4" result="coloredBlur" />
-            <feMerge>
-              <feMergeNode in="coloredBlur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          <filter id="cortex-strong-glow" x="-80%" y="-80%" width="260%" height="260%">
-            <feGaussianBlur stdDeviation="8" result="coloredBlur" />
-            <feMerge>
-              <feMergeNode in="coloredBlur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
+      <div
+        ref={cameraRef}
+        className="cortex-camera"
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
+      >
+        {/* Quadrant tint layer (deepest back) */}
+        <div className="cortex-field-layer cortex-field-layer--quadrants" style={layerStyle(-160)} aria-hidden="true">
+          <svg {...sharedSvgProps}>
+            <defs>
+              <radialGradient id="quad-nw" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="rgba(57, 255, 136, 0.16)" />
+                <stop offset="100%" stopColor="rgba(57, 255, 136, 0)" />
+              </radialGradient>
+              <radialGradient id="quad-ne" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="rgba(255, 176, 46, 0.14)" />
+                <stop offset="100%" stopColor="rgba(255, 176, 46, 0)" />
+              </radialGradient>
+              <radialGradient id="quad-sw" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="rgba(24, 215, 255, 0.16)" />
+                <stop offset="100%" stopColor="rgba(24, 215, 255, 0)" />
+              </radialGradient>
+              <radialGradient id="quad-se" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="rgba(255, 47, 122, 0.14)" />
+                <stop offset="100%" stopColor="rgba(255, 47, 122, 0)" />
+              </radialGradient>
+            </defs>
+            <ellipse cx={260} cy={200} rx={340} ry={240} fill="url(#quad-nw)" />
+            <ellipse cx={740} cy={200} rx={340} ry={240} fill="url(#quad-ne)" />
+            <ellipse cx={260} cy={490} rx={340} ry={240} fill="url(#quad-sw)" />
+            <ellipse cx={740} cy={490} rx={340} ry={240} fill="url(#quad-se)" />
+          </svg>
+        </div>
 
-        <g className="cortex-field-strata" aria-hidden="true">
-          <path d="M 104 480 C 235 320 353 263 500 332 C 645 400 762 372 910 236" />
-          <path d="M 180 188 C 322 66 488 92 642 182 C 767 255 848 318 920 470" />
-          <path d="M 268 596 C 382 490 482 462 616 508 C 736 548 824 536 914 456" />
-          <ellipse cx="580" cy="342" rx="300" ry="206" />
-          <ellipse cx="500" cy="340" rx="180" ry="120" opacity={0.3} />
-        </g>
+        {/* Background strata — blurred for depth */}
+        <div className="cortex-field-layer cortex-field-layer--strata" style={layerStyle(-100)} aria-hidden="true">
+          <svg {...sharedSvgProps}>
+            <defs>
+              <linearGradient id="cortex-strata-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="rgba(24, 215, 255, 0.2)" />
+                <stop offset="50%" stopColor="rgba(57, 255, 136, 0.1)" />
+                <stop offset="100%" stopColor="rgba(255, 47, 122, 0.12)" />
+              </linearGradient>
+            </defs>
+            <g className="cortex-field-strata">
+              <path d="M 104 480 C 235 320 353 263 500 332 C 645 400 762 372 910 236" />
+              <path d="M 180 188 C 322 66 488 92 642 182 C 767 255 848 318 920 470" />
+              <path d="M 268 596 C 382 490 482 462 616 508 C 736 548 824 536 914 456" />
+              <ellipse cx="500" cy="340" rx="320" ry="220" />
+              <ellipse cx="500" cy="340" rx="220" ry="140" opacity={0.5} />
+              <ellipse cx="500" cy="340" rx="130" ry="86" opacity={0.4} />
+            </g>
+          </svg>
+        </div>
 
-        {/* Hidden motion paths — animateMotion refers to these by id */}
-        <g aria-hidden="true" style={{ display: "none" }}>
-          {pathGeometry.map((g) => (
-            <path key={g.mpathId} id={g.mpathId} d={g.d} />
-          ))}
-        </g>
-
-        {/* Stippled micro-nodes under all paths */}
-        <g className="cortex-stipple-layer" aria-hidden="true">
-          {pathGeometry.map((g) => (
-            <g
-              key={`stipple-${g.path.id}`}
-              className={`cortex-stipple cortex-stipple--${g.path.state}${isPathEmphasized(g.path) ? " is-emphasized" : " is-muted"}`}
-            >
-              {g.stipples.map((s, i) => (
-                <circle key={i} cx={s.x} cy={s.y} r={s.r} opacity={s.opacity} />
+        {/* Nucleus radiating spike-rays (behind paths) */}
+        <div className="cortex-field-layer cortex-field-layer--rays" style={layerStyle(-60)} aria-hidden="true">
+          <svg {...sharedSvgProps}>
+            <g className="cortex-nucleus-rays">
+              {NUCLEUS_RAYS.map((r, i) => (
+                <line
+                  key={i}
+                  x1={r.x1}
+                  y1={r.y1}
+                  x2={r.x2}
+                  y2={r.y2}
+                  strokeWidth={r.sw}
+                  opacity={r.opacity}
+                />
               ))}
-              {g.branches.map((b, bi) => (
-                <g key={bi}>
-                  <path className="cortex-sub-branch" d={b.d} fill="none" />
-                  {b.stipples.map((s, i) => (
-                    <circle key={i} cx={s.x} cy={s.y} r={s.r * 0.85} opacity={s.opacity * 0.8} />
+            </g>
+          </svg>
+        </div>
+
+        {/* Stippled micro-nodes layer (lightweight — no filter) */}
+        <div className="cortex-field-layer cortex-field-layer--stipple" style={layerStyle(-20)} aria-hidden="true">
+          <svg {...sharedSvgProps}>
+            {pathGeometry.map((g) => (
+              <g
+                key={`stip-${g.path.id}`}
+                className={`cortex-stipple cortex-stipple--${g.path.state}${isPathEmphasized(g.path) ? " is-emphasized" : " is-muted"}`}
+              >
+                {g.strands.flatMap((strand) =>
+                  strand.stipples.map((s, i) => (
+                    <circle key={`${strand.offset}-${i}`} cx={s.x} cy={s.y} r={s.r} />
+                  )),
+                )}
+              </g>
+            ))}
+          </svg>
+        </div>
+
+        {/* Main multi-strand paths */}
+        <div className="cortex-field-layer cortex-field-layer--paths" style={layerStyle(0)}>
+          <svg {...sharedSvgProps}>
+            <defs>
+              <filter id="cortex-soft-glow" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="3" result="b" />
+                <feMerge>
+                  <feMergeNode in="b" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
+            {/* Hidden motion paths (referenced by animateMotion below) */}
+            <g aria-hidden="true" style={{ display: "none" }}>
+              {pathGeometry.map((g) => (
+                <path key={g.mpathId} id={g.mpathId} d={g.trunkD} />
+              ))}
+            </g>
+            {pathGeometry.map((g) => {
+              const emphasized = isPathEmphasized(g.path);
+              return (
+                <g
+                  key={g.path.id}
+                  className={`cortex-path-group${emphasized ? " is-emphasized" : " is-muted"}`}
+                >
+                  {/* sheath behind all strands */}
+                  <path className="cortex-path-sheath" d={g.trunkD} fill="none" />
+                  {g.strands.map((strand, si) => (
+                    <path
+                      key={si}
+                      className={`cortex-path cortex-path--${g.path.state} cortex-strand cortex-strand--${si}`}
+                      d={strand.d}
+                      fill="none"
+                    />
                   ))}
+                  {g.path.label || g.path.kind ? (
+                    <text className="cortex-path-label" x={g.labelP.x + 8} y={g.labelP.y - 12}>
+                      {g.path.label ?? g.path.kind}
+                    </text>
+                  ) : null}
                 </g>
-              ))}
-            </g>
-          ))}
-        </g>
+              );
+            })}
+          </svg>
+        </div>
 
-        {/* Main paths */}
-        {pathGeometry.map((g) => (
-          <g
-            key={g.path.id}
-            className={`cortex-path-group${isPathEmphasized(g.path) ? " is-emphasized" : " is-muted"}`}
-          >
-            <path className="cortex-path-sheath" d={g.d} fill="none" />
-            <path className={`cortex-path cortex-path--${g.path.state}`} d={g.d} fill="none" />
-            {g.path.label || g.path.kind ? (
-              <text className="cortex-path-label" x={g.labelP.x + 8} y={g.labelP.y - 12}>
-                {g.path.label ?? g.path.kind}
-              </text>
-            ) : null}
-          </g>
-        ))}
+        {/* Signals — animateMotion along trunk */}
+        <div className="cortex-field-layer cortex-field-layer--signals" style={layerStyle(30)} aria-hidden="true">
+          <svg {...sharedSvgProps}>
+            {signalAssignments.map(({ signal, geom, idx }) => {
+              const dur = motionDurFor(signal.state);
+              const begin = `${(idx * 0.9) % dur}s`;
+              return (
+                <g key={signal.id}>
+                  <circle className={`cortex-signal-trail cortex-signal-trail--${signal.state}`} r={8}>
+                    <animateMotion dur={`${dur}s`} repeatCount="indefinite" begin={begin}>
+                      <mpath href={`#${geom.mpathId}`} />
+                    </animateMotion>
+                  </circle>
+                  <circle className={`cortex-signal cortex-signal--${signal.state}`} r={3.4}>
+                    <animateMotion dur={`${dur}s`} repeatCount="indefinite" begin={begin}>
+                      <mpath href={`#${geom.mpathId}`} />
+                    </animateMotion>
+                  </circle>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
 
-        {/* Traveling signals — animateMotion along the trunk paths */}
-        {signalAssignments.map(({ signal, geom, idx }) => {
-          const dur = motionDurationFor(signal.state);
-          const begin = `${(idx * 0.7) % dur}s`;
-          return (
-            <g key={signal.id} className={`cortex-signal-travel cortex-signal-travel--${signal.state}`}>
-              <circle className={`cortex-signal-trail cortex-signal-trail--${signal.state}`} r={9}>
-                <animateMotion dur={`${dur}s`} repeatCount="indefinite" begin={begin}>
-                  <mpath href={`#${geom.mpathId}`} />
-                </animateMotion>
-              </circle>
-              <circle className={`cortex-signal cortex-signal--${signal.state}`} r={3.6}>
-                <animateMotion dur={`${dur}s`} repeatCount="indefinite" begin={begin}>
-                  <mpath href={`#${geom.mpathId}`} />
-                </animateMotion>
-              </circle>
-            </g>
-          );
-        })}
+        {/* Volumetric nucleus (the centerpiece — looks like a glowing 3D sphere) */}
+        <div className="cortex-field-layer cortex-field-layer--nucleus" style={layerStyle(50)} aria-hidden="true">
+          <svg {...sharedSvgProps}>
+            <defs>
+              <radialGradient id="nucleus-outer" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="rgba(24, 215, 255, 0.45)" />
+                <stop offset="55%" stopColor="rgba(24, 215, 255, 0.12)" />
+                <stop offset="100%" stopColor="rgba(24, 215, 255, 0)" />
+              </radialGradient>
+              <radialGradient id="nucleus-mid" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="rgba(140, 240, 255, 0.85)" />
+                <stop offset="50%" stopColor="rgba(24, 215, 255, 0.55)" />
+                <stop offset="100%" stopColor="rgba(24, 215, 255, 0)" />
+              </radialGradient>
+              <radialGradient id="nucleus-core" cx="45%" cy="40%" r="55%">
+                <stop offset="0%" stopColor="rgba(255, 255, 255, 1)" />
+                <stop offset="30%" stopColor="rgba(180, 245, 255, 0.95)" />
+                <stop offset="70%" stopColor="rgba(24, 215, 255, 0.6)" />
+                <stop offset="100%" stopColor="rgba(24, 215, 255, 0)" />
+              </radialGradient>
+              <radialGradient id="nucleus-edge" cx="55%" cy="58%" r="50%">
+                <stop offset="60%" stopColor="rgba(0, 0, 0, 0)" />
+                <stop offset="92%" stopColor="rgba(7, 17, 31, 0.4)" />
+                <stop offset="100%" stopColor="rgba(7, 17, 31, 0.85)" />
+              </radialGradient>
+            </defs>
+            {/* atmospheric halo */}
+            <circle cx={CENTER.x} cy={CENTER.y} r={180} fill="url(#nucleus-outer)" />
+            {/* concentric tactical rings */}
+            <circle cx={CENTER.x} cy={CENTER.y} r={88} className="cortex-nucleus-ring" />
+            <circle cx={CENTER.x} cy={CENTER.y} r={64} className="cortex-nucleus-ring" opacity={0.7} />
+            <circle cx={CENTER.x} cy={CENTER.y} r={46} className="cortex-nucleus-ring" opacity={0.5} />
+            {/* lens-flare cross */}
+            <line className="cortex-nucleus-flare" x1={CENTER.x - 140} y1={CENTER.y} x2={CENTER.x + 140} y2={CENTER.y} />
+            <line className="cortex-nucleus-flare" x1={CENTER.x} y1={CENTER.y - 140} x2={CENTER.x} y2={CENTER.y + 140} />
+            <line
+              className="cortex-nucleus-flare cortex-nucleus-flare--soft"
+              x1={CENTER.x - 90}
+              y1={CENTER.y - 90}
+              x2={CENTER.x + 90}
+              y2={CENTER.y + 90}
+            />
+            <line
+              className="cortex-nucleus-flare cortex-nucleus-flare--soft"
+              x1={CENTER.x - 90}
+              y1={CENTER.y + 90}
+              x2={CENTER.x + 90}
+              y2={CENTER.y - 90}
+            />
+            {/* volumetric core */}
+            <circle cx={CENTER.x} cy={CENTER.y} r={44} fill="url(#nucleus-mid)" />
+            <circle cx={CENTER.x} cy={CENTER.y} r={30} fill="url(#nucleus-core)" />
+            <circle cx={CENTER.x} cy={CENTER.y} r={44} fill="url(#nucleus-edge)" />
+            {/* breathing pulse — single, subtle */}
+            <circle cx={CENTER.x} cy={CENTER.y} r={46} className="cortex-nucleus-pulse" />
+          </svg>
+        </div>
 
-        {/* Nodes on top */}
-        {graph.nodes.map((node) => (
-          <g
-            key={node.id}
-            className={`cortex-node cortex-node--${node.kind} cortex-node--${node.state}${selectedNodeId === node.id ? " is-selected" : ""}`}
-            data-emphasis={isNodeEmphasized(node) ? "primary" : "muted"}
-            role="button"
-            tabIndex={0}
-            transform={`translate(${node.position.x} ${node.position.y})`}
-            onClick={() => onSelectNode?.(node.id)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                onSelectNode?.(node.id);
-              }
-            }}
-          >
-            {node.kind === "mission" || node.id === selectedNodeId ? (
-              <circle className="cortex-node__aura" r={56} fill="url(#cortex-core-pulse)" />
-            ) : null}
-            <circle className="cortex-node__halo" r={31} />
-            {renderGlyph(node.kind)}
-            <text className="cortex-node__label" x={20} y={5}>
-              {node.label}
-            </text>
-            <text className="cortex-node__meta" x={20} y={20}>
-              {node.kind} / {node.state}
-            </text>
-          </g>
-        ))}
-      </svg>
+        {/* Nodes layer (interactive — front-most) */}
+        <div className="cortex-field-layer cortex-field-layer--nodes" style={layerStyle(80)}>
+          <svg {...sharedSvgProps}>
+            {graph.nodes.map((node) => {
+              const isMission = node.kind === "mission";
+              return (
+                <g
+                  key={node.id}
+                  className={`cortex-node cortex-node--${node.kind} cortex-node--${node.state}${selectedNodeId === node.id ? " is-selected" : ""}`}
+                  data-emphasis={isNodeEmphasized(node) ? "primary" : "muted"}
+                  role="button"
+                  tabIndex={0}
+                  transform={`translate(${node.position.x} ${node.position.y})`}
+                  onClick={() => onSelectNode?.(node.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelectNode?.(node.id);
+                    }
+                  }}
+                >
+                  {isMission ? (
+                    <text className="cortex-node__label cortex-node__label--mission" textAnchor="middle" y={62}>
+                      {node.label.toUpperCase()}
+                    </text>
+                  ) : (
+                    <>
+                      <circle className="cortex-node__halo" r={26} />
+                      {renderGlyph(node.kind, false)}
+                      <text className="cortex-node__label" x={18} y={4}>
+                        {node.label}
+                      </text>
+                      <text className="cortex-node__meta" x={18} y={18}>
+                        {node.kind} / {node.state}
+                      </text>
+                    </>
+                  )}
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+      </div>
     </div>
   );
 }

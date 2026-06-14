@@ -7,6 +7,22 @@ import LensRail from "./LensRail";
 import NeuralField from "./NeuralField";
 import TacticalMembrane from "./TacticalMembrane";
 
+function formatCortexTime(d: Date): string {
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  const ss = String(d.getUTCSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss} UTC`;
+}
+
+function computeSystemHealth(graph: CortexGraph): number {
+  const total = graph.paths.length || 1;
+  const healthy = graph.paths.filter((p) => p.state === "healthy" || p.state === "active").length;
+  const pending = graph.paths.filter((p) => p.state === "pending").length;
+  const blocked = graph.paths.filter((p) => p.state === "blocked").length;
+  const score = (healthy * 1 + pending * 0.5 - blocked * 0.6) / total;
+  return Math.max(12, Math.min(99.4, Math.round(score * 100 * 10) / 10));
+}
+
 export interface MissionCortexProps {
   graph: CortexGraph;
   lenses: CortexLensDefinition[];
@@ -33,6 +49,15 @@ export default function MissionCortex({
   const [intent, setIntent] = useState("");
   const commandInputRef = useRef<HTMLInputElement>(null);
   const activeLensDefinition = lenses.find((lens) => lens.id === activeLens) ?? lenses[0];
+  const [cortexTime, setCortexTime] = useState(() => formatCortexTime(new Date()));
+  const systemHealth = useMemo(() => computeSystemHealth(graph), [graph]);
+
+  useEffect(() => {
+    const tick = () => setCortexTime(formatCortexTime(new Date()));
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const selectedCommands = useMemo(() => {
     if (!selectedNode) return [];
@@ -91,6 +116,42 @@ export default function MissionCortex({
         <span>{graph.nodes.length} nodes</span>
         <span>{graph.paths.length} synapses</span>
         <span>{graph.signals.length} live signals</span>
+      </div>
+
+      <div className="cortex-chrome" aria-hidden="true">
+        <div className="cortex-chrome__row">
+          <span className="cortex-chrome__label">EXECUTIVE COMMAND MODE</span>
+          <span className="cortex-chrome__sep">⌬</span>
+          <span className="cortex-chrome__label">CORTEX SOVEREIGN ACTIVE</span>
+        </div>
+        <div className="cortex-chrome__row">
+          <span className="cortex-chrome__label">SYSTEM HEALTH</span>
+          <strong className="cortex-chrome__metric" data-state={systemHealth > 80 ? "healthy" : systemHealth > 50 ? "active" : systemHealth > 30 ? "pending" : "blocked"}>
+            {systemHealth.toFixed(1)}%
+          </strong>
+          <span className="cortex-chrome__sep">·</span>
+          <span className="cortex-chrome__label">CORTEX TIME</span>
+          <strong className="cortex-chrome__metric">{cortexTime}</strong>
+        </div>
+      </div>
+
+      <div className="cortex-quadrant-labels" aria-hidden="true">
+        <div className="cortex-quadrant-labels__nw">
+          <span className="cortex-quadrant-labels__title">CLIENT CLUSTERS</span>
+          <span className="cortex-quadrant-labels__sub">healthy organism</span>
+        </div>
+        <div className="cortex-quadrant-labels__ne">
+          <span className="cortex-quadrant-labels__title">PENDING JUDGMENTS</span>
+          <span className="cortex-quadrant-labels__sub">awaiting synapse</span>
+        </div>
+        <div className="cortex-quadrant-labels__sw">
+          <span className="cortex-quadrant-labels__title">AI AGENT PULSES</span>
+          <span className="cortex-quadrant-labels__sub">runtime coordinating</span>
+        </div>
+        <div className="cortex-quadrant-labels__se">
+          <span className="cortex-quadrant-labels__title">ISSUE HOTSPOTS</span>
+          <span className="cortex-quadrant-labels__sub">inflammation watch</span>
+        </div>
       </div>
 
       <NeuralField
