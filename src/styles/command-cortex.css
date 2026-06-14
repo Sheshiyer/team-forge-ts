@@ -369,7 +369,7 @@
   perspective-origin: 50% 56%;
 }
 
-/* Camera holder — receives CSS variables from JS mouse handler */
+/* Camera holder — V3 is essentially orthographic; only a whisper of mouse parallax */
 .cortex-camera {
   --cortex-tilt-x: 0deg;
   --cortex-tilt-y: 0deg;
@@ -377,8 +377,8 @@
   width: 100%;
   height: 100%;
   transform-style: preserve-3d;
-  transform: rotateX(calc(8deg + var(--cortex-tilt-x))) rotateY(var(--cortex-tilt-y));
-  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  transform: rotateX(var(--cortex-tilt-x)) rotateY(var(--cortex-tilt-y));
+  transition: transform 380ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .cortex-field-layer {
@@ -398,7 +398,7 @@
 /* Pointer events: only the nodes layer is interactive */
 .cortex-field-layer--quadrants,
 .cortex-field-layer--strata,
-.cortex-field-layer--rays,
+.cortex-field-layer--dendrites,
 .cortex-field-layer--stipple,
 .cortex-field-layer--paths,
 .cortex-field-layer--signals,
@@ -408,22 +408,60 @@
 
 /* Atmospheric blur on the deepest layers — gives real depth-of-field */
 .cortex-field-layer--strata svg {
-  filter: blur(1px);
+  filter: blur(0.8px);
 }
 .cortex-field-layer--quadrants svg {
-  filter: blur(8px);
-  opacity: 0.85;
-}
-.cortex-field-layer--rays svg {
-  filter: blur(0.5px);
+  filter: blur(12px);
+  opacity: 0.7;
 }
 
-/* Nucleus rays — static radiating spike lines */
-.cortex-nucleus-rays line {
-  stroke: var(--cortex-cyan);
+/* Ambient dendrite tree — the V3 neural-tissue geometry */
+.cortex-dendrite__trunk,
+.cortex-dendrite__sub {
+  stroke-width: 0.8;
   stroke-linecap: round;
   vector-effect: non-scaling-stroke;
+  opacity: 0.6;
 }
+
+.cortex-dendrite__sub {
+  stroke-width: 0.6;
+  opacity: 0.42;
+}
+
+.cortex-dendrite__dot {
+  /* fill set per zone color below */
+  opacity: 0.78;
+}
+
+.cortex-dendrite__leaf {
+  opacity: 0.92;
+}
+
+.cortex-dendrite__leaf--terminal {
+  opacity: 1;
+}
+
+/* Per-quadrant coloring (matches the quadrant tint gradients) */
+.cortex-dendrite-zone--emerald .cortex-dendrite__trunk,
+.cortex-dendrite-zone--emerald .cortex-dendrite__sub { stroke: rgba(57, 255, 136, 0.62); }
+.cortex-dendrite-zone--emerald .cortex-dendrite__dot,
+.cortex-dendrite-zone--emerald .cortex-dendrite__leaf { fill: var(--cortex-emerald); }
+
+.cortex-dendrite-zone--amber .cortex-dendrite__trunk,
+.cortex-dendrite-zone--amber .cortex-dendrite__sub { stroke: rgba(255, 176, 46, 0.58); }
+.cortex-dendrite-zone--amber .cortex-dendrite__dot,
+.cortex-dendrite-zone--amber .cortex-dendrite__leaf { fill: var(--cortex-amber); }
+
+.cortex-dendrite-zone--cyan .cortex-dendrite__trunk,
+.cortex-dendrite-zone--cyan .cortex-dendrite__sub { stroke: rgba(24, 215, 255, 0.62); }
+.cortex-dendrite-zone--cyan .cortex-dendrite__dot,
+.cortex-dendrite-zone--cyan .cortex-dendrite__leaf { fill: var(--cortex-cyan); }
+
+.cortex-dendrite-zone--rose .cortex-dendrite__trunk,
+.cortex-dendrite-zone--rose .cortex-dendrite__sub { stroke: rgba(255, 47, 122, 0.56); }
+.cortex-dendrite-zone--rose .cortex-dendrite__dot,
+.cortex-dendrite-zone--rose .cortex-dendrite__leaf { fill: var(--cortex-magenta); }
 
 /* Concentric tactical rings around nucleus */
 .cortex-nucleus-ring {

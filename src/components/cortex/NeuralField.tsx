@@ -55,25 +55,125 @@ function offsetAlongNormal(from: Point, control: Point, to: Point) {
   return { nx: -dy / len, ny: dx / len, mid };
 }
 
-// Generate radial spike-rays from nucleus center filling the field — STATIC
-const NUCLEUS_RAYS = (() => {
-  const rand = mulberry32(0xc0fee);
-  return Array.from({ length: 220 }, (_, i) => {
-    const angle = (i / 220) * Math.PI * 2 + rand() * 0.04;
-    const innerR = 38 + rand() * 6;
-    const outerR = 110 + rand() * 340;
-    const opacity = 0.04 + rand() * 0.32;
-    const sw = 0.4 + rand() * 0.7;
-    return {
-      x1: CENTER.x + Math.cos(angle) * innerR,
-      y1: CENTER.y + Math.sin(angle) * innerR,
-      x2: CENTER.x + Math.cos(angle) * outerR,
-      y2: CENTER.y + Math.sin(angle) * outerR,
-      opacity,
-      sw,
+// Ambient dendrite tree — generates ~70 curving branches from nucleus into all
+// quadrants, each with sub-branches, stipple, and a terminal leaf node. This is
+// what creates the V3 "neural tissue" density: not straight spike-rays but a
+// fractal-tree pattern matching mockup 02-mission-cortex-field.png.
+type QuadColor = "emerald" | "amber" | "cyan" | "rose";
+
+interface DendriteSub {
+  d: string;
+  stipples: Array<{ x: number; y: number; r: number }>;
+  leafX: number;
+  leafY: number;
+  leafR: number;
+}
+
+interface AmbientDendrite {
+  trunkD: string;
+  trunkStipples: Array<{ x: number; y: number; r: number }>;
+  subs: DendriteSub[];
+  leafX: number;
+  leafY: number;
+  leafR: number;
+  color: QuadColor;
+}
+
+function quadColorFromAngle(endX: number, endY: number): QuadColor {
+  if (endY < CENTER.y) {
+    return endX < CENTER.x ? "emerald" : "amber";
+  }
+  return endX < CENTER.x ? "cyan" : "rose";
+}
+
+function buildAmbientDendrites(count: number, seed: number): AmbientDendrite[] {
+  const rand = mulberry32(seed);
+  const dendrites: AmbientDendrite[] = [];
+  for (let i = 0; i < count; i++) {
+    const angleBase = (i / count) * Math.PI * 2 - Math.PI;
+    const angleJitter = (rand() - 0.5) * ((Math.PI * 2) / count) * 1.6;
+    const angle = angleBase + angleJitter;
+
+    const innerR = 56 + rand() * 14;
+    const trunkLen = 130 + rand() * 240;
+    const start = {
+      x: CENTER.x + Math.cos(angle) * innerR,
+      y: CENTER.y + Math.sin(angle) * innerR,
     };
-  });
-})();
+
+    const curlSign = rand() < 0.5 ? -1 : 1;
+    const curlAmt = (0.25 + rand() * 0.5) * curlSign;
+    const endAngle = angle + curlAmt * 0.65;
+    const end = {
+      x: CENTER.x + Math.cos(endAngle) * (innerR + trunkLen),
+      y: CENTER.y + Math.sin(endAngle) * (innerR + trunkLen),
+    };
+    const ctrlAngle = angle + curlAmt * 0.28;
+    const ctrlR = innerR + trunkLen * 0.55;
+    const control = {
+      x: CENTER.x + Math.cos(ctrlAngle) * ctrlR,
+      y: CENTER.y + Math.sin(ctrlAngle) * ctrlR,
+    };
+    const trunkD = `M ${start.x.toFixed(1)} ${start.y.toFixed(1)} Q ${control.x.toFixed(1)} ${control.y.toFixed(1)} ${end.x.toFixed(1)} ${end.y.toFixed(1)}`;
+
+    const stippleCount = 8 + Math.floor(rand() * 9);
+    const trunkStipples = [];
+    for (let s = 0; s < stippleCount; s++) {
+      const t = (s + 0.6) / (stippleCount + 1);
+      const p = pointAlongQuad(start, control, end, t);
+      trunkStipples.push({
+        x: p.x + (rand() - 0.5) * 2.5,
+        y: p.y + (rand() - 0.5) * 2.5,
+        r: 0.7 + rand() * 1.0,
+      });
+    }
+
+    const subCount = Math.floor(rand() * 2.7); // 0, 1, or 2
+    const subs: DendriteSub[] = [];
+    for (let s = 0; s < subCount; s++) {
+      const branchT = 0.45 + rand() * 0.4;
+      const origin = pointAlongQuad(start, control, end, branchT);
+      const ahead = pointAlongQuad(start, control, end, Math.min(0.99, branchT + 0.05));
+      const dx = ahead.x - origin.x;
+      const dy = ahead.y - origin.y;
+      const tlen = Math.max(0.001, Math.sqrt(dx * dx + dy * dy));
+      const nx = -dy / tlen;
+      const ny = dx / tlen;
+      const side = s === 0 ? 1 : -1;
+      const subLen = 44 + rand() * 70;
+      const subEnd = {
+        x: origin.x + (dx / tlen) * subLen * 0.42 + nx * side * subLen * 0.72,
+        y: origin.y + (dy / tlen) * subLen * 0.42 + ny * side * subLen * 0.72,
+      };
+      const subCtrl = {
+        x: (origin.x + subEnd.x) / 2 + nx * side * 7,
+        y: (origin.y + subEnd.y) / 2 + ny * side * 7,
+      };
+      const subD = `M ${origin.x.toFixed(1)} ${origin.y.toFixed(1)} Q ${subCtrl.x.toFixed(1)} ${subCtrl.y.toFixed(1)} ${subEnd.x.toFixed(1)} ${subEnd.y.toFixed(1)}`;
+      const subStippleCount = 4 + Math.floor(rand() * 5);
+      const subStipples = [];
+      for (let k = 0; k < subStippleCount; k++) {
+        const t = (k + 0.5) / subStippleCount;
+        const p = pointAlongQuad(origin, subCtrl, subEnd, t);
+        subStipples.push({ x: p.x, y: p.y, r: 0.55 + rand() * 0.85 });
+      }
+      subs.push({ d: subD, stipples: subStipples, leafX: subEnd.x, leafY: subEnd.y, leafR: 1.3 + rand() * 1.0 });
+    }
+
+    dendrites.push({
+      trunkD,
+      trunkStipples,
+      subs,
+      leafX: end.x,
+      leafY: end.y,
+      leafR: 1.6 + rand() * 1.4,
+      color: quadColorFromAngle(end.x, end.y),
+    });
+  }
+  return dendrites;
+}
+
+const AMBIENT_DENDRITES = buildAmbientDendrites(72, 0xc0ffee);
 
 interface StrandSpec {
   d: string;
@@ -252,15 +352,15 @@ function renderGlyph(kind: string, isMission: boolean) {
 export default function NeuralField({ graph, activeLens, selectedNodeId, onSelectNode }: NeuralFieldProps) {
   const cameraRef = useRef<HTMLDivElement>(null);
 
-  // Mouse parallax — sets CSS custom properties, no React re-render
+  // Mouse parallax — whisper of tilt (±1.5°) preserves V3's orthographic feel
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     const node = cameraRef.current;
     if (!node) return;
     const rect = node.getBoundingClientRect();
     const dx = (e.clientX - rect.left) / rect.width - 0.5;
     const dy = (e.clientY - rect.top) / rect.height - 0.5;
-    node.style.setProperty("--cortex-tilt-x", `${(-dy * 4).toFixed(2)}deg`);
-    node.style.setProperty("--cortex-tilt-y", `${(dx * 5).toFixed(2)}deg`);
+    node.style.setProperty("--cortex-tilt-x", `${(-dy * 1.5).toFixed(2)}deg`);
+    node.style.setProperty("--cortex-tilt-y", `${(dx * 1.5).toFixed(2)}deg`);
   };
   const handleMouseLeave = () => {
     const node = cameraRef.current;
@@ -378,22 +478,31 @@ export default function NeuralField({ graph, activeLens, selectedNodeId, onSelec
           </svg>
         </div>
 
-        {/* Nucleus radiating spike-rays (behind paths) */}
-        <div className="cortex-field-layer cortex-field-layer--rays" style={layerStyle(-60)} aria-hidden="true">
+        {/* Ambient dendrite trees radiating from nucleus into all quadrants */}
+        <div className="cortex-field-layer cortex-field-layer--dendrites" style={layerStyle(-60)} aria-hidden="true">
           <svg {...sharedSvgProps}>
-            <g className="cortex-nucleus-rays">
-              {NUCLEUS_RAYS.map((r, i) => (
-                <line
-                  key={i}
-                  x1={r.x1}
-                  y1={r.y1}
-                  x2={r.x2}
-                  y2={r.y2}
-                  strokeWidth={r.sw}
-                  opacity={r.opacity}
-                />
-              ))}
-            </g>
+            {(["emerald", "amber", "cyan", "rose"] as const).map((color) => (
+              <g key={color} className={`cortex-dendrite-zone cortex-dendrite-zone--${color}`}>
+                {AMBIENT_DENDRITES.filter((d) => d.color === color).map((d, i) => (
+                  <g key={i} className="cortex-dendrite">
+                    <path className="cortex-dendrite__trunk" d={d.trunkD} fill="none" />
+                    {d.trunkStipples.map((s, si) => (
+                      <circle key={`t${si}`} className="cortex-dendrite__dot" cx={s.x} cy={s.y} r={s.r} />
+                    ))}
+                    {d.subs.map((sub, sj) => (
+                      <g key={`sub${sj}`}>
+                        <path className="cortex-dendrite__sub" d={sub.d} fill="none" />
+                        {sub.stipples.map((s, ssi) => (
+                          <circle key={`ss${ssi}`} className="cortex-dendrite__dot" cx={s.x} cy={s.y} r={s.r} />
+                        ))}
+                        <circle className="cortex-dendrite__leaf" cx={sub.leafX} cy={sub.leafY} r={sub.leafR} />
+                      </g>
+                    ))}
+                    <circle className="cortex-dendrite__leaf cortex-dendrite__leaf--terminal" cx={d.leafX} cy={d.leafY} r={d.leafR} />
+                  </g>
+                ))}
+              </g>
+            ))}
           </svg>
         </div>
 
