@@ -75,12 +75,11 @@ async function toImageRef(source) {
 async function submit(apiKey, imageRef, label) {
   const body = {
     image_url: imageRef.value,
-    ai_model: "meshy-4",
+    ai_model: "meshy-6",
     topology: "quad",
     target_polycount: 30000,
     should_remesh: true,
     should_texture: true,
-    enable_pbr: true,
     symmetry_mode: "auto",
   };
   process.stdout.write(`[${label}] POST ${ENDPOINT} … `);

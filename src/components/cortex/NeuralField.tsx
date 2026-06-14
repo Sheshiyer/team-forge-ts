@@ -15,12 +15,41 @@
  *   - Click-to-select a node; drag-to-move it freely in 3D space.
  */
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Edges, Html, OrbitControls, Stars } from "@react-three/drei";
+import { Edges, Html, OrbitControls, Stars, useGLTF } from "@react-three/drei";
 import { Bloom, ChromaticAberration, EffectComposer, Vignette } from "@react-three/postprocessing";
 import { BlendFunction } from "postprocessing";
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, Suspense, type ReactNode } from "react";
 import * as THREE from "three";
 import type { CortexGraph, CortexLensId, CortexNode, CortexPath, CortexSignal, CortexSignalState } from "../../lib/commandCortex/types";
+
+/* ---- Meshy-generated GLB assets per node kind ----------------------------
+ * Each kind has a real 3D mesh generated from its V3 specimen plate via
+ * Meshy AI image-to-3D. See docs/cortex-3d-meshy-workflow.md and
+ * scripts/meshy-run-all-glyphs.sh. NodeForm uses these when available;
+ * the procedural geometric form is the fallback (still in place for the
+ * mission Nucleus and as a Suspense fallback during GLB load).            */
+import nodeClientUrl from "../../assets/3d/node-client.glb?url";
+import nodeProjectUrl from "../../assets/3d/node-project.glb?url";
+import nodeAgentUrl from "../../assets/3d/node-agent.glb?url";
+import nodeHumanUrl from "../../assets/3d/node-human.glb?url";
+import nodeIssueUrl from "../../assets/3d/node-issue.glb?url";
+import nodeMemoryUrl from "../../assets/3d/node-memory.glb?url";
+import nodeApprovalUrl from "../../assets/3d/node-approval.glb?url";
+import nodeRoutineUrl from "../../assets/3d/node-routine.glb?url";
+
+const KIND_GLB: Record<string, string> = {
+  client: nodeClientUrl,
+  project: nodeProjectUrl,
+  agent: nodeAgentUrl,
+  human: nodeHumanUrl,
+  issue: nodeIssueUrl,
+  memory: nodeMemoryUrl,
+  approval: nodeApprovalUrl,
+  routine: nodeRoutineUrl,
+};
+
+// Preload all so they're cached by the time Suspense first asks for them.
+for (const url of Object.values(KIND_GLB)) useGLTF.preload(url);
 
 /* ---- Locked zoom stages ---------------------------------------------------
  * V3 design implies four distinct "altitude" reads, not free zoom:
@@ -423,7 +452,63 @@ interface NodeFormProps {
   innerEmissive: number;
 }
 
+/** Real 3D mesh loaded from a Meshy-generated GLB. Loaded once via useGLTF,
+ *  cloned per instance so transforms don't fight each other. Wrapped in
+ *  Suspense by the caller so the procedural form is the loading fallback. */
+function NodeGltf({ url, kind, color, emissive }: { url: string; kind: string; color: string; emissive: number }) {
+  const { scene } = useGLTF(url);
+  // Per-instance clone so multiple nodes of the same kind don't share xforms
+  const cloned = useMemo(() => {
+    const c = scene.clone(true);
+    // Tint the GLB with the state color via emissive — preserves the meshy
+    // texture but lets state changes still read.
+    c.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) {
+        const mesh = obj as THREE.Mesh;
+        const mat = mesh.material as THREE.MeshStandardMaterial;
+        if (mat && "emissive" in mat) {
+          mat.emissive = new THREE.Color(color);
+          mat.emissiveIntensity = emissive * 0.5;
+        }
+      }
+    });
+    return c;
+  }, [scene, color, emissive]);
+  // Per-kind scale tuning — Meshy outputs at varying world sizes; this brings
+  // them into rough parity with the procedural form sizes (r ~ 0.22).
+  const scale = useMemo(() => {
+    const map: Record<string, number> = {
+      client: 0.32,
+      project: 0.32,
+      agent: 0.32,
+      human: 0.32,
+      issue: 0.32,
+      memory: 0.34,
+      approval: 0.32,
+      routine: 0.32,
+    };
+    return map[kind] ?? 0.32;
+  }, [kind]);
+  return <primitive object={cloned} scale={scale} />;
+}
+
 function NodeForm({ kind, color, emissive, innerEmissive }: NodeFormProps) {
+  // If we have a Meshy GLB for this kind, prefer it over the procedural form.
+  // Suspense lets the procedural shape render until the GLB streams in.
+  const glbUrl = KIND_GLB[kind];
+  if (glbUrl) {
+    return (
+      <Suspense fallback={<ProceduralForm kind={kind} color={color} emissive={emissive} innerEmissive={innerEmissive} />}>
+        <NodeGltf url={glbUrl} kind={kind} color={color} emissive={emissive} />
+      </Suspense>
+    );
+  }
+  return <ProceduralForm kind={kind} color={color} emissive={emissive} innerEmissive={innerEmissive} />;
+}
+
+/** Original procedural geometric form — kept as Suspense fallback / for
+ *  any kind that doesn't have a Meshy GLB yet. */
+function ProceduralForm({ kind, color, emissive, innerEmissive }: NodeFormProps) {
   switch (kind) {
     case "agent": {
       // Twin octahedron — outer wireframe shell, inner solid core.
