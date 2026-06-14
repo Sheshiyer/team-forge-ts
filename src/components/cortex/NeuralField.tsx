@@ -15,20 +15,38 @@
  *   - Click-to-select a node; drag-to-move it freely in 3D space.
  */
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Edges, Html, OrbitControls, Stars } from "@react-three/drei";
+import { Edges, Html, OrbitControls, Stars, useGLTF } from "@react-three/drei";
 import { Bloom, ChromaticAberration, EffectComposer, Vignette } from "@react-three/postprocessing";
 import { BlendFunction } from "postprocessing";
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, Suspense, type ReactNode } from "react";
 import * as THREE from "three";
 import type { CortexGraph, CortexLensId, CortexNode, CortexPath, CortexSignal, CortexSignalState } from "../../lib/commandCortex/types";
 
-/* The Meshy-generated GLBs in src/assets/3d/ are intentionally NOT imported
- * here. Loading 77 MB of binary mesh data on page paint is too heavy for the
- * default MISSION view, and at MISSION zoom the meshes were too small
- * compared to the data leaves anyway. The assets stay in the repo for a
- * future opt-in "examine specimen" deep-zoom mode (loaded on demand only
- * when the user drills into a single node at FOCUS stage). See
- * docs/cortex-3d-meshy-workflow.md. */
+/* ---- Meshy GLB asset URLs (lazy-loaded) -----------------------------------
+ * Each kind has a real 3D mesh generated from its V3 specimen plate via
+ * Meshy AI image-to-3D. The `?url` imports give us just the URL string —
+ * the actual binary fetch happens lazily inside <Suspense> when each
+ * NodeGltf first renders, not at module load. Procedural shell is the
+ * Suspense fallback so the user sees a node immediately. */
+import nodeClientUrl from "../../assets/3d/node-client.glb?url";
+import nodeProjectUrl from "../../assets/3d/node-project.glb?url";
+import nodeAgentUrl from "../../assets/3d/node-agent.glb?url";
+import nodeHumanUrl from "../../assets/3d/node-human.glb?url";
+import nodeIssueUrl from "../../assets/3d/node-issue.glb?url";
+import nodeMemoryUrl from "../../assets/3d/node-memory.glb?url";
+import nodeApprovalUrl from "../../assets/3d/node-approval.glb?url";
+import nodeRoutineUrl from "../../assets/3d/node-routine.glb?url";
+
+const KIND_GLB: Record<string, string> = {
+  client: nodeClientUrl,
+  project: nodeProjectUrl,
+  agent: nodeAgentUrl,
+  human: nodeHumanUrl,
+  issue: nodeIssueUrl,
+  memory: nodeMemoryUrl,
+  approval: nodeApprovalUrl,
+  routine: nodeRoutineUrl,
+};
 
 /* ---- Locked zoom stages ---------------------------------------------------
  * V3 design implies four distinct "altitude" reads, not free zoom:
@@ -431,9 +449,58 @@ interface NodeFormProps {
   innerEmissive: number;
 }
 
+/** Real 3D mesh loaded lazily from a Meshy-generated GLB. useGLTF here
+ *  only fetches when the component first mounts (not at module load), and
+ *  the parent <Suspense> shows the procedural shell as the fallback while
+ *  the binary streams in. Per-instance scene.clone so multiple nodes of
+ *  the same kind don't share transforms. */
+function NodeGltf({ url, kind, color, emissive }: { url: string; kind: string; color: string; emissive: number }) {
+  const { scene } = useGLTF(url);
+  const cloned = useMemo(() => {
+    const c = scene.clone(true);
+    c.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (mesh.isMesh) {
+        const mat = mesh.material as THREE.MeshStandardMaterial;
+        if (mat && "emissive" in mat) {
+          mat.emissive = new THREE.Color(color);
+          mat.emissiveIntensity = emissive * 0.7;
+          mat.toneMapped = false;
+        }
+      }
+    });
+    return c;
+  }, [scene, color, emissive]);
+  // Per-kind scale — Meshy outputs vary; these values were tuned so the
+  // specimens read at MISSION zoom against the surrounding data leaves
+  // (which sit at r=1.7-2.5 from the node center). Tweak per kind if a
+  // specific Meshy mesh comes out at unusual scale.
+  const scale = useMemo(() => {
+    const map: Record<string, number> = {
+      client: 0.75,
+      project: 0.7,
+      agent: 0.75,
+      human: 0.7,
+      issue: 0.75,
+      memory: 0.8,
+      approval: 0.7,
+      routine: 0.7,
+    };
+    return map[kind] ?? 0.7;
+  }, [kind]);
+  return <primitive object={cloned} scale={scale} />;
+}
+
 function NodeForm({ kind, color, emissive, innerEmissive }: NodeFormProps) {
-  // Pure procedural — no GLB loading. See top-of-file note explaining why.
-  return <ProceduralForm kind={kind} color={color} emissive={emissive} innerEmissive={innerEmissive} />;
+  const glbUrl = KIND_GLB[kind];
+  if (!glbUrl) {
+    return <ProceduralForm kind={kind} color={color} emissive={emissive} innerEmissive={innerEmissive} />;
+  }
+  return (
+    <Suspense fallback={<ProceduralForm kind={kind} color={color} emissive={emissive} innerEmissive={innerEmissive} />}>
+      <NodeGltf url={glbUrl} kind={kind} color={color} emissive={emissive} />
+    </Suspense>
+  );
 }
 
 /** Original procedural geometric form — kept as Suspense fallback / for
