@@ -487,181 +487,356 @@ function Node3D({
 
 /* -------------------------------------------------------------------------- */
 /* NodeContext — data-derived visualization of a node's metrics                */
-/* Every sub-element is anchored to a specific metric.                          */
+/* Every sub-element must be VISUALLY READABLE: emissive, sized to register    */
+/* against the bloomed nucleus + ambient cloud, and tagged with the metric.    */
 /* -------------------------------------------------------------------------- */
-function TaskSwarm({ color, count, intensity }: { color: string; count: number; intensity: number }) {
-  // Agents: each task is a small orbiting dot on a deterministic helix.
-  // Visualizes the agent's CURRENT WORKLOAD as actual particle bodies.
-  const ref = useRef<THREE.Group>(null);
+
+/** Floating metric badge — tag rendered as HTML so it's always legible. */
+function MetricBadge({
+  text,
+  position = [0, 0.85, 0],
+  state,
+  tone = "neutral",
+}: {
+  text: string;
+  position?: [number, number, number];
+  state?: CortexSignalState;
+  tone?: "neutral" | "warn" | "danger" | "good";
+}) {
+  return (
+    <Html position={position} center distanceFactor={9} zIndexRange={[20, 5]} style={{ pointerEvents: "none" }}>
+      <div className="cortex-3d-metric" data-state={state} data-tone={tone}>
+        {text}
+      </div>
+    </Html>
+  );
+}
+
+function TaskSwarm({
+  color,
+  count,
+  intensity,
+  label,
+}: {
+  color: string;
+  count: number;
+  intensity: number;
+  label?: string;
+}) {
+  // Agents: an orbital RING with N task particles glowing on it. The ring
+  // makes the swarm read as a swarm even at low task counts; emissive
+  // material punches through the bloom.
+  const ringRef = useRef<THREE.Group>(null);
   const orbits = useMemo(
     () =>
       Array.from({ length: count }, (_, i) => ({
-        r: 0.42 + (i % 3) * 0.08,
-        height: ((i / count) - 0.5) * 0.55,
-        phase: (i / count) * Math.PI * 2,
-        speed: 0.35 + (i % 4) * 0.08,
+        ringIdx: i % 2,
+        phase: (i / count) * Math.PI * 2 + (i % 2) * 0.5,
+        speed: 0.42 + (i % 3) * 0.07,
+        tilt: ((i % 4) - 1.5) * 0.18,
       })),
     [count],
   );
   useFrame(({ clock }) => {
-    if (!ref.current) return;
+    if (!ringRef.current) return;
     const t = clock.elapsedTime;
-    ref.current.children.forEach((child, i) => {
+    ringRef.current.children.forEach((child, i) => {
+      if (i >= orbits.length) return;
       const o = orbits[i];
+      const r = o.ringIdx === 0 ? 0.95 : 1.25;
       const a = t * o.speed + o.phase;
-      child.position.set(o.r * Math.cos(a), o.height, o.r * Math.sin(a));
+      child.position.set(r * Math.cos(a), o.tilt, r * Math.sin(a));
     });
   });
   return (
-    <group ref={ref}>
-      {orbits.map((_, i) => (
-        <mesh key={i}>
-          <sphereGeometry args={[0.022, 8, 8]} />
-          <meshBasicMaterial color={color} transparent opacity={0.75 + intensity * 0.25} />
-        </mesh>
-      ))}
+    <group>
+      {/* Track rings — visible orbital paths */}
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.95, 0.008, 8, 96]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.9} transparent opacity={0.45} />
+      </mesh>
+      <mesh rotation={[Math.PI / 2.2, Math.PI / 6, 0]}>
+        <torusGeometry args={[1.25, 0.006, 8, 96]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.6} transparent opacity={0.32} />
+      </mesh>
+      {/* Task particles */}
+      <group ref={ringRef}>
+        {orbits.map((_, i) => (
+          <mesh key={i}>
+            <sphereGeometry args={[0.07, 12, 12]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2.4} roughness={0.3} />
+          </mesh>
+        ))}
+      </group>
+      <MetricBadge text={label ? `${count} ${label}` : `${count} tasks`} position={[0, 1.55, 0]} tone="good" />
+      {/* underscore intentionally unused vars */}
+      {(() => {
+        void intensity;
+        return null;
+      })()}
     </group>
   );
 }
 
-function BranchFan({ color, count, intensity }: { color: string; count: number; intensity: number }) {
-  // Clients: each "active branch" is a leaf node connected to the client by a
-  // thin filament. Cone-shaped fan outward (away from nucleus).
+function BranchFan({
+  color,
+  count,
+  intensity,
+  label,
+}: {
+  color: string;
+  count: number;
+  intensity: number;
+  label?: string;
+}) {
+  // Clients: each active branch is a real tube + emissive leaf node fanned
+  // outward from the client. Far more prominent than the prior thin lines.
   const filaments = useMemo(() => {
-    const out: Array<{ end: [number, number, number]; mid: [number, number, number] }> = [];
+    const out: Array<{ curve: THREE.QuadraticBezierCurve3; end: THREE.Vector3 }> = [];
     for (let i = 0; i < count; i++) {
-      const angle = (i / Math.max(1, count - 1) - 0.5) * 0.9;
-      const elev = ((i % 2) - 0.5) * 0.25;
-      const r = 0.85 + (i % 3) * 0.08;
-      const end: [number, number, number] = [
-        r * Math.sin(angle),
-        elev,
-        -r * Math.cos(angle), // fan outward (-Z from node toward viewer when seen from origin)
-      ];
-      const mid: [number, number, number] = [end[0] * 0.5, end[1] * 0.5, end[2] * 0.5];
-      out.push({ end, mid });
+      const angle = (i / Math.max(1, count - 1) - 0.5) * 1.4; // wider fan
+      const elev = ((i % 2) - 0.5) * 0.5;
+      const r = 1.3 + (i % 3) * 0.18;
+      const start = new THREE.Vector3(0, 0, 0);
+      const end = new THREE.Vector3(r * Math.sin(angle), elev, -r * Math.cos(angle));
+      const mid = end.clone().multiplyScalar(0.55).add(new THREE.Vector3(0, elev * 0.4, 0));
+      out.push({ curve: new THREE.QuadraticBezierCurve3(start, mid, end), end });
     }
     return out;
   }, [count]);
 
-  const lineGeom = useMemo(() => {
-    const positions: number[] = [];
-    for (const f of filaments) {
-      positions.push(0, 0, 0, f.mid[0], f.mid[1], f.mid[2]);
-      positions.push(f.mid[0], f.mid[1], f.mid[2], f.end[0], f.end[1], f.end[2]);
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-    return g;
-  }, [filaments]);
-
   return (
     <group>
-      <lineSegments geometry={lineGeom}>
-        <lineBasicMaterial color={color} transparent opacity={0.5 * intensity} />
-      </lineSegments>
       {filaments.map((f, i) => (
-        <mesh key={i} position={f.end}>
-          <sphereGeometry args={[0.028, 10, 10]} />
-          <meshBasicMaterial color={color} />
-        </mesh>
+        <group key={i}>
+          <mesh>
+            <tubeGeometry args={[f.curve, 24, 0.018, 6, false]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.4} transparent opacity={0.85} />
+          </mesh>
+          <mesh position={f.end.toArray()}>
+            <sphereGeometry args={[0.085, 14, 14]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2.6} roughness={0.3} />
+          </mesh>
+        </group>
       ))}
+      <MetricBadge text={label ? `${count} ${label}` : `${count} branches`} position={[0, 1.05, -0.6]} tone="good" />
+      {(() => {
+        void intensity;
+        return null;
+      })()}
     </group>
   );
 }
 
-function PendingStack({ color, count }: { color: string; count: number }) {
-  // Issues / approvals: N tags stacked vertically below the node (queue depth).
+function PendingStack({
+  color,
+  count,
+  label,
+}: {
+  color: string;
+  count: number;
+  label?: string;
+}) {
+  // Issues / approvals: N glowing pending tags stacked below the node. Each
+  // tag is a flat panel that catches the bloom — reads as queue depth.
   return (
-    <group position={[0, -0.45, 0]}>
+    <group position={[0, -0.65, 0]}>
       {Array.from({ length: count }, (_, i) => (
-        <mesh key={i} position={[0, -i * 0.12, 0]}>
-          <boxGeometry args={[0.16, 0.04, 0.16]} />
-          <meshBasicMaterial color={color} transparent opacity={0.65 - i * 0.05} />
-        </mesh>
+        <group key={i} position={[0, -i * 0.22, 0]}>
+          <mesh>
+            <boxGeometry args={[0.36, 0.08, 0.22]} />
+            <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.6 - i * 0.18} roughness={0.3} />
+          </mesh>
+          {/* underline strip */}
+          <mesh position={[0, -0.05, 0.115]} rotation={[Math.PI / 2, 0, 0]}>
+            <planeGeometry args={[0.32, 0.012]} />
+            <meshBasicMaterial color={color} transparent opacity={0.85} />
+          </mesh>
+        </group>
       ))}
+      <MetricBadge
+        text={label ? `${count} ${label}` : `${count} pending`}
+        position={[0, 0.35, 0]}
+        tone="warn"
+      />
     </group>
   );
 }
 
-function InflammationHalo({ intensity }: { intensity: number }) {
-  // Blocked issues: volumetric magenta halo whose radius scales with severity.
-  // Slow pulse synchronized to risk amplification.
+function InflammationHalo({ intensity, label }: { intensity: number; label?: string }) {
+  // Blocked issues: large volumetric magenta halo + flickering core sphere +
+  // outer pulsing ring + pulsing point light. Should read as a wound.
   const haloRef = useRef<THREE.Mesh>(null);
+  const coreRef = useRef<THREE.Mesh>(null);
+  const ringRef = useRef<THREE.Mesh>(null);
   const lightRef = useRef<THREE.PointLight>(null);
-  const baseR = 0.55 + intensity * 0.55;
+  const baseR = 0.9 + intensity * 0.6;
+
   useFrame(({ clock }) => {
     const t = clock.elapsedTime;
     if (haloRef.current) {
-      const s = 1 + Math.sin(t * (1.3 + intensity)) * (0.04 + intensity * 0.06);
+      const s = 1 + Math.sin(t * (1.4 + intensity)) * (0.06 + intensity * 0.08);
       haloRef.current.scale.setScalar(s);
-      (haloRef.current.material as THREE.MeshBasicMaterial).opacity = 0.18 + intensity * 0.15 + Math.sin(t * 1.1) * 0.05;
+      (haloRef.current.material as THREE.MeshBasicMaterial).opacity =
+        0.22 + intensity * 0.2 + Math.sin(t * 1.1) * 0.08;
+    }
+    if (coreRef.current) {
+      const m = coreRef.current.material as THREE.MeshStandardMaterial;
+      m.emissiveIntensity = 2.5 + Math.sin(t * 4) * 1.5 * intensity;
+    }
+    if (ringRef.current) {
+      ringRef.current.rotation.z = t * 0.8;
+      const s = 1 + Math.sin(t * 0.8) * 0.12;
+      ringRef.current.scale.setScalar(s);
     }
     if (lightRef.current) {
-      lightRef.current.intensity = 6 * intensity + Math.sin(t * (1.8 + intensity)) * 2.4;
+      lightRef.current.intensity = 8 * intensity + Math.sin(t * (1.8 + intensity)) * 3.2;
     }
   });
+
   return (
     <group>
       <mesh ref={haloRef}>
         <sphereGeometry args={[baseR, 32, 32]} />
-        <meshBasicMaterial color="#ff2f7a" transparent opacity={0.22} side={THREE.BackSide} depthWrite={false} />
+        <meshBasicMaterial color="#ff2f7a" transparent opacity={0.28} side={THREE.BackSide} depthWrite={false} />
       </mesh>
-      <pointLight ref={lightRef} color="#ff2f7a" distance={baseR * 4} intensity={4 * intensity} decay={1.8} />
+      <mesh ref={coreRef}>
+        <icosahedronGeometry args={[0.48, 2]} />
+        <meshStandardMaterial
+          color="#ff2f7a"
+          emissive="#ff2f7a"
+          emissiveIntensity={2.5}
+          roughness={0.4}
+          transparent
+          opacity={0.85}
+        />
+      </mesh>
+      <mesh ref={ringRef} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[baseR * 0.85, 0.016, 8, 96]} />
+        <meshStandardMaterial color="#ff2f7a" emissive="#ff2f7a" emissiveIntensity={1.5} transparent opacity={0.7} />
+      </mesh>
+      <pointLight ref={lightRef} color="#ff2f7a" distance={baseR * 5} intensity={6 * intensity} decay={1.6} />
+      <MetricBadge
+        text={label ? `${label.toUpperCase()} · INFLAMED` : "INFLAMED"}
+        position={[0, baseR + 0.4, 0]}
+        tone="danger"
+      />
     </group>
   );
 }
 
-function FlowLoop({ color, intensity }: { color: string; intensity: number }) {
-  // Projects: a rotating ring whose speed reflects flow %.
-  const ref = useRef<THREE.Mesh>(null);
+function FlowLoop({ color, intensity, label }: { color: string; intensity: number; label?: string }) {
+  // Projects: progress arc whose extent encodes flow %, with a co-rotating
+  // inner trim and a "throughput pulse" travelling along the arc.
+  const arcRef = useRef<THREE.Mesh>(null);
+  const trimRef = useRef<THREE.Mesh>(null);
+  const pulseRef = useRef<THREE.Mesh>(null);
+  const arcExtent = Math.PI * 2 * Math.max(0.05, Math.min(0.98, intensity));
+
   useFrame(({ clock }) => {
-    if (ref.current) ref.current.rotation.z = clock.elapsedTime * (0.4 + intensity * 1.0);
+    const t = clock.elapsedTime;
+    if (arcRef.current) arcRef.current.rotation.z = t * (0.3 + intensity * 0.8);
+    if (trimRef.current) trimRef.current.rotation.z = -t * (0.4 + intensity * 0.6);
+    if (pulseRef.current) {
+      const a = (t * (0.6 + intensity * 1.2)) % arcExtent;
+      const r = 0.9;
+      pulseRef.current.position.set(r * Math.cos(a), 0, r * Math.sin(a));
+    }
   });
+
   return (
-    <mesh ref={ref} rotation={[Math.PI / 2.2, 0, 0]}>
-      <torusGeometry args={[0.52, 0.008, 8, 96, Math.PI * 1.6 * intensity + Math.PI * 0.2]} />
-      <meshBasicMaterial color={color} transparent opacity={0.7} />
-    </mesh>
+    <group>
+      <mesh ref={arcRef} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.9, 0.018, 10, 96, arcExtent]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2.0} transparent opacity={0.9} />
+      </mesh>
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.9, 0.005, 8, 96]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.4} transparent opacity={0.22} />
+      </mesh>
+      <mesh ref={trimRef} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.72, 0.012, 8, 96, arcExtent * 0.7]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.4} transparent opacity={0.7} />
+      </mesh>
+      <mesh ref={pulseRef} rotation={[Math.PI / 2, 0, 0]}>
+        <sphereGeometry args={[0.055, 12, 12]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={3} />
+      </mesh>
+      <MetricBadge
+        text={label ? `${label.toUpperCase()} ${Math.round(intensity * 100)}%` : `${Math.round(intensity * 100)}% FLOW`}
+        position={[0, 1.25, 0]}
+        tone="good"
+      />
+    </group>
   );
 }
 
 function MemoryRings() {
-  // Memory: 3 concentric loops at varying tilts (knowledge depth/recency).
+  // Memory: 3 concentric tilted bands at clearly readable sizes.
   const tilts = [0, Math.PI / 5, -Math.PI / 6];
   return (
     <group>
       {tilts.map((tilt, i) => {
-        const r = 0.45 + i * 0.18;
+        const r = 0.72 + i * 0.28;
         return (
           <mesh key={i} rotation={[Math.PI / 2 + tilt, 0, 0]}>
-            <torusGeometry args={[r, 0.006, 8, 80]} />
-            <meshBasicMaterial color="#83918c" transparent opacity={0.55 - i * 0.12} />
+            <torusGeometry args={[r, 0.012, 8, 96]} />
+            <meshStandardMaterial
+              color={i === 0 ? "#39ff88" : "#83918c"}
+              emissive={i === 0 ? "#39ff88" : "#83918c"}
+              emissiveIntensity={1.4 - i * 0.3}
+              transparent
+              opacity={0.7 - i * 0.12}
+            />
           </mesh>
         );
       })}
+      <mesh>
+        <icosahedronGeometry args={[0.22, 2]} />
+        <meshStandardMaterial
+          color="#83918c"
+          emissive="#39ff88"
+          emissiveIntensity={0.6}
+          roughness={0.5}
+        />
+      </mesh>
+      <MetricBadge text="MEMORY · DORMANT" position={[0, 1.45, 0]} tone="neutral" />
     </group>
   );
 }
 
 function HumanAnchor({ color }: { color: string }) {
-  // Humans: 4 short anchor lines downward — handoff-ready surface.
-  const lines = useMemo(() => {
-    const positions: number[] = [];
+  // Humans: 4 sturdy anchor cylinders downward with terminal nodes.
+  const anchors = useMemo(() => {
+    const out: Array<[number, number, number]> = [];
     for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * Math.PI * 2;
-      const r = 0.42;
-      positions.push(r * Math.cos(a), -0.1, r * Math.sin(a));
-      positions.push(r * Math.cos(a), -0.55, r * Math.sin(a));
+      const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      const r = 0.62;
+      out.push([r * Math.cos(a), -0.65, r * Math.sin(a)]);
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-    return g;
+    return out;
   }, []);
   return (
-    <lineSegments geometry={lines}>
-      <lineBasicMaterial color={color} transparent opacity={0.55} />
-    </lineSegments>
+    <group>
+      {anchors.map((pos, i) => {
+        const start = new THREE.Vector3(pos[0] * 0.4, -0.15, pos[2] * 0.4);
+        const end = new THREE.Vector3(...pos);
+        const curve = new THREE.LineCurve3(start, end);
+        return (
+          <group key={i}>
+            <mesh>
+              <tubeGeometry args={[curve, 1, 0.018, 6, false]} />
+              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={1.4} transparent opacity={0.8} />
+            </mesh>
+            <mesh position={pos}>
+              <sphereGeometry args={[0.06, 10, 10]} />
+              <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2.4} />
+            </mesh>
+          </group>
+        );
+      })}
+      <MetricBadge text="HUMAN · ANCHOR" position={[0, 0.9, 0]} tone="good" />
+    </group>
   );
 }
 
@@ -669,15 +844,15 @@ function NodeContext({ node, color }: { node: CortexNode; color: string }) {
   const spec = useMemo(() => deriveContext(node), [node]);
   switch (spec.kind) {
     case "task-swarm":
-      return <TaskSwarm color={color} count={spec.count} intensity={spec.intensity} />;
+      return <TaskSwarm color={color} count={spec.count} intensity={spec.intensity} label={spec.label} />;
     case "branch-fan":
-      return <BranchFan color={color} count={spec.count} intensity={spec.intensity} />;
+      return <BranchFan color={color} count={spec.count} intensity={spec.intensity} label={spec.label} />;
     case "pending-stack":
-      return <PendingStack color={color} count={spec.count} />;
+      return <PendingStack color={color} count={spec.count} label={spec.label} />;
     case "inflammation":
-      return <InflammationHalo intensity={spec.intensity} />;
+      return <InflammationHalo intensity={spec.intensity} label={spec.label} />;
     case "flow-loop":
-      return <FlowLoop color={color} intensity={spec.intensity} />;
+      return <FlowLoop color={color} intensity={spec.intensity} label={spec.label} />;
     case "memory-rings":
       return <MemoryRings />;
     case "human-anchor":
