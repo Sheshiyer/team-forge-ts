@@ -152,4 +152,91 @@ describe("commands routes", () => {
     expect(body.data.id).toBe(runId);
     expect(body.data.state).toBe("created");
   });
+
+  it("POST /v1/commands/intent with invalid actor_kind returns 400 invalid_intent", async () => {
+    const res = await handleCommandIntent(
+      env,
+      makeReq({
+        id: "ts-standup",
+        actor_id: "f",
+        actor_kind: "not_a_role",
+        auth_mode: "cf_access",
+        correlation_id: "c-bad-actor",
+        payload: {},
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("invalid_intent");
+  });
+
+  it("POST /v1/commands/intent with invalid auth_mode returns 400 invalid_intent", async () => {
+    const res = await handleCommandIntent(
+      env,
+      makeReq({
+        id: "ts-standup",
+        actor_id: "f",
+        actor_kind: "founder",
+        auth_mode: "fake_token",
+        correlation_id: "c-bad-auth",
+        payload: {},
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("invalid_intent");
+  });
+
+  it("POST /v1/commands/intent with non-object payload returns 400 invalid_intent", async () => {
+    const res = await handleCommandIntent(
+      env,
+      makeReq({
+        id: "ts-standup",
+        actor_id: "f",
+        actor_kind: "founder",
+        auth_mode: "cf_access",
+        correlation_id: "c-bad-payload",
+        payload: "hello",
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("invalid_intent");
+  });
+
+  it("POST /v1/commands/intent preserves payload in command_received audit event", async () => {
+    await handleCommandIntent(
+      env,
+      makeReq({
+        id: "ts-standup",
+        actor_id: "f",
+        actor_kind: "founder",
+        auth_mode: "cf_access",
+        correlation_id: "c-payload",
+        payload: { project_id: "proj-42", since: "2026-06-14" },
+      }),
+    );
+    const cmdReceived = mock.events.find((e) => e.kind === "command_received");
+    expect(cmdReceived).toBeDefined();
+    const payload = JSON.parse(cmdReceived!.payload_json as string);
+    expect(payload.payload).toEqual({ project_id: "proj-42", since: "2026-06-14" });
+  });
+
+  it("POST /v1/commands/intent returns 503 database_unavailable when DB binding is missing", async () => {
+    const envNoDb = { TF_ENV: "test" } as unknown as Env;
+    const res = await handleCommandIntent(
+      envNoDb,
+      makeReq({
+        id: "ts-standup",
+        actor_id: "f",
+        actor_kind: "founder",
+        auth_mode: "cf_access",
+        correlation_id: "c-no-db",
+        payload: {},
+      }),
+    );
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("database_unavailable");
+  });
 });

@@ -85,7 +85,7 @@ export function makeMockDb(): MockDbHandle {
                 }
                 return { success: true };
               }
-              return { success: true };
+              throw new Error(`mock-d1: unhandled SQL: ${sql.substring(0, 80)}`);
             },
             async first<T = Record<string, unknown>>(): Promise<T | null> {
               if (sql.includes("SELECT") && sql.includes("command_runs") && sql.includes("WHERE id")) {
