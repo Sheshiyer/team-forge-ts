@@ -36,6 +36,18 @@ export type AuditEventKind =
   | "partial_failure"
   | "cancelled";
 
+/** Where a command's execution physically happens. */
+export type CommandRoute =
+  | "downstream_multica"   // ECS via MultiCA enqueue
+  | "local_worker"          // Worker handles synchronously
+  | "downstream_paperclip"; // Paperclip dedicated-agent envelope
+
+/** Which subsystem owns canonical state for a command's result. */
+export type CommandStateOwner =
+  | "teamforge"  // command_runs.result_json is canonical
+  | "multica"    // MultiCA artifact / S3 is canonical
+  | "paperclip"; // Paperclip Huly/repo state is canonical
+
 /** What the caller sends to /v1/commands/intent. */
 export interface CommandIntent {
   /** Canonical command ID — must exist in registry. e.g. "ts-standup", "ts-summon-agent". */

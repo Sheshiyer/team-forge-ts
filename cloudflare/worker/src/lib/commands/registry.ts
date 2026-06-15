@@ -1,4 +1,4 @@
-import type { ActorKind } from "./types";
+import type { ActorKind, CommandRoute, CommandStateOwner } from "./types";
 
 /** A registered command. */
 export interface CommandSpec {
@@ -11,11 +11,11 @@ export interface CommandSpec {
   /** Who is allowed to issue this command. */
   allowed_actor_kinds: ActorKind[];
   /** Where execution happens. */
-  route: "downstream_multica" | "local_worker" | "downstream_paperclip";
+  route: CommandRoute;
   /** Whether this command mutates state. */
   mutates: boolean;
-  /** State owner — who is canonical for the result. */
-  state_owner: "teamforge" | "multica" | "paperclip";
+  /** State owner — teamforge owns the run record; route owns the execution leg. */
+  state_owner: CommandStateOwner;
 }
 
 export const COMMAND_REGISTRY: CommandSpec[] = [

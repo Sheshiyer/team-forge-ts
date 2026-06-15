@@ -1,6 +1,7 @@
 export interface D1PreparedStatementLike {
   bind(...values: unknown[]): D1PreparedStatementLike;
   first<T = Record<string, unknown>>(): Promise<T | null>;
+  run(): Promise<{ success: boolean }>;
 }
 
 export interface D1DatabaseLike {
