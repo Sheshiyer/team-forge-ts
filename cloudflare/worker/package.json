@@ -4,9 +4,14 @@
   "type": "module",
   "scripts": {
     "check": "pnpm exec tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
     "dev": "pnpm dlx wrangler dev",
     "deploy": "pnpm dlx wrangler deploy",
     "d1:migrate:local": "pnpm dlx wrangler d1 migrations apply TEAMFORGE_DB --local",
     "d1:migrate:remote": "pnpm dlx wrangler d1 migrations apply TEAMFORGE_DB --remote"
+  },
+  "devDependencies": {
+    "typescript": "^5.7",
+    "vitest": "^4"
   }
 }
