@@ -260,3 +260,37 @@ Deferred for follow-up (documented, non-blocking):
 - Replace stub `buildStandupResponse` with real Huly/GitHub/Slack/Clockify aggregation
 - Real MultiCA ECS pickup loop (mocked by `cloudflare/worker/tools/mock-multica.sh`)
 - Token rotation surface for per-agent bearers
+
+## Phase 1+2+3 Salvage closure (2026-06-16)
+
+The Phase 3 Paperclip listener path was retired in line with the 2026-06-11 Paperclip-org-port proposal. The cambium-bridge `teamforge-consumer` (`thoughtseed-paperclip/cambium-bridge/teamforge-consumer.ts`) is now the dispatcher. End-to-end loop verified live 2026-06-16:
+
+- Founder intent → Worker `POST /v1/commands/intent` → `command_runs` (state=created)
+- Cambium-bridge consumer polls `GET /v1/commands/runs?state=created&route=downstream_multica` (new in Phase B, commit `1ff36c8`)
+- Consumer runs `wake(MoveEvent)` from the existing cambium operator wake-loop, then shells out to `multica issue create` + `multica issue assign --to <Agent>` (assignment IS the act per W3 proof)
+- Consumer polls `multica issue get` until terminal, signs HMAC `X-MultiCA-Signature` and POSTs to `/v1/commands/runs/:id/result`
+- Worker `recordRunResult` writes result_json + emits `result_received` + `result_delivered` audit events
+
+**Smoke evidence:** `run_b850a769f3454de29a18685d` → MultiCA `THO-20` (assignee `agent Hermes`, creator `safvr`) → HMAC callback received → D1 state went `created → in_progress → failed (multica_timeout)` because Hermes' Daily Standup autopilot runs once/day at 18:00 IST, not on-demand. The pipeline itself is correct.
+
+**Worker version:** `96782da9-3aac-4f7f-a3dc-2f1cabeeb05b` (deployed 2026-06-15)
+**Consumer launchd plist:** `~/Library/LaunchAgents/ai.thoughtseed.teamforge-consumer.plist` (validated, NOT loaded — master switch in config off)
+**Master switch:** `teamforgeConsumerEnabled` in `~/.thoughtseed/cambium-bridge.json`
+
+**Files deleted in the salvage:**
+- `cloudflare/worker/src/lib/paperclip-client.ts` + test
+- `cloudflare/worker/src/lib/commands/dispatch.ts` + test
+- `cloudflare/worker/tools/mock-multica.sh`
+- `thoughtseed-paperclip/services/listener/{standup,agent-tokens}.{ts,test.ts}`
+- `docs/architecture/contracts/paperclip-agent-contract.md` archived to `_archived/paperclip-agent-contract.2026-06-15.md`
+
+**Files added/modified:**
+- `cloudflare/worker/src/lib/commands/registry.ts` — `multica_agent` field + 4 commands re-routed
+- `cloudflare/worker/src/lib/commands/runs.ts` — `listRunsByState` helper
+- `cloudflare/worker/src/routes/commands.ts` — `handleListCommandRuns` + intent route no longer calls `dispatchRun`
+- `cloudflare/worker/src/routes/v1.ts` — `GET /v1/commands/runs` mounted
+- `thoughtseed-paperclip/cambium-bridge/config.ts` — 5 new fields for the consumer
+- `thoughtseed-paperclip/cambium-bridge/teamforge-consumer.ts` — NEW, the dispatcher
+- `thoughtseed-paperclip/cambium-bridge/operator/cli.ts` — NEW, the missing CLI
+
+The brief is now genuinely implemented: command intent goes through TeamForge, dispatch goes through MultiCA via the canonical CLI contract, results come back via HMAC, and the wake-loop's cortex memory + drift guards run on every dispatch. Paperclip is retired for cofounder/TeamForge use per the 2026-06-11 org-port proposal; Cambium is the fractal OS that TeamForge integrates into via the TeamForge-slug-as-tenant-id contract shipped in cambium's M3.
