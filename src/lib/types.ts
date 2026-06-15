@@ -1139,6 +1139,40 @@ export interface HermesDispatchResult {
   exitCode: number | null;
 }
 
+export interface FounderCommandIntent {
+  id: string;
+  actorId: string;
+  actorKind: "founder" | "cofounder" | "employee" | "multica_service" | "paperclip_agent";
+  authMode: "cf_access" | "m2m" | "app_bearer" | "aws_task_role" | "paperclip_token";
+  targetKind?: string;
+  targetId?: string;
+  correlationId: string;
+  payload: Record<string, unknown>;
+}
+
+export interface FounderCommandRun {
+  id: string;
+  commandId: string;
+  actorId: string;
+  actorKind: string;
+  authMode: string;
+  state: "created" | "accepted" | "in_progress" | "succeeded" | "failed" | "partial" | "cancelled";
+  targetKind: string | null;
+  targetId: string | null;
+  correlationId: string;
+  requestedAt: number;
+  acceptedAt: number | null;
+  completedAt: number | null;
+  resultJson: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export interface FounderCommandIntentResult {
+  runId: string;
+  state: FounderCommandRun["state"];
+}
+
 export interface EntityRelation {
   id: number;
   relationType: string;

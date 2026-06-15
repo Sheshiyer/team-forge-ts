@@ -1085,3 +1085,15 @@ pub async fn post_teamforge_project_action<T: Serialize>(
         .map_err(|e| format!("parse TeamForge project action detail: {e}"))?;
     Ok(map_worker_control_plane(detail))
 }
+
+/// Public re-exports for the founder_commands module so it can reuse the same
+/// settings lookups (worker base URL + cloud-credential access token) without
+/// duplicating the storage helpers. These thin wrappers keep the original
+/// crate-private helpers intact while exposing a stable surface.
+pub async fn worker_base_url_pub(pool: &SqlitePool) -> Result<String, String> {
+    worker_base_url(pool).await
+}
+
+pub async fn worker_access_token_pub(pool: &SqlitePool) -> Result<String, String> {
+    worker_access_token(pool).await
+}

@@ -1,3 +1,11 @@
+// founder_commands holds the new Phase 3 Worker proxy commands
+// (post_command_intent / get_command_run). They are exposed directly through
+// the submodule path in lib.rs (e.g. `commands::founder_commands::post_command_intent`)
+// because tauri::generate_handler! resolves a sibling `__cmd__<name>` symbol
+// that is only emitted in the same module where the #[tauri::command]
+// attribute was applied; a `pub use` re-export does not move that shim.
+pub mod founder_commands;
+
 use std::collections::{HashMap, HashSet};
 use std::path::Component;
 use std::path::{Path, PathBuf};

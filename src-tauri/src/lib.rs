@@ -241,6 +241,8 @@ pub fn run() {
             commands::sync_cloud_credentials,
             commands::sync_cloud_integrations,
             commands::probe_teamforge_worker_api,
+            commands::founder_commands::post_command_intent,
+            commands::founder_commands::get_command_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
