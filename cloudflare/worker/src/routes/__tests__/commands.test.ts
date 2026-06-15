@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { handleCommandIntent, handleGetCommandRun } from "../commands";
 import { makeMockDb, type MockDbHandle } from "../../lib/test-utils/mock-d1";
 import type { Env } from "../../lib/env";
@@ -240,34 +240,4 @@ describe("commands routes", () => {
     expect(body.error.code).toBe("database_unavailable");
   });
 
-  it("POST /v1/commands/intent with ts-summon-agent (downstream_paperclip) + valid target dispatches and returns succeeded", async () => {
-    const dispatchEnv = {
-      TF_ENV: "test",
-      TEAMFORGE_DB: mock.db,
-      PAPERCLIP_REMOTE_BASE_URL: "https://paperclip.test",
-      PAPERCLIP_AGENT_TOKEN_MAP: '{"agent-eng":"t1"}',
-    } as unknown as Env;
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({
-      agent_id: "agent-eng",
-      correlation_id: "c-paperclip",
-      state: "succeeded",
-      data: { yesterday: [], today: [], blockers: [], confidence: 0.7 },
-      sources: [],
-    }), { status: 200, headers: { "content-type": "application/json" } }));
-
-    const res = await handleCommandIntent(dispatchEnv, makeReq({
-      id: "ts-summon-agent",
-      actor_id: "f",
-      actor_kind: "founder",
-      auth_mode: "cf_access",
-      target_kind: "agent",
-      target_id: "agent-eng",
-      correlation_id: "c-paperclip",
-      payload: {},
-    }));
-    expect(res.status).toBe(201);
-    const body = (await res.json()) as { data: { state: string } };
-    expect(body.data.state).toBe("succeeded");
-    fetchSpy.mockRestore();
-  });
 });

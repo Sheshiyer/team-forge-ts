@@ -2,7 +2,6 @@ import type { Env, D1DatabaseLike } from "../lib/env";
 import { jsonError, jsonOk } from "../lib/response";
 import { getCommandSpec, isAuthorized } from "../lib/commands/registry";
 import { createRun, getRunById, recordAuditEvent, transitionRun } from "../lib/commands/runs";
-import { dispatchRun } from "../lib/commands/dispatch";
 import type { ActorKind, AuthMode, CommandIntent } from "../lib/commands/types";
 
 const ACTOR_KINDS = new Set<ActorKind>([
@@ -148,18 +147,13 @@ export async function handleCommandIntent(env: Env, request: Request): Promise<R
     );
 
     // local_worker commands transition to accepted immediately.
-    // downstream_paperclip commands dispatch synchronously via paperclip-client.
-    // downstream_multica commands stay in "created" until callback (Phase 2 result route).
+    // downstream_multica commands stay in "created" until the cambium-bridge
+    // teamforge-consumer picks them up, dispatches via `multica issue assign`,
+    // and posts back via the Phase 2 callback route (POST /v1/commands/runs/:id/result).
     if (spec.route === "local_worker") {
       await transitionRun(db, run.id, "accepted", now);
-    } else if (spec.route === "downstream_paperclip") {
-      // Fire-and-await dispatch. dispatchRun never throws; failures become
-      // state=failed rows. We await so the UI's first GET reflects the
-      // dispatched state, not just `created`.
-      await dispatchRun(env, run);
     }
 
-    // After dispatch (if any), re-read run to get the latest state for the response.
     const finalRun = await getRunById(db, run.id);
     const responseState = finalRun?.state ?? (spec.route === "local_worker" ? "accepted" : "created");
     return jsonOk({ run_id: run.id, state: responseState }, { status: 201 });
