@@ -33,6 +33,7 @@ import {
   updateOnboardingStep,
 } from "../lib/plexus-session";
 import { handleGetTimeEntries, handlePostTimeEntries } from "./time-entries";
+import { handleCommandIntent, handleGetCommandRun } from "./commands";
 import { handleBackfillClockify } from "./clockify-backfill";
 import { handleAgentFeedExport, handleProjectCloseout, handleProjectScaffold } from "./agent-feed";
 import { handleGetConnections, handleTestConnection } from "./connections";
@@ -379,6 +380,23 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
     const body = (await request.json()) as HandoffInput;
     const created = await createHandoff(env.TEAMFORGE_DB!, DEFAULT_WORKSPACE_ID, body);
     return jsonOk(created);
+  }
+
+  // ── Hermes Phase 1: Command intake (POST intent + GET run) ──────
+  // Single intake endpoint for the founder command vocabulary. Persists a
+  // command_run + audit trail in D1; downstream execution (MultiCA/Paperclip)
+  // happens in Phase 2/3 via callbacks. local_worker commands flip to
+  // "accepted" immediately; downstream routes stay in "created" until callback.
+  if (method === "POST" && pathname === "/v1/commands/intent") {
+    const authFailure = requireAppOrInternalAuth();
+    if (authFailure) return authFailure;
+    return handleCommandIntent(env, request);
+  }
+  const commandRunIdMatch = pathname.match(/^\/v1\/commands\/runs\/([^/]+)$/);
+  if (method === "GET" && commandRunIdMatch) {
+    const authFailure = requireAppOrInternalAuth();
+    if (authFailure) return authFailure;
+    return handleGetCommandRun(env, commandRunIdMatch[1]);
   }
 
   // ── Phase 7: Member Provisioning ────────────────────────────────
