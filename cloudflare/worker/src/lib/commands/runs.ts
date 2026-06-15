@@ -78,6 +78,21 @@ export async function transitionRun(
   if (!result.success) throw new Error("D1 UPDATE failed for command_runs");
 }
 
+/**
+ * Look up the most recently created run for a correlation_id. Used by the
+ * Phase 2 callback route to short-circuit idempotent retries.
+ */
+export async function getRunByCorrelationId(
+  db: D1DatabaseLike,
+  correlationId: string,
+): Promise<CommandRun | null> {
+  const row = await db
+    .prepare(`SELECT * FROM command_runs WHERE correlation_id = ? ORDER BY requested_at DESC LIMIT 1`)
+    .bind(correlationId)
+    .first<CommandRun>();
+  return row ?? null;
+}
+
 export async function recordAuditEvent(
   db: D1DatabaseLike,
   runId: string,
