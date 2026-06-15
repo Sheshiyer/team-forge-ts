@@ -1,3 +1,14 @@
+/**
+ * Updater bridge — wraps the Tauri v2 updater + process plugins so the
+ * rest of the app can talk to a small, stable interface. Before v0.3.4
+ * this file was using the Tauri v1-style `window.__TAURI__.updater`
+ * access which doesn't exist in v2 — meaning the Settings page UI was
+ * built but unreachable. Switching to the proper plugin imports is what
+ * actually wires OTA checks into the app.
+ */
+import { check as tauriCheck, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch as tauriRelaunch } from "@tauri-apps/plugin-process";
+
 export type UpdaterDownloadEvent =
   | { event: "Started"; data: { contentLength?: number } }
   | { event: "Progress"; data: { chunkLength: number } }
@@ -15,64 +26,62 @@ export interface TauriUpdateHandle {
   date?: string;
   body?: string;
   downloadAndInstall(
-    onEvent?: (event: UpdaterDownloadEvent) => void
+    onEvent?: (event: UpdaterDownloadEvent) => void,
   ): Promise<void>;
 }
 
-interface TauriUpdaterApi {
-  check(): Promise<TauriUpdateHandle | null>;
-}
-
-interface TauriProcessApi {
-  relaunch(): Promise<void>;
-}
-
-function tauriWindow() {
-  if (typeof window === "undefined") return null;
-  return window.__TAURI__ ?? null;
-}
-
-function updaterApi(): TauriUpdaterApi | null {
-  return tauriWindow()?.updater ?? null;
-}
-
-function processApi(): TauriProcessApi | null {
-  return tauriWindow()?.process ?? null;
+function isTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 export function isUpdaterSupported(): boolean {
-  return typeof updaterApi()?.check === "function";
+  // Plugin imports are tree-shakable, but at runtime the IPC bridge only
+  // exists inside the Tauri webview. Browser preview returns false so the
+  // UI knows to disable update controls.
+  return isTauriRuntime();
 }
 
 export function isRelaunchSupported(): boolean {
-  return typeof processApi()?.relaunch === "function";
+  return isTauriRuntime();
+}
+
+function wrap(update: Update): TauriUpdateHandle {
+  return {
+    currentVersion: update.currentVersion,
+    version: update.version,
+    date: update.date,
+    body: update.body,
+    async downloadAndInstall(onEvent) {
+      // The plugin's event shape matches what we re-export — pass through.
+      await update.downloadAndInstall((evt) => {
+        onEvent?.(evt as UpdaterDownloadEvent);
+      });
+    },
+  };
 }
 
 export async function checkForUpdate(): Promise<TauriUpdateHandle | null> {
-  const updater = updaterApi();
-  if (!updater) {
+  if (!isTauriRuntime()) {
     throw new Error(
-      "Updater API unavailable. Run the packaged TeamForge app to use OTA updates."
+      "Updater API unavailable. Open the packaged TeamForge app to use OTA updates.",
     );
   }
-
-  return updater.check();
+  const update = await tauriCheck();
+  return update ? wrap(update) : null;
 }
 
 export async function relaunchForInstall(): Promise<void> {
-  const process = processApi();
-  if (!process) {
+  if (!isTauriRuntime()) {
     throw new Error(
-      "Relaunch API unavailable. Restart TeamForge manually to finish installing the update."
+      "Relaunch API unavailable. Restart TeamForge manually to finish installing the update.",
     );
   }
-
-  await process.relaunch();
+  await tauriRelaunch();
 }
 
 export function reduceDownloadProgress(
   state: DownloadProgressState,
-  event: UpdaterDownloadEvent
+  event: UpdaterDownloadEvent,
 ): DownloadProgressState {
   switch (event.event) {
     case "Started":
@@ -112,16 +121,14 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${units[unitIndex]}`;
 }
 
-export function formatDownloadProgress(
-  state: DownloadProgressState
-): string {
+export function formatDownloadProgress(state: DownloadProgressState): string {
   if (state.contentLength && state.contentLength > 0) {
     const percent = Math.min(
       100,
-      Math.round((state.downloadedBytes / state.contentLength) * 100)
+      Math.round((state.downloadedBytes / state.contentLength) * 100),
     );
     return `${formatBytes(state.downloadedBytes)} / ${formatBytes(
-      state.contentLength
+      state.contentLength,
     )} (${percent}%)`;
   }
 
