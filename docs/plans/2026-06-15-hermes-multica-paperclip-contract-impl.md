@@ -1261,10 +1261,20 @@ interface PaperclipStandupResponse {
    - First connected prototype is read-heavy standup ✓
    - Local/deployed truth explicit ✓ (closure note in brief)
 
+### Persistence decision (locked 2026-06-15)
+
+**D1-first for standup results.** Decided up front so Phase 3 doesn't have to revisit:
+
+- The full structured standup data lives in `command_runs.result_json` — single source of truth, queryable directly from the Worker.
+- Vault gets a periodic dump (separate plan, not Phase 3) for offline access + archival.
+- Rationale: `command_runs` already stores `result_json`, so this is no extra plumbing in Phase 1/2. Phase 3 just serializes the `PaperclipStandupResponse.data` into that column on `state=succeeded`.
+- Trade-off accepted: vault sync isn't immediate. Worker is the canonical "what was the standup yesterday" answer.
+
 ### Not in Phase 3
 
 - All mutating commands (`ts-summon-agent`, `ts-approve-synapse`). Those land in a follow-up plan once the read-heavy prototype is stable.
 - Replacing the existing Telegram dispatcher. Brief explicitly says it stays untouched.
+- Vault sync of standup history. Separate plan after Phase 3 is stable.
 
 ---
 
