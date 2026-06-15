@@ -34,6 +34,7 @@ import {
 } from "../lib/plexus-session";
 import { handleGetTimeEntries, handlePostTimeEntries } from "./time-entries";
 import { handleCommandIntent, handleGetCommandRun } from "./commands";
+import { handleCommandsCallback } from "./commands-callback";
 import { handleBackfillClockify } from "./clockify-backfill";
 import { handleAgentFeedExport, handleProjectCloseout, handleProjectScaffold } from "./agent-feed";
 import { handleGetConnections, handleTestConnection } from "./connections";
@@ -391,6 +392,13 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
     const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleCommandIntent(env, request);
+  }
+  // Phase 2: MultiCA result callback. Auth is the HMAC verifier inside the handler
+  // (NOT requireAppOrInternalAuth) because MultiCA's ECS task role has no CF
+  // Access JWT and no app Bearer — the shared secret signs each request.
+  const commandRunResultMatch = pathname.match(/^\/v1\/commands\/runs\/([^/]+)\/result$/);
+  if (method === "POST" && commandRunResultMatch) {
+    return handleCommandsCallback(env, request, commandRunResultMatch[1]);
   }
   const commandRunIdMatch = pathname.match(/^\/v1\/commands\/runs\/([^/]+)$/);
   if (method === "GET" && commandRunIdMatch) {

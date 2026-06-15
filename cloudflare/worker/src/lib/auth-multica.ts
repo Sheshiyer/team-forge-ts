@@ -57,7 +57,12 @@ export async function verifyMultiCaCallback(
     false,
     ["verify"],
   );
-  const valid = await crypto.subtle.verify("HMAC", key, sigBytes, new TextEncoder().encode(body));
+  const valid = await crypto.subtle.verify(
+    "HMAC",
+    key,
+    sigBytes as BufferSource,
+    new TextEncoder().encode(body),
+  );
   if (!valid) {
     return {
       ok: false,
