@@ -96,6 +96,9 @@ import type {
   HermesDispatchResult,
   HermesIntakeIngestResult,
   HermesIntakeInput,
+  FounderCommandIntent,
+  FounderCommandIntentResult,
+  FounderCommandRun,
   EntityRelation,
   EntityRelationInput,
   IdentityMapEntry,
@@ -370,6 +373,10 @@ const invokeApi = {
     invoke<boolean>("delete_relation", { id }),
   getRecentPaiMissions: (limit?: number) =>
     invoke<PaiMissionSummary>("get_recent_pai_missions", { limit: limit ?? 8 }),
+  postCommandIntent: (intent: FounderCommandIntent) =>
+    invoke<FounderCommandIntentResult>("post_command_intent", { intent }),
+  getCommandRun: (runId: string) =>
+    invoke<FounderCommandRun>("get_command_run", { runId }),
 };
 
 export function useInvoke() {
