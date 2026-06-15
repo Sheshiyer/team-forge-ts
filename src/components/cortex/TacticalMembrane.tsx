@@ -29,21 +29,42 @@ function confidenceFor(state: CortexSignalState): { value: number; label: string
   }
 }
 
+// Happy-path stages rendered as a progression strip. Terminal failure variants
+// (failed/partial/cancelled) are flagged via the data-failed attribute on the
+// "succeeded" cell so styling can express "the run never reached succeeded".
+const RUN_STAGES = ["created", "accepted", "in_progress", "succeeded"] as const;
+
+// Full ordering used for index lookups — failure terminals sit past succeeded
+// so isReached only highlights the happy path.
+const RUN_TIMELINE: FounderCommandRun["state"][] = [
+  "created",
+  "accepted",
+  "in_progress",
+  "succeeded",
+  "failed",
+  "partial",
+  "cancelled",
+];
+
+function prettyPrintResult(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
+}
+
 export default function TacticalMembrane({
   node,
   commands,
   paths = [],
   signals = [],
-  // activeRun / activeRunLabel are consumed by the Task 3.9 render block
-  // appended below the commands strip. Destructuring here keeps the prop
-  // signature stable for callers from Task 3.8 onwards.
+  // activeRun / activeRunLabel render the live state machine + result panel
+  // below the commands strip while a Worker /v1/commands run is in flight
+  // or terminal. MissionCortexPage owns the polling effect.
   activeRun = null,
   activeRunLabel = null,
 }: TacticalMembraneProps) {
-  // Silence noUnusedParameters until Task 3.9 wires the render block.
-  void activeRun;
-  void activeRunLabel;
-
   if (!node) return null;
 
   const confidence = confidenceFor(node.state);
@@ -97,6 +118,57 @@ export default function TacticalMembrane({
           </span>
         ))}
       </div>
+
+      {activeRun ? (
+        <>
+          <div className="cortex-membrane__divider" aria-hidden="true">
+            <span />
+            <em>ACTIVE COMMAND</em>
+            <span />
+          </div>
+          <div className="cortex-membrane__run">
+            <div className="cortex-membrane__run-label">
+              {activeRunLabel ?? activeRun.commandId}
+            </div>
+            <div className="cortex-membrane__run-states">
+              {RUN_STAGES.map((stage) => {
+                const stageIndex = RUN_STAGES.indexOf(stage);
+                const currentIndex = RUN_TIMELINE.indexOf(activeRun.state);
+                const isFailed =
+                  activeRun.state === "failed" ||
+                  activeRun.state === "partial" ||
+                  activeRun.state === "cancelled";
+                const isReached = !isFailed && stageIndex <= currentIndex;
+                const isCurrent = stage === activeRun.state;
+                return (
+                  <span
+                    key={stage}
+                    className="cortex-membrane__run-state"
+                    data-reached={isReached || undefined}
+                    data-current={isCurrent || undefined}
+                    data-failed={
+                      isFailed && stage === "succeeded" ? "" : undefined
+                    }
+                  >
+                    {stage.replace("_", " ")}
+                  </span>
+                );
+              })}
+            </div>
+            {activeRun.errorCode ? (
+              <div className="cortex-membrane__run-error">
+                <strong>{activeRun.errorCode}</strong>:{" "}
+                {activeRun.errorMessage ?? "see logs"}
+              </div>
+            ) : null}
+            {activeRun.resultJson && activeRun.state === "succeeded" ? (
+              <pre className="cortex-membrane__run-result">
+                {prettyPrintResult(activeRun.resultJson)}
+              </pre>
+            ) : null}
+          </div>
+        </>
+      ) : null}
 
       <div className="cortex-membrane__divider" aria-hidden="true">
         <span />
