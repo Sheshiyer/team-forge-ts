@@ -64,6 +64,10 @@ export interface Env {
   MULTICA_API_URL?: string;      // e.g. http://a2d8a7ed58f172583.awsglobalaccelerator.com
   MULTICA_APP_URL?: string;      // e.g. https://multica.thoughtseed.space
   MULTICA_WORKSPACE_ID?: string; // e.g. e0ffc9e2-7848-447f-933f-cc743deedfd0
+  // HMAC-SHA256 shared secret used to sign + verify MultiCA callback envelopes.
+  // Set via `pnpm -C cloudflare/worker exec wrangler secret put MULTICA_CALLBACK_SHARED_SECRET`.
+  // Absence forces 503 server_misconfigured on the callback route.
+  MULTICA_CALLBACK_SHARED_SECRET?: string;
 
   // Temporary internal shared secret for m2m calls (e.g. parity, Hermes) when CF Access service tokens have compatibility issues with Worker routes.
   // Used as alternative to TF_CREDENTIAL_ENVELOPE_KEY for app routes. Caller sends header "X-TeamForge-Internal-Secret".
