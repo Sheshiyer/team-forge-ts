@@ -1,8 +1,8 @@
 import type { Env, D1DatabaseLike } from "../lib/env";
 import { jsonError, jsonOk } from "../lib/response";
-import { getCommandSpec, isAuthorized } from "../lib/commands/registry";
-import { createRun, getRunById, recordAuditEvent, transitionRun } from "../lib/commands/runs";
-import type { ActorKind, AuthMode, CommandIntent } from "../lib/commands/types";
+import { COMMAND_REGISTRY, getCommandSpec, isAuthorized } from "../lib/commands/registry";
+import { createRun, getRunById, listRunsByState, recordAuditEvent, transitionRun } from "../lib/commands/runs";
+import type { ActorKind, AuthMode, CommandIntent, CommandRunState } from "../lib/commands/types";
 
 const ACTOR_KINDS = new Set<ActorKind>([
   "founder",
@@ -181,6 +181,86 @@ export async function handleGetCommandRun(env: Env, runId: string): Promise<Resp
   } catch {
     return jsonError(
       { code: "internal_error", message: "command pipeline failed", retryable: true },
+      500,
+    );
+  }
+}
+
+const VALID_RUN_STATES: readonly CommandRunState[] = [
+  "created",
+  "accepted",
+  "in_progress",
+  "succeeded",
+  "failed",
+  "partial",
+  "cancelled",
+];
+
+const VALID_ROUTES = ["downstream_multica", "local_worker"] as const;
+
+/**
+ * Phase B queue interface: GET /v1/commands/runs?state=&route=&limit=
+ *
+ * The cambium-bridge teamforge-consumer polls this every ~5s to pick up new
+ * runs and dispatch them via `multica issue assign`. Auth is via the same
+ * `requireAppOrInternalAuth` helper used by other commands routes (m2m secret
+ * or Bearer token or CF Access principal).
+ */
+export async function handleListCommandRuns(env: Env, url: URL): Promise<Response> {
+  const dbCheck = requireDb(env);
+  if (!dbCheck.ok) return dbCheck.response;
+  const db = dbCheck.db;
+
+  const stateParam = url.searchParams.get("state");
+  if (!stateParam) {
+    return jsonError(
+      { code: "missing_state", message: "state query param required", retryable: false },
+      400,
+    );
+  }
+  if (!VALID_RUN_STATES.includes(stateParam as CommandRunState)) {
+    return jsonError(
+      {
+        code: "invalid_state",
+        message: `state must be one of ${VALID_RUN_STATES.join("|")}`,
+        retryable: false,
+      },
+      400,
+    );
+  }
+  const state = stateParam as CommandRunState;
+
+  const routeParam = url.searchParams.get("route");
+  let commandIds: string[] | null = null;
+  if (routeParam) {
+    if (!(VALID_ROUTES as readonly string[]).includes(routeParam)) {
+      return jsonError(
+        {
+          code: "invalid_route",
+          message: `route must be one of ${VALID_ROUTES.join("|")}`,
+          retryable: false,
+        },
+        400,
+      );
+    }
+    commandIds = COMMAND_REGISTRY.filter((s) => s.route === routeParam).map((s) => s.id);
+  }
+
+  const limitParam = url.searchParams.get("limit");
+  const limit = limitParam ? Number.parseInt(limitParam, 10) : 50;
+  if (Number.isNaN(limit) || limit < 1) {
+    return jsonError(
+      { code: "invalid_limit", message: "limit must be a positive integer", retryable: false },
+      400,
+    );
+  }
+
+  try {
+    const runs = await listRunsByState(db, state, commandIds, limit);
+    return jsonOk({ runs, count: runs.length });
+  } catch {
+    return jsonError(
+      { code: "internal_error", message: "list runs failed", retryable: true },
       500,
     );
   }

@@ -38,9 +38,8 @@ export type AuditEventKind =
 
 /** Where a command's execution physically happens. */
 export type CommandRoute =
-  | "downstream_multica"   // ECS via MultiCA enqueue
-  | "local_worker"          // Worker handles synchronously
-  | "downstream_paperclip"; // Paperclip dedicated-agent envelope
+  | "downstream_multica"   // cambium-bridge teamforge-consumer dispatches via `multica issue assign`
+  | "local_worker";         // Worker handles synchronously
 
 /** Which subsystem owns canonical state for a command's result. */
 export type CommandStateOwner =

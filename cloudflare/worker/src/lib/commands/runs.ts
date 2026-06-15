@@ -93,6 +93,39 @@ export async function getRunByCorrelationId(
   return row ?? null;
 }
 
+/**
+ * List runs filtered by state, optionally by route (via command_id IN the routed set).
+ * The route filter is resolved by the route handler using the registry; this helper
+ * accepts a list of allowed command_ids.
+ *
+ * Used by the Phase B `GET /v1/commands/runs?state=&route=&limit=` queue endpoint,
+ * which the cambium-bridge teamforge-consumer polls every ~5s.
+ */
+export async function listRunsByState(
+  db: D1DatabaseLike,
+  state: CommandRunState,
+  commandIds: string[] | null,
+  limit: number,
+): Promise<CommandRun[]> {
+  const safeLimit = Math.min(Math.max(limit, 1), 200);
+  if (commandIds === null) {
+    const result = await db
+      .prepare(`SELECT * FROM command_runs WHERE state = ? ORDER BY requested_at ASC LIMIT ?`)
+      .bind(state, safeLimit)
+      .all<CommandRun>();
+    return result.results;
+  }
+  if (commandIds.length === 0) return [];
+  const placeholders = commandIds.map(() => "?").join(",");
+  const result = await db
+    .prepare(
+      `SELECT * FROM command_runs WHERE state = ? AND command_id IN (${placeholders}) ORDER BY requested_at ASC LIMIT ?`,
+    )
+    .bind(state, ...commandIds, safeLimit)
+    .all<CommandRun>();
+  return result.results;
+}
+
 export async function recordAuditEvent(
   db: D1DatabaseLike,
   runId: string,

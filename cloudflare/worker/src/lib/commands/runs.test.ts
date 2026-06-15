@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createRun, getRunById, getRunByCorrelationId, recordAuditEvent, transitionRun } from "./runs";
+import { createRun, getRunById, getRunByCorrelationId, listRunsByState, recordAuditEvent, transitionRun } from "./runs";
 import type { CommandIntent } from "./types";
 import { makeMockDb, type MockDbHandle } from "../test-utils/mock-d1";
 
@@ -72,5 +72,69 @@ describe("getRunByCorrelationId", () => {
     const { db } = makeMockDb();
     const found = await getRunByCorrelationId(db, "missing");
     expect(found).toBeNull();
+  });
+});
+
+describe("listRunsByState", () => {
+  it("returns rows matching state in requested_at ASC order, respects limit", async () => {
+    const { db } = makeMockDb();
+    const r1 = await createRun(db, {
+      id: "ts-standup", actor_id: "f", actor_kind: "founder", auth_mode: "cf_access",
+      correlation_id: "c-list-1", payload: {},
+    }, 1000);
+    const r2 = await createRun(db, {
+      id: "ts-standup", actor_id: "f", actor_kind: "founder", auth_mode: "cf_access",
+      correlation_id: "c-list-2", payload: {},
+    }, 2000);
+    const r3 = await createRun(db, {
+      id: "ts-standup", actor_id: "f", actor_kind: "founder", auth_mode: "cf_access",
+      correlation_id: "c-list-3", payload: {},
+    }, 3000);
+    // Bump r2 out of "created"
+    await transitionRun(db, r2.id, "accepted", 2500);
+
+    const found = await listRunsByState(db, "created", null, 10);
+    expect(found.map((r) => r.id)).toEqual([r1.id, r3.id]);
+    expect((found[0].requested_at as number)).toBeLessThan(found[1].requested_at as number);
+
+    // Limit enforcement — only the first row (ASC) returned
+    const limited = await listRunsByState(db, "created", null, 1);
+    expect(limited).toHaveLength(1);
+    expect(limited[0].id).toBe(r1.id);
+  });
+
+  it("commandIds filter returns only matching command_ids", async () => {
+    const { db } = makeMockDb();
+    const standupRun = await createRun(db, {
+      id: "ts-standup", actor_id: "f", actor_kind: "founder", auth_mode: "cf_access",
+      correlation_id: "c-f-1", payload: {},
+    }, 1000);
+    const briefRun = await createRun(db, {
+      id: "ts-generate-brief", actor_id: "f", actor_kind: "founder", auth_mode: "cf_access",
+      correlation_id: "c-f-2", payload: {},
+    }, 1500);
+    const traceRun = await createRun(db, {
+      id: "ts-trace-signal", actor_id: "f", actor_kind: "founder", auth_mode: "cf_access",
+      correlation_id: "c-f-3", payload: {},
+    }, 2000);
+
+    // Filter to only ts-standup + ts-generate-brief
+    const downstream = await listRunsByState(db, "created", ["ts-standup", "ts-generate-brief"], 10);
+    const ids = downstream.map((r) => r.command_id);
+    expect(ids).toContain("ts-standup");
+    expect(ids).toContain("ts-generate-brief");
+    expect(ids).not.toContain("ts-trace-signal");
+    // ordering still ASC by requested_at
+    expect(downstream[0].id).toBe(standupRun.id);
+    expect(downstream[1].id).toBe(briefRun.id);
+
+    // Empty array short-circuits to no results
+    const empty = await listRunsByState(db, "created", [], 10);
+    expect(empty).toEqual([]);
+
+    // Single-element filter
+    const only = await listRunsByState(db, "created", ["ts-trace-signal"], 10);
+    expect(only).toHaveLength(1);
+    expect(only[0].id).toBe(traceRun.id);
   });
 });

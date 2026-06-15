@@ -114,6 +114,26 @@ export function makeMockDb(): MockDbHandle {
               }
               return null;
             },
+            async all<T = Record<string, unknown>>(): Promise<{ results: T[] }> {
+              // Phase B: listRunsByState — SELECT * FROM command_runs WHERE state = ? [AND command_id IN (...)] ORDER BY requested_at ASC LIMIT ?
+              if (sql.includes("SELECT") && sql.includes("command_runs") && sql.includes("WHERE state")) {
+                const state = args[0] as string;
+                const limit = (args.filter((a) => typeof a === "number").pop() as number | undefined) ?? 50;
+                let commandIdFilter: Set<string> | null = null;
+                if (sql.includes("command_id IN")) {
+                  // args layout: state, ...commandIds, limit
+                  const middleArgs = args.slice(1, -1).filter((a) => typeof a === "string") as string[];
+                  commandIdFilter = new Set(middleArgs);
+                }
+                const matches = Array.from(runs.values())
+                  .filter((r) => r.state === state)
+                  .filter((r) => (commandIdFilter ? commandIdFilter.has(r.command_id as string) : true))
+                  .sort((a, b) => (a.requested_at as number) - (b.requested_at as number))
+                  .slice(0, limit);
+                return { results: matches as T[] };
+              }
+              return { results: [] };
+            },
           };
         },
       };

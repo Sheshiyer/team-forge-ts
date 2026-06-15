@@ -20,9 +20,16 @@ describe("command registry", () => {
     expect(ids).toContain("ts-approve-synapse");
   });
 
-  it("every command declares route — downstream/local/worker-only", () => {
+  it("every command declares route — downstream_multica or local_worker", () => {
     for (const spec of COMMAND_REGISTRY) {
-      expect(["downstream_multica", "local_worker", "downstream_paperclip"]).toContain(spec.route);
+      expect(["downstream_multica", "local_worker"]).toContain(spec.route);
+    }
+  });
+
+  it("every command declares a non-empty multica_agent", () => {
+    for (const spec of COMMAND_REGISTRY) {
+      expect(typeof spec.multica_agent).toBe("string");
+      expect(spec.multica_agent.length).toBeGreaterThan(0);
     }
   });
 });

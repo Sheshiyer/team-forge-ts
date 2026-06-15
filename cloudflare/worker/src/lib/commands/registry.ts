@@ -12,6 +12,8 @@ export interface CommandSpec {
   allowed_actor_kinds: ActorKind[];
   /** Where execution happens. */
   route: CommandRoute;
+  /** MultiCA agent that handles this command — used by the cambium-bridge teamforge-consumer to pick the assignee. */
+  multica_agent: string;
   /** Whether this command mutates state. */
   mutates: boolean;
   /** State owner — teamforge owns the run record; route owns the execution leg. */
@@ -22,9 +24,10 @@ export const COMMAND_REGISTRY: CommandSpec[] = [
   {
     id: "ts-standup",
     label: "Standup",
-    description: "Aggregate read-only standup data from a project's dedicated Paperclip agent.",
+    description: "Aggregate read-only standup data via the Hermes daily-standup autopilot.",
     allowed_actor_kinds: ["founder", "cofounder"],
     route: "downstream_multica",
+    multica_agent: "Hermes",
     mutates: false,
     state_owner: "teamforge",
   },
@@ -33,7 +36,8 @@ export const COMMAND_REGISTRY: CommandSpec[] = [
     label: "Summon Agent",
     description: "Bring a specific agent into a project/client branch.",
     allowed_actor_kinds: ["founder", "cofounder"],
-    route: "downstream_paperclip",
+    route: "downstream_multica",
+    multica_agent: "CEO",
     mutates: true,
     state_owner: "teamforge",
   },
@@ -42,7 +46,8 @@ export const COMMAND_REGISTRY: CommandSpec[] = [
     label: "Approve Synapse",
     description: "Approve a pending decision gate (e.g. PR review).",
     allowed_actor_kinds: ["founder", "cofounder"],
-    route: "downstream_paperclip",
+    route: "downstream_multica",
+    multica_agent: "CEO",
     mutates: true,
     state_owner: "teamforge",
   },
@@ -52,6 +57,7 @@ export const COMMAND_REGISTRY: CommandSpec[] = [
     description: "Read-only: surface recent events for a node.",
     allowed_actor_kinds: ["founder", "cofounder", "employee"],
     route: "local_worker",
+    multica_agent: "Scientist",
     mutates: false,
     state_owner: "teamforge",
   },
@@ -60,7 +66,8 @@ export const COMMAND_REGISTRY: CommandSpec[] = [
     label: "Generate Brief",
     description: "Synthesize a tactical brief from node context.",
     allowed_actor_kinds: ["founder", "cofounder"],
-    route: "downstream_paperclip",
+    route: "downstream_multica",
+    multica_agent: "Synthesist",
     mutates: false,
     state_owner: "teamforge",
   },

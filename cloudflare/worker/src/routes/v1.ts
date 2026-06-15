@@ -33,7 +33,7 @@ import {
   updateOnboardingStep,
 } from "../lib/plexus-session";
 import { handleGetTimeEntries, handlePostTimeEntries } from "./time-entries";
-import { handleCommandIntent, handleGetCommandRun } from "./commands";
+import { handleCommandIntent, handleGetCommandRun, handleListCommandRuns } from "./commands";
 import { handleCommandsCallback } from "./commands-callback";
 import { handleBackfillClockify } from "./clockify-backfill";
 import { handleAgentFeedExport, handleProjectCloseout, handleProjectScaffold } from "./agent-feed";
@@ -392,6 +392,16 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
     const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleCommandIntent(env, request);
+  }
+  // Phase B: queue interface — the cambium-bridge teamforge-consumer polls this
+  // every ~5s to pick up new runs (state=created, route=downstream_multica),
+  // then dispatches via `multica issue assign` and posts back via the Phase 2
+  // callback route. Must be matched BEFORE the regex below so the literal
+  // /v1/commands/runs path doesn't fall through unmatched.
+  if (method === "GET" && pathname === "/v1/commands/runs") {
+    const authFailure = requireAppOrInternalAuth();
+    if (authFailure) return authFailure;
+    return handleListCommandRuns(env, url);
   }
   // Phase 2: MultiCA result callback. Auth is the HMAC verifier inside the handler
   // (NOT requireAppOrInternalAuth) because MultiCA's ECS task role has no CF

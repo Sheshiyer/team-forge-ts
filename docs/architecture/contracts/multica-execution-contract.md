@@ -4,10 +4,37 @@
 
 ## Scope
 
-For every run whose registry route is `downstream_multica`, MultiCA executes
-under its AWS ECS task role and posts the result back to TeamForge via
-`POST /v1/commands/runs/:id/result`. No `safvr` IAM user, no Telegram
-dispatcher involvement.
+For every run whose registry route is `downstream_multica`, the
+**cambium-bridge teamforge-consumer** (running on the Mac mini under launchd,
+`ai.thoughtseed.teamforge-consumer.plist`) polls the Worker queue, dispatches
+the work to a MultiCA agent (via `multica issue assign` or the upstream-bridge
+`/v1/bridge/ingest` endpoint), waits for the agent's terminal comment, then
+posts the result back to TeamForge via `POST /v1/commands/runs/:id/result`.
+
+No `safvr` IAM user, no Telegram dispatcher involvement, no AWS ECS task role.
+The Worker is dumb intake + state-of-record; the consumer owns dispatch.
+
+### Queue Interface — `GET /v1/commands/runs?state=&route=&limit=`
+
+The consumer polls this endpoint every ~5s (configurable via
+`teamforgeConsumerIntervalMs` in cambium-bridge config). Auth is the same
+`requireAppOrInternalAuth` chain used by other commands routes — typically
+the `X-TeamForge-Internal-Secret` header carrying `TF_INTERNAL_SHARED_SECRET`.
+
+| Query param | Required | Notes |
+|---|---|---|
+| `state` | yes | One of `created|accepted|in_progress|succeeded|failed|partial|cancelled` |
+| `route` | no | `downstream_multica` or `local_worker`. Resolved via registry → `command_id IN (...)` filter |
+| `limit` | no | Positive integer, defaults to 50, capped at 200 |
+
+Response: `{ ok: true, data: { runs: CommandRun[], count: number } }`,
+runs sorted ascending by `requested_at`. The consumer's typical poll is
+`?state=created&route=downstream_multica&limit=20`.
+
+Each `CommandSpec` in the registry now carries a `multica_agent` field
+(`"Hermes"` for `ts-standup`, `"CEO"` for `ts-summon-agent`/`ts-approve-synapse`,
+`"Synthesist"` for `ts-generate-brief`, `"Scientist"` for `ts-trace-signal`).
+The consumer reads this to pick the assignee when calling `multica issue assign`.
 
 ## Callback Envelope
 
@@ -105,8 +132,15 @@ curl -X POST https://teamforge-api.sheshnarayan-iyer.workers.dev/v1/commands/run
   extending `PlexusPrincipal` with `actor_kind` and is a recommended but
   non-blocking follow-up — Phase 2's runtime is safe today because all
   registered commands share the founder/cofounder tier.
-- **Phase 3** wires `downstream_paperclip` execution to `paperclip-client.ts`
-  inside the Worker; for `downstream_multica` runs the Worker only writes
-  state — MultiCA's pickup of `created` runs is owned by MultiCA itself
-  (separate AWS infra; mocked end-to-end via `tools/mock-multica.sh` in
-  Phase 3 Task 3.10).
+- **Paperclip retirement (Phase A, 2026-06-15)** removed the
+  `downstream_paperclip` route and the in-Worker `paperclip-client.ts` /
+  `dispatch.ts` glue. All Phase 3 commands that previously took that path
+  (`ts-summon-agent`, `ts-approve-synapse`, `ts-generate-brief`) are now
+  routed `downstream_multica` with an explicit `multica_agent` field on
+  their registry spec.
+- **Dispatch ownership (Phase B, 2026-06-16)** moved to the cambium-bridge
+  `teamforge-consumer` on the Mac mini. The Worker is dumb intake; the
+  consumer polls `GET /v1/commands/runs?state=created&route=downstream_multica`
+  every ~5s, calls `multica issue assign --to <multica_agent>`, polls the
+  MultiCA issue until terminal state, and posts back via this contract's
+  callback route. No AWS infra dependency.
