@@ -2,6 +2,7 @@ import type { Env, D1DatabaseLike } from "../lib/env";
 import { jsonError, jsonOk } from "../lib/response";
 import { getCommandSpec, isAuthorized } from "../lib/commands/registry";
 import { createRun, getRunById, recordAuditEvent, transitionRun } from "../lib/commands/runs";
+import { dispatchRun } from "../lib/commands/dispatch";
 import type { ActorKind, AuthMode, CommandIntent } from "../lib/commands/types";
 
 const ACTOR_KINDS = new Set<ActorKind>([
@@ -147,15 +148,21 @@ export async function handleCommandIntent(env: Env, request: Request): Promise<R
     );
 
     // local_worker commands transition to accepted immediately.
-    // downstream_multica / downstream_paperclip commands stay in "created" until callback (Phase 2/3).
+    // downstream_paperclip commands dispatch synchronously via paperclip-client.
+    // downstream_multica commands stay in "created" until callback (Phase 2 result route).
     if (spec.route === "local_worker") {
       await transitionRun(db, run.id, "accepted", now);
+    } else if (spec.route === "downstream_paperclip") {
+      // Fire-and-await dispatch. dispatchRun never throws; failures become
+      // state=failed rows. We await so the UI's first GET reflects the
+      // dispatched state, not just `created`.
+      await dispatchRun(env, run);
     }
 
-    return jsonOk(
-      { run_id: run.id, state: spec.route === "local_worker" ? "accepted" : "created" },
-      { status: 201 },
-    );
+    // After dispatch (if any), re-read run to get the latest state for the response.
+    const finalRun = await getRunById(db, run.id);
+    const responseState = finalRun?.state ?? (spec.route === "local_worker" ? "accepted" : "created");
+    return jsonOk({ run_id: run.id, state: responseState }, { status: 201 });
   } catch {
     return jsonError(
       { code: "internal_error", message: "command pipeline failed", retryable: true },
