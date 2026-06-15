@@ -75,4 +75,11 @@ export interface Env {
   TF_INTERNAL_SHARED_SECRET?: string;
   // Phase 7: Paperclip repo root for per-member provisioning
   TF_PAPERCLIP_REPO_ROOT?: string;
+
+  // Phase 3: Paperclip dedicated-agent listener (remote-safe).
+  // Paperclip remote-safe agent endpoint base URL. e.g. https://paperclip.thoughtseed.space
+  PAPERCLIP_REMOTE_BASE_URL?: string;
+  // JSON object mapping agent_id → bearer token. Configured via wrangler secret put.
+  // Matches the PAPERCLIP_AGENT_TOKENS env on the Paperclip listener.
+  PAPERCLIP_AGENT_TOKEN_MAP?: string;
 }
