@@ -42,6 +42,18 @@ import { handleGetCredentials } from "./credentials";
 import { handleGetNormalizationHistory, handleNormalizationApply, handleNormalizationPreview } from "./normalization";
 import { handleOtaCheck, handleOtaInstallEvent } from "./ota";
 import {
+  handleCloseRealtimeTrack,
+  handleEndRealtimeCall,
+  handleGetRealtimeMeeting,
+  handleGetRealtimeRoom,
+  handleGetRealtimeRooms,
+  handleJoinRealtimeRoom,
+  handleLeaveRealtimeCall,
+  handlePostRealtimeRoom,
+  handlePostRealtimeTrack,
+  handleRealtimeCloseout,
+} from "./realtime";
+import {
   handleGetClientProfile,
   handleGetClientProfiles,
   handleGetOnboardingFlows,
@@ -55,18 +67,6 @@ import {
   handlePutProject,
   handlePutProjectMappings,
 } from "./projects";
-import {
-  handleCloseRealtimeTrack,
-  handleEndRealtimeCall,
-  handleGetRealtimeMeeting,
-  handleGetRealtimeRoom,
-  handleGetRealtimeRooms,
-  handleJoinRealtimeRoom,
-  handleLeaveRealtimeCall,
-  handlePostRealtimeRoom,
-  handlePostRealtimeTrack,
-  handleRealtimeCloseout,
-} from "./realtime";
 import {
   createHandoff,
   getHandoffById,
@@ -688,6 +688,7 @@ async function buildBootstrapPayload(env: Env): Promise<Record<string, unknown>>
       connections: "live",
       sync: "live",
       teamSnapshot: "live",
+      realtime: "live",
       hulyNormalization: "live",
       ota: "live",
       handoffs: "live",
