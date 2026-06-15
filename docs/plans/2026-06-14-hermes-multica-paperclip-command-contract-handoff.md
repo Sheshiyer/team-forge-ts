@@ -180,3 +180,83 @@ Observations (non-blocking):
 - No tests exist for `plexus-session.ts` (445 lines of role + onboarding state machine). Logged as a follow-up; not a Phase 0 blocker.
 
 Phase 1 (command registry) can now begin against a clean baseline. See `docs/plans/2026-06-15-hermes-multica-paperclip-contract-impl.md`.
+
+## Phase 1 closure (2026-06-15)
+
+Command registry + run state machine + intake routes shipped end-to-end. Worker `47f5c8a1-3f2e-4aea-b580-27b41feefaad` deployed; migration `0010_command_runs.sql` applied to remote D1; `POST /v1/commands/intent` + `GET /v1/commands/runs/:id` return structured 401 on unauthenticated requests (route live, gating works). 25 vitest tests added across `types`, `registry`, `runs`, `commands` routes; worker typecheck clean.
+
+Contract doc: `docs/architecture/contracts/founder-command-registry.md`.
+
+## Phase 2 closure (2026-06-15)
+
+MultiCA callback contract shipped. Worker `d71e3b40-831d-4029-8d4b-cc4ecc30a8b3` deployed; `POST /v1/commands/runs/:id/result` returns 401 `missing_signature` on unsigned requests (HMAC gate verified); `MULTICA_CALLBACK_SHARED_SECRET` set in production with 32-byte random hex. 30 new vitest tests added across `callback`, `result-storage`, `auth-multica`, `commands-callback` route, and mock-d1 extensions (55 total).
+
+Contract doc: `docs/architecture/contracts/multica-execution-contract.md`.
+
+Idempotency rule locked: same `correlation_id + state` on a terminal envelope returns the existing run unchanged (no DB writes, no audit emit) — protects against MultiCA retry storms.
+
+## Phase 3 closure (2026-06-15)
+
+End-to-end `ts-standup` flow shipped: Hermes UI → Worker `/v1/commands/intent` → (mock MultiCA dispatcher script) → Paperclip listener `/api/agents/:id/standup` → Worker callback `/v1/commands/runs/:id/result` → Hermes UI polls + membrane displays state machine progression. Worker `e1b0f929-9f2c-4106-bf9b-99de1b70bae3` deployed.
+
+Contract doc: `docs/architecture/contracts/paperclip-agent-contract.md`.
+
+Acceptance check against original brief (each criterion + evidence):
+
+```
+[OK] Hermes is not canonical state owner
+     command_runs lives in cloudflare/worker D1 (migration 0010). Tauri side
+     has no command_runs table. Tauri commands post_command_intent /
+     get_command_run are thin proxies to the Worker; no local persistence.
+
+[OK] Every MultiCA execution has a TeamForge run record
+     POST /v1/commands/runs/:id/result requires an existing run row in D1
+     (getRunById returns null → 404 not_found). Callback cannot create state
+     out of band. See cloudflare/worker/src/routes/commands-callback.ts.
+
+[OK] Every Paperclip coordination has actor/target/correlation/audit
+     validateIntent requires actor_id, actor_kind, correlation_id; target_kind
+     /target_id are stored. command_received audit event captures the full
+     payload (incl. correlation_id). dispatch.ts emits downstream_agent_*
+     events. Result-storage emits result_received / result_delivered / failure
+     / partial_failure per terminal state.
+
+[OK] Paperclip local scripts not required for MultiCA to coordinate
+     Listener now exposes POST /api/agents/:agent_id/standup with per-agent
+     bearer tokens. MultiCA hits HTTP directly. Legacy hermes-tg-dispatcher.sh
+     and other local CLI paths are unchanged but not required for ts-standup.
+
+[OK] safvr not in runtime
+     No safvr references in either repo's runtime code. Auth surfaces:
+     Cloudflare Access JWT (Phase 0), TF_INTERNAL_SHARED_SECRET (m2m),
+     TF_CREDENTIAL_ENVELOPE_KEY (app bearer), MULTICA_CALLBACK_SHARED_SECRET
+     (HMAC over body), PAPERCLIP_AGENT_TOKEN_MAP (per-agent bearer).
+
+[OK] First connected prototype is read-heavy standup
+     ts-standup is `mutates: false` in registry.ts; route is downstream_multica
+     (no UI-side state change). Result is read-only structured data.
+
+[OK] Local/deployed truth explicit
+     Phase 0 drift closure documented above; each of Phase 1, 2, 3 deployed
+     before the next phase began. Worker versions and migration IDs recorded.
+```
+
+Final verification (per brief's checklist):
+- `pnpm build` → succeeded (3.10s, pre-existing chunk-size warning only)
+- `pnpm -C cloudflare/worker check` → exit 0 (excluding user's untracked `realtime.ts` WIP)
+- `cargo check` → exit 0 (3 pre-existing dead-code warnings)
+- `/v1/bootstrap` → 200 with all bindings present
+- `/v1/commands/intent` → 401 `missing_authorization` (route live)
+- `/v1/commands/runs/:id/result` → 401 `missing_signature` (HMAC gate verified)
+- Sibling repo has 3 Phase 3 commits on main, listener standup endpoint reachable on port 3100
+
+Test counts: Phase 1 = 25 → Phase 2 = 55 → Phase 3 = 74 (worker) + 8 (sibling listener). All passing.
+
+**Original brief is now fully implemented.** Read-heavy prototype is the proven wire end-to-end; mutating commands (`ts-summon-agent`, `ts-approve-synapse`, `ts-generate-brief`) and real MultiCA ECS pickup land in a follow-up plan. Telegram dispatcher remains untouched per the brief's explicit constraint.
+
+Deferred for follow-up (documented, non-blocking):
+- Close `actor_kind` trust gap by extending `PlexusPrincipal` (Phase 2 contract doc)
+- Production secrets `PAPERCLIP_REMOTE_BASE_URL` and `PAPERCLIP_AGENT_TOKEN_MAP` (not set in current deploy — `downstream_paperclip` routes will fail until configured; `ts-standup` is `downstream_multica` and unaffected)
+- Replace stub `buildStandupResponse` with real Huly/GitHub/Slack/Clockify aggregation
+- Real MultiCA ECS pickup loop (mocked by `cloudflare/worker/tools/mock-multica.sh`)
+- Token rotation surface for per-agent bearers
