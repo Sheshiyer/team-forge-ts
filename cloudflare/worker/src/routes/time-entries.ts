@@ -1,6 +1,7 @@
 import type { Env } from "../lib/env";
 import { execute, queryAll, now } from "../lib/db";
 import { jsonError, jsonOk } from "../lib/response";
+import type { PlexusPrincipal } from "../lib/plexus-session";
 
 interface TimeEntryInput {
   id: string;
@@ -18,7 +19,11 @@ interface TimeEntryInput {
  * Body: { workspaceId, entries: TimeEntryInput[] }. Upsert keyed on entry id
  * (client-generated UUID) so re-sends are safe. App-auth (bearer).
  */
-export async function handlePostTimeEntries(env: Env, request: Request): Promise<Response> {
+export async function handlePostTimeEntries(
+  env: Env,
+  request: Request,
+  principal?: PlexusPrincipal | null,
+): Promise<Response> {
   if (!env.TEAMFORGE_DB) {
     return jsonError({ code: "db_unavailable", message: "Database not available.", retryable: true }, 503);
   }
@@ -29,7 +34,7 @@ export async function handlePostTimeEntries(env: Env, request: Request): Promise
     return jsonError({ code: "bad_request", message: "Invalid JSON body.", retryable: false }, 400);
   }
 
-  const workspaceId = (body.workspaceId ?? body.workspace_id ?? "").trim();
+  const workspaceId = principal?.workspaceId ?? (body.workspaceId ?? body.workspace_id ?? "").trim();
   if (!workspaceId) {
     return jsonError({ code: "missing_workspace", message: "workspaceId is required.", retryable: false }, 400);
   }
@@ -55,7 +60,7 @@ export async function handlePostTimeEntries(env: Env, request: Request): Promise
          updated_at = excluded.updated_at`,
       e.id,
       workspaceId,
-      e.employeeId ?? null,
+      principal?.role === "employee" ? principal.employeeId : e.employeeId ?? null,
       e.projectId ?? null,
       e.source ?? "plexus",
       e.description ?? null,
@@ -74,12 +79,16 @@ export async function handlePostTimeEntries(env: Env, request: Request): Promise
 /**
  * GET /v1/time-entries?workspace_id=&employee_id=&from=&to= — read back entries.
  */
-export async function handleGetTimeEntries(env: Env, url: URL): Promise<Response> {
+export async function handleGetTimeEntries(
+  env: Env,
+  url: URL,
+  principal?: PlexusPrincipal | null,
+): Promise<Response> {
   if (!env.TEAMFORGE_DB) {
     return jsonError({ code: "db_unavailable", message: "Database not available.", retryable: true }, 503);
   }
-  const workspaceId = url.searchParams.get("workspace_id");
-  const employeeId = url.searchParams.get("employee_id");
+  const workspaceId = principal?.workspaceId ?? url.searchParams.get("workspace_id");
+  const employeeId = principal?.role === "employee" ? principal.employeeId : url.searchParams.get("employee_id");
   const from = url.searchParams.get("from") ?? "1970-01-01";
   const to = url.searchParams.get("to") ?? "2999-12-31";
 

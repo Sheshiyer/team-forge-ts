@@ -23,6 +23,15 @@ import type { Env } from "../lib/env";
 import { requireBearerAuth, requireInternalAuth } from "../lib/auth";
 import { jsonError, jsonNotImplemented, jsonOk } from "../lib/response";
 import { verifyAccessJwt } from "../lib/access";
+import {
+  buildPlexusSession,
+  getAdminDemoOverview,
+  getPreferences,
+  resolvePlexusPrincipal,
+  setPreferences,
+  updateAdminDemoOnboarding,
+  updateOnboardingStep,
+} from "../lib/plexus-session";
 import { handleGetTimeEntries, handlePostTimeEntries } from "./time-entries";
 import { handleBackfillClockify } from "./clockify-backfill";
 import { handleAgentFeedExport, handleProjectCloseout, handleProjectScaffold } from "./agent-feed";
@@ -53,7 +62,7 @@ import {
 } from "../lib/project-registry";
 import { handleGetSyncJob, handleGetSyncRuns, handlePostSyncJob } from "./sync";
 import { handleGetTeamSnapshot, handlePostTeamRefresh } from "./team";
-import { queryFirst, queryAll, execute } from "../lib/db";
+import { queryFirst, queryAll } from "../lib/db";
 
 interface DatabaseStatus {
   available: boolean;
@@ -67,6 +76,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   // TF_ACCESS_AUD are set, so a valid Cf-Access-Jwt-Assertion resolves to the caller's email.
   // Returns null for m2m callers (workers.dev path, no JWT) — they use internal/Bearer below.
   const accessIdentity = await verifyAccessJwt(request, env);
+  const plexusPrincipal = await resolvePlexusPrincipal(env, accessIdentity);
 
   // Combined auth for app routes — three tiers so neither Plexus nor Hermes regresses:
   //   1) a verified Cloudflare Access identity, else
@@ -74,7 +84,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   //   3) the normal app Bearer (TF_CREDENTIAL_ENVELOPE_KEY).
   // The request must still pass the upstream Cloudflare Access policy (e.g. via IP bypass on allowed machines).
   const requireAppOrInternalAuth = () => {
-    if (accessIdentity) return null; // Cloudflare Access identity verified → authorized
+    if (plexusPrincipal) return null; // Cloudflare Access identity verified + registered in TeamForge → authorized
     const internalFailure = requireInternalAuth(request, env.TF_INTERNAL_SHARED_SECRET);
     if (internalFailure) {
       return internalFailure; // internal header present but invalid
@@ -148,7 +158,17 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
         401,
       );
     }
-    return jsonOk({ email: accessIdentity.email, access: true });
+    if (!plexusPrincipal) {
+      return jsonError(
+        {
+          code: "identity_not_registered",
+          message: `No active Plexus identity is registered for ${accessIdentity.email}.`,
+          retryable: false,
+        },
+        404,
+      );
+    }
+    return jsonOk(await buildPlexusSession(env, plexusPrincipal));
   }
 
   // Time entries (Plexus employee tracker → canonical store) + one-time Clockify cutover backfill
@@ -160,18 +180,21 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   if (method === "POST" && pathname === "/v1/time-entries") {
     const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
-    return handlePostTimeEntries(env, request);
+    return handlePostTimeEntries(env, request, plexusPrincipal);
   }
   if (method === "GET" && pathname === "/v1/time-entries") {
     const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
-    return handleGetTimeEntries(env, url);
+    return handleGetTimeEntries(env, url, plexusPrincipal);
   }
 
   // Projects
   if (method === "GET" && pathname === "/v1/projects") {
     const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
+    if (plexusPrincipal && !url.searchParams.has("workspace_id")) {
+      url.searchParams.set("workspace_id", plexusPrincipal.workspaceId);
+    }
     return handleGetProjects(env, url);
   }
   const projectMatch = pathname.match(/^\/v1\/projects\/([^/]+)$/);
@@ -285,6 +308,9 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   if (method === "GET" && pathname === "/v1/team/snapshot") {
     const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
+    if (plexusPrincipal && !url.searchParams.has("workspace_id")) {
+      url.searchParams.set("workspace_id", plexusPrincipal.workspaceId);
+    }
     return handleGetTeamSnapshot(env, url);
   }
   if (method === "POST" && pathname === "/v1/team/refresh") {
@@ -360,28 +386,16 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   // config) so the Plexus client can run setup-member.sh without storing
   // device secrets. Requires a verified Cloudflare Access identity.
   if (method === "GET" && pathname === "/v1/member/provision") {
-    if (!accessIdentity) {
+    if (!plexusPrincipal) {
       return jsonError(
-        { code: "access_identity_required", message: "Cloudflare Access identity required for provisioning.", retryable: false },
+        { code: "access_identity_required", message: "Registered Cloudflare Access identity required for provisioning.", retryable: false },
         401,
       );
     }
-    const email = accessIdentity.email.toLowerCase();
-    const employee = await queryFirst(
-      env.TEAMFORGE_DB!,
-      "SELECT id, display_name, workspace_id FROM employees WHERE LOWER(email) = ? AND is_active = 1 LIMIT 1",
-      email,
-    );
-    if (!employee) {
-      return jsonError(
-        { code: "employee_not_found", message: `No active employee with email ${email}.`, retryable: false },
-        404,
-      );
-    }
     return jsonOk({
-      memberId: employee.id,
-      memberName: employee.display_name,
-      workspaceId: employee.workspace_id,
+      memberId: plexusPrincipal.employeeId ?? plexusPrincipal.identityId,
+      memberName: plexusPrincipal.displayName,
+      workspaceId: plexusPrincipal.workspaceId,
       paperclipRepoRoot: env.TF_PAPERCLIP_REPO_ROOT || undefined,
       multica: {
         apiUrl: env.MULTICA_API_URL || undefined,
@@ -398,77 +412,107 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // ── Phase 9: Member Preferences ─────────────────────────────────
   if (method === "PUT" && pathname === "/v1/member/preferences") {
-    if (!accessIdentity) {
+    if (!plexusPrincipal) {
       return jsonError(
-        { code: "access_identity_required", message: "Cloudflare Access identity required.", retryable: false },
+        { code: "access_identity_required", message: "Registered Cloudflare Access identity required.", retryable: false },
         401,
-      );
-    }
-    const email = accessIdentity.email.toLowerCase();
-    const employee = await queryFirst(
-      env.TEAMFORGE_DB!,
-      "SELECT id, workspace_id FROM employees WHERE LOWER(email) = ? AND is_active = 1 LIMIT 1",
-      email,
-    );
-    if (!employee) {
-      return jsonError(
-        { code: "employee_not_found", message: `No active employee with email ${email}.`, retryable: false },
-        404,
       );
     }
     const body = (await request.json()) as Record<string, unknown>;
-    const prefsJson = JSON.stringify(body);
-    const now = new Date().toISOString();
-    await execute(
-      env.TEAMFORGE_DB!,
-      `INSERT INTO employee_preferences (id, employee_id, workspace_id, preferences_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(employee_id) DO UPDATE SET
-         preferences_json = excluded.preferences_json,
-         updated_at = excluded.updated_at`,
-      [crypto.randomUUID(), employee.id, employee.workspace_id, prefsJson, now, now],
-    );
-    return jsonOk({ saved: true, employeeId: employee.id });
+    await setPreferences(env, plexusPrincipal, body);
+    return jsonOk({ saved: true, identityId: plexusPrincipal.identityId, employeeId: plexusPrincipal.employeeId });
   }
 
   if (method === "GET" && pathname === "/v1/member/preferences") {
-    if (!accessIdentity) {
+    if (!plexusPrincipal) {
       return jsonError(
-        { code: "access_identity_required", message: "Cloudflare Access identity required.", retryable: false },
+        { code: "access_identity_required", message: "Registered Cloudflare Access identity required.", retryable: false },
         401,
       );
     }
-    const email = accessIdentity.email.toLowerCase();
-    const row = await queryFirst<{ preferences_json?: string }>(
-      env.TEAMFORGE_DB!,
-      `SELECT p.preferences_json
-       FROM employee_preferences p
-       JOIN employees e ON e.id = p.employee_id
-       WHERE LOWER(e.email) = ? AND e.is_active = 1
-       LIMIT 1`,
-      email,
-    );
-    if (!row || !row.preferences_json) return jsonOk({});
-    try { return jsonOk(JSON.parse(row.preferences_json)); } catch { return jsonOk({}); }
+    return jsonOk(await getPreferences(env, plexusPrincipal));
+  }
+
+  if (method === "PUT" && pathname === "/v1/member/onboarding") {
+    if (!plexusPrincipal) {
+      return jsonError(
+        { code: "access_identity_required", message: "Registered Cloudflare Access identity required.", retryable: false },
+        401,
+      );
+    }
+    const body = (await request.json()) as { stepId?: string; state?: string; metadata?: Record<string, unknown> };
+    if (!body.stepId || !body.state) {
+      return jsonError(
+        { code: "missing_onboarding_fields", message: "stepId and state are required.", retryable: false },
+        400,
+      );
+    }
+    try {
+      return jsonOk(await updateOnboardingStep(env, plexusPrincipal, body.stepId, body.state, body.metadata ?? {}));
+    } catch (err: any) {
+      return jsonError({ code: "invalid_onboarding_state", message: err?.message ?? "Invalid onboarding state.", retryable: false }, 400);
+    }
+  }
+
+  if (method === "GET" && pathname === "/v1/admin/demo") {
+    if (!plexusPrincipal) {
+      return jsonError(
+        { code: "access_identity_required", message: "Registered Cloudflare Access identity required.", retryable: false },
+        401,
+      );
+    }
+    if (plexusPrincipal.role !== "admin") {
+      return jsonError(
+        { code: "admin_required", message: "Admin role required.", retryable: false },
+        403,
+      );
+    }
+    return jsonOk(await getAdminDemoOverview(env, plexusPrincipal));
+  }
+
+  if (method === "PUT" && pathname === "/v1/admin/demo/onboarding") {
+    if (!plexusPrincipal) {
+      return jsonError(
+        { code: "access_identity_required", message: "Registered Cloudflare Access identity required.", retryable: false },
+        401,
+      );
+    }
+    if (plexusPrincipal.role !== "admin") {
+      return jsonError(
+        { code: "admin_required", message: "Admin role required.", retryable: false },
+        403,
+      );
+    }
+    const body = (await request.json()) as {
+      identityId?: string;
+      stepId?: string;
+      state?: string;
+      metadata?: Record<string, unknown>;
+    };
+    if (!body.identityId || !body.stepId || !body.state) {
+      return jsonError(
+        { code: "missing_admin_onboarding_fields", message: "identityId, stepId, and state are required.", retryable: false },
+        400,
+      );
+    }
+    try {
+      return jsonOk(await updateAdminDemoOnboarding(env, plexusPrincipal, body.identityId, body.stepId, body.state, body.metadata ?? {}));
+    } catch (err: any) {
+      return jsonError({ code: "invalid_admin_onboarding_state", message: err?.message ?? "Invalid onboarding state.", retryable: false }, 400);
+    }
   }
 
   // ── Phase 8: Member KPI Summary (canonical D1 data) ─────────────
   if (method === "GET" && pathname === "/v1/member/kpi") {
-    if (!accessIdentity) {
+    if (!plexusPrincipal) {
       return jsonError(
-        { code: "access_identity_required", message: "Cloudflare Access identity required.", retryable: false },
+        { code: "access_identity_required", message: "Registered Cloudflare Access identity required.", retryable: false },
         401,
       );
     }
-    const email = accessIdentity.email.toLowerCase();
-    const emp = await queryFirst<{ id: string; workspace_id: string }>(
-      env.TEAMFORGE_DB!,
-      "SELECT id, workspace_id FROM employees WHERE LOWER(email) = ? AND is_active = 1 LIMIT 1",
-      email,
-    );
-    if (!emp) {
+    if (!plexusPrincipal.employeeId && plexusPrincipal.role !== "admin") {
       return jsonError(
-        { code: "employee_not_found", message: `No active employee with email ${email}.`, retryable: false },
+        { code: "employee_not_found", message: `No active employee is linked to ${plexusPrincipal.email}.`, retryable: false },
         404,
       );
     }
@@ -479,20 +523,31 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
     const todaySeconds = await queryFirst<{ total: number }>(
       env.TEAMFORGE_DB!,
-      "SELECT COALESCE(SUM(duration_seconds),0) as total FROM time_entries WHERE employee_id = ? AND start_time >= ? AND start_time < ?",
-      [emp.id, `${today}T00:00:00Z`, `${today}T23:59:59Z`],
+      `SELECT COALESCE(SUM(duration_seconds),0) as total FROM time_entries
+       WHERE workspace_id = ? ${plexusPrincipal.role === "employee" ? "AND employee_id = ?" : ""}
+         AND start_time >= ? AND start_time < ?`,
+      ...(plexusPrincipal.role === "employee"
+        ? [plexusPrincipal.workspaceId, plexusPrincipal.employeeId, `${today}T00:00:00Z`, `${today}T23:59:59Z`]
+        : [plexusPrincipal.workspaceId, `${today}T00:00:00Z`, `${today}T23:59:59Z`]),
     );
     const weekSeconds = await queryFirst<{ total: number }>(
       env.TEAMFORGE_DB!,
-      "SELECT COALESCE(SUM(duration_seconds),0) as total FROM time_entries WHERE employee_id = ? AND start_time >= ? AND start_time < ?",
-      [emp.id, `${ws}T00:00:00Z`, `${today}T23:59:59Z`],
+      `SELECT COALESCE(SUM(duration_seconds),0) as total FROM time_entries
+       WHERE workspace_id = ? ${plexusPrincipal.role === "employee" ? "AND employee_id = ?" : ""}
+         AND start_time >= ? AND start_time < ?`,
+      ...(plexusPrincipal.role === "employee"
+        ? [plexusPrincipal.workspaceId, plexusPrincipal.employeeId, `${ws}T00:00:00Z`, `${today}T23:59:59Z`]
+        : [plexusPrincipal.workspaceId, `${ws}T00:00:00Z`, `${today}T23:59:59Z`]),
     );
     const projectBreakdown = await queryAll<{ project_id: string; total: number }>(
       env.TEAMFORGE_DB!,
       `SELECT project_id, SUM(duration_seconds) as total FROM time_entries
-       WHERE employee_id = ? AND start_time >= ? AND start_time < ?
+       WHERE workspace_id = ? ${plexusPrincipal.role === "employee" ? "AND employee_id = ?" : ""}
+         AND start_time >= ? AND start_time < ?
        GROUP BY project_id ORDER BY total DESC LIMIT 10`,
-      [emp.id, `${ws}T00:00:00Z`, `${today}T23:59:59Z`],
+      ...(plexusPrincipal.role === "employee"
+        ? [plexusPrincipal.workspaceId, plexusPrincipal.employeeId, `${ws}T00:00:00Z`, `${today}T23:59:59Z`]
+        : [plexusPrincipal.workspaceId, `${ws}T00:00:00Z`, `${today}T23:59:59Z`]),
     );
 
     return jsonOk({
