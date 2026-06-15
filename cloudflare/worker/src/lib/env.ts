@@ -83,4 +83,11 @@ export interface Env {
   // JSON object mapping agent_id → bearer token. Configured via wrangler secret put.
   // Matches the PAPERCLIP_AGENT_TOKENS env on the Paperclip listener.
   PAPERCLIP_AGENT_TOKEN_MAP?: string;
+
+  // Phase 14: Cloudflare Realtime broker. Media transport stays with
+  // Cloudflare; TeamForge only brokers app state and session metadata.
+  CF_REALTIME_APP_ID?: string;
+  CF_REALTIME_API_TOKEN?: string;
+  CF_REALTIME_APP_TOKEN?: string;
+  CF_REALTIME_API_BASE_URL?: string;
 }

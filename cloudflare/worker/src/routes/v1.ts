@@ -56,6 +56,18 @@ import {
   handlePutProjectMappings,
 } from "./projects";
 import {
+  handleCloseRealtimeTrack,
+  handleEndRealtimeCall,
+  handleGetRealtimeMeeting,
+  handleGetRealtimeRoom,
+  handleGetRealtimeRooms,
+  handleJoinRealtimeRoom,
+  handleLeaveRealtimeCall,
+  handlePostRealtimeRoom,
+  handlePostRealtimeTrack,
+  handleRealtimeCloseout,
+} from "./realtime";
+import {
   createHandoff,
   getHandoffById,
   listHandoffs,
@@ -319,6 +331,61 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
     const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handlePostTeamRefresh(env, request);
+  }
+
+  // Realtime workspace — Cloudflare Access identity required. Bearer/internal
+  // m2m callers cannot join rooms because media consent and participant audit
+  // are tied to a registered Plexus principal.
+  if (pathname.startsWith("/v1/realtime/")) {
+    if (!plexusPrincipal) {
+      return jsonError(
+        { code: "access_identity_required", message: "Registered Cloudflare Access identity required for realtime workspace.", retryable: false },
+        401,
+      );
+    }
+
+    if (method === "GET" && pathname === "/v1/realtime/rooms") {
+      return handleGetRealtimeRooms(env, url, plexusPrincipal);
+    }
+    if (method === "POST" && pathname === "/v1/realtime/rooms") {
+      return handlePostRealtimeRoom(env, request, plexusPrincipal);
+    }
+
+    const roomMatch = pathname.match(/^\/v1\/realtime\/rooms\/([^/]+)$/);
+    if (method === "GET" && roomMatch) {
+      return handleGetRealtimeRoom(env, decodeURIComponent(roomMatch[1]), plexusPrincipal);
+    }
+    const joinRoomMatch = pathname.match(/^\/v1\/realtime\/rooms\/([^/]+)\/join$/);
+    if (method === "POST" && joinRoomMatch) {
+      return handleJoinRealtimeRoom(env, request, decodeURIComponent(joinRoomMatch[1]), plexusPrincipal);
+    }
+
+    const tracksMatch = pathname.match(/^\/v1\/realtime\/calls\/([^/]+)\/tracks$/);
+    if (method === "POST" && tracksMatch) {
+      return handlePostRealtimeTrack(env, request, decodeURIComponent(tracksMatch[1]), plexusPrincipal);
+    }
+    const closeTrackMatch = pathname.match(/^\/v1\/realtime\/calls\/([^/]+)\/tracks\/([^/]+)\/close$/);
+    if (method === "POST" && closeTrackMatch) {
+      return handleCloseRealtimeTrack(env, decodeURIComponent(closeTrackMatch[1]), decodeURIComponent(closeTrackMatch[2]), plexusPrincipal);
+    }
+
+    const leaveCallMatch = pathname.match(/^\/v1\/realtime\/calls\/([^/]+)\/leave$/);
+    if (method === "POST" && leaveCallMatch) {
+      return handleLeaveRealtimeCall(env, request, decodeURIComponent(leaveCallMatch[1]), plexusPrincipal);
+    }
+    const endCallMatch = pathname.match(/^\/v1\/realtime\/calls\/([^/]+)\/end$/);
+    if (method === "POST" && endCallMatch) {
+      return handleEndRealtimeCall(env, decodeURIComponent(endCallMatch[1]), plexusPrincipal);
+    }
+    const closeoutMatch = pathname.match(/^\/v1\/realtime\/calls\/([^/]+)\/closeout$/);
+    if (method === "POST" && closeoutMatch) {
+      return handleRealtimeCloseout(env, request, decodeURIComponent(closeoutMatch[1]), plexusPrincipal);
+    }
+
+    const meetingMatch = pathname.match(/^\/v1\/realtime\/meetings\/([^/]+)$/);
+    if (method === "GET" && meetingMatch) {
+      return handleGetRealtimeMeeting(env, decodeURIComponent(meetingMatch[1]), plexusPrincipal);
+    }
   }
 
   // Huly normalization
