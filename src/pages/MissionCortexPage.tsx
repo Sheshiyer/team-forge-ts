@@ -4,7 +4,12 @@ import { CORTEX_LENSES } from "../lib/commandCortex/lensTypes";
 import { CORTEX_COMMANDS, sampleCortexGraph } from "../lib/commandCortex/sampleGraph";
 import { buildMissionGraph } from "../lib/commandCortex/buildMissionGraph";
 import { describeCommandStub } from "../lib/commandCortex/commandRules";
+import {
+  registryIdForShorthand,
+  TS_STANDUP_COMMAND_ID,
+} from "../lib/commandCortex/cortexToRegistry";
 import type { CortexGraph, CortexLensId } from "../lib/commandCortex/types";
+import type { FounderCommandIntent, FounderCommandRun } from "../lib/types";
 import MissionCortex from "../components/cortex/MissionCortex";
 import { useInvoke } from "../hooks/useInvoke";
 
@@ -45,10 +50,43 @@ export default function MissionCortexPage() {
     isTauriRuntime() ? "Awaiting live integration signals" : "Browser preview using sample graph",
   );
   const [graph, setGraph] = useState<CortexGraph>(sampleCortexGraph);
+  const [activeRun, setActiveRun] = useState<FounderCommandRun | null>(null);
+  const [activeRunLabel, setActiveRunLabel] = useState<string | null>(null);
 
   useEffect(() => {
     setActiveLens(routeLens);
   }, [routeLens]);
+
+  // Poll the active command run while it's in a non-terminal state. The
+  // 1500ms cadence mirrors the spec in docs/plans/.../Phase 3 Task 3.9.
+  // We stop on any terminal state (succeeded/failed/partial/cancelled) so
+  // the membrane can freeze the final state machine snapshot.
+  useEffect(() => {
+    if (!activeRun || !isTauriRuntime()) return;
+    const terminal: FounderCommandRun["state"][] = [
+      "succeeded",
+      "failed",
+      "partial",
+      "cancelled",
+    ];
+    if (terminal.includes(activeRun.state)) return;
+
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const next = await api.getCommandRun(activeRun.id);
+        if (cancelled) return;
+        setActiveRun(next);
+      } catch {
+        // swallow transient errors; the next tick may succeed
+      }
+    };
+    const handle = window.setInterval(tick, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [activeRun, api]);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -105,16 +143,83 @@ export default function MissionCortexPage() {
       activeLens={activeLens}
       selectedNode={selectedNode}
       lastCommand={lastCommand}
+      activeRun={activeRun}
+      activeRunLabel={activeRunLabel}
       onSelectLens={setActiveLens}
       onSelectNode={setSelectedNodeId}
       onCommand={(command, node) => {
-        // Stub for now: format → "[HH:MM:SS] command on node — description".
-        // Tier 2 follow-up will switch this to a real Tauri invoke per
-        // command kind (paperclip_summon_agent, github_approve_pr, etc.)
-        // and reflect the ack timing back into lastCommand.
         const ts = new Date().toISOString().slice(11, 19);
-        const stub = describeCommandStub(command, node);
-        setLastCommand(`[${ts}] ${stub}`);
+
+        // Mission/Hermes-Sync node defaults to ts-standup; other nodes use
+        // the shorthand → registry mapping. Commands not yet wired to the
+        // Worker registry fall back to the local describe stub so the
+        // founder gets the same readable preview while we expand coverage.
+        const registryId =
+          node.id === "mission:current" || node.kind === "mission"
+            ? TS_STANDUP_COMMAND_ID
+            : registryIdForShorthand(command.id);
+
+        if (!registryId) {
+          setLastCommand(
+            `[${ts}] ${describeCommandStub(command, node)} (not yet wired to registry)`,
+          );
+          return;
+        }
+
+        if (!isTauriRuntime()) {
+          setLastCommand(
+            `[${ts}] ${command.label} on ${node.label} (browser preview — not posting intent)`,
+          );
+          return;
+        }
+
+        const intent: FounderCommandIntent = {
+          id: registryId,
+          actorId: "founder",
+          actorKind: "founder",
+          authMode: "cf_access",
+          targetKind: node.kind,
+          targetId: node.id,
+          correlationId: `cortex-${node.id}-${Date.now()}`,
+          payload: { node_label: node.label, command_shorthand: command.id },
+        };
+
+        setLastCommand(`[${ts}] ${command.label} on ${node.label} — posting intent`);
+        setActiveRunLabel(`${command.label} on ${node.label}`);
+        setActiveRun(null);
+
+        api
+          .postCommandIntent(intent)
+          .then((result) => {
+            // Seed an optimistic run skeleton; the polling effect fills in
+            // the authoritative state machine as the Worker advances it.
+            setActiveRun({
+              id: result.runId,
+              commandId: intent.id,
+              actorId: intent.actorId,
+              actorKind: intent.actorKind,
+              authMode: intent.authMode,
+              state: result.state,
+              targetKind: intent.targetKind ?? null,
+              targetId: intent.targetId ?? null,
+              correlationId: intent.correlationId,
+              requestedAt: Date.now(),
+              acceptedAt: null,
+              completedAt: null,
+              resultJson: null,
+              errorCode: null,
+              errorMessage: null,
+            });
+            setLastCommand(
+              `[${ts}] ${command.label} on ${node.label} — run ${result.runId.slice(0, 12)}…`,
+            );
+          })
+          .catch((err: unknown) => {
+            setActiveRunLabel(null);
+            setLastCommand(
+              `[${ts}] ${command.label} on ${node.label} — error: ${String(err).slice(0, 80)}`,
+            );
+          });
       }}
     />
   );

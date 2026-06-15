@@ -1,10 +1,15 @@
 import type { CortexCommand, CortexNode, CortexPath, CortexSignal, CortexSignalState } from "../../lib/commandCortex/types";
+import type { FounderCommandRun } from "../../lib/types";
 
 export interface TacticalMembraneProps {
   node: CortexNode | null;
   commands: CortexCommand[];
   paths?: CortexPath[];
   signals?: CortexSignal[];
+  // Task 3.8 hands these down so MissionCortex typechecks; Task 3.9 adds the
+  // render block that shows the live state machine + result panel.
+  activeRun?: FounderCommandRun | null;
+  activeRunLabel?: string | null;
 }
 
 function confidenceFor(state: CortexSignalState): { value: number; label: string; tone: CortexSignalState } {
@@ -24,7 +29,21 @@ function confidenceFor(state: CortexSignalState): { value: number; label: string
   }
 }
 
-export default function TacticalMembrane({ node, commands, paths = [], signals = [] }: TacticalMembraneProps) {
+export default function TacticalMembrane({
+  node,
+  commands,
+  paths = [],
+  signals = [],
+  // activeRun / activeRunLabel are consumed by the Task 3.9 render block
+  // appended below the commands strip. Destructuring here keeps the prop
+  // signature stable for callers from Task 3.8 onwards.
+  activeRun = null,
+  activeRunLabel = null,
+}: TacticalMembraneProps) {
+  // Silence noUnusedParameters until Task 3.9 wires the render block.
+  void activeRun;
+  void activeRunLabel;
+
   if (!node) return null;
 
   const confidence = confidenceFor(node.state);

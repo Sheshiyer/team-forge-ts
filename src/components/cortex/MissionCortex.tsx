@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CortexLensDefinition } from "../../lib/commandCortex/lensTypes";
 import type { CortexCommand, CortexGraph, CortexLensId, CortexNode } from "../../lib/commandCortex/types";
+import type { FounderCommandRun } from "../../lib/types";
 import { getCommandsForNode } from "../../lib/commandCortex/commandRules";
 import LensRail from "./LensRail";
 import NeuralField from "./NeuralField";
@@ -29,6 +30,8 @@ export interface MissionCortexProps {
   activeLens: CortexLensId;
   selectedNode?: CortexNode | null;
   lastCommand?: string;
+  activeRun?: FounderCommandRun | null;
+  activeRunLabel?: string | null;
   onSelectLens: (lensId: CortexLensId) => void;
   onSelectNode: (nodeId: string) => void;
   onCommand: (command: CortexCommand, node: CortexNode) => void;
@@ -41,6 +44,8 @@ export default function MissionCortex({
   activeLens,
   selectedNode,
   lastCommand,
+  activeRun,
+  activeRunLabel,
   onSelectLens,
   onSelectNode,
   onCommand,
@@ -219,6 +224,8 @@ export default function MissionCortex({
         commands={selectedCommands}
         paths={selectedContext.paths}
         signals={selectedContext.signals}
+        activeRun={activeRun ?? null}
+        activeRunLabel={activeRunLabel ?? null}
       />
 
       <form
