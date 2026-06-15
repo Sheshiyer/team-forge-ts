@@ -161,3 +161,22 @@ node --check services/listener/index.ts
 - Do not deploy or migrate until the source/deployed drift in TeamForge is resolved.
 - Keep the existing Telegram dispatcher working while adding the new contract.
 - Do not copy secrets or secret values into docs.
+
+## Drift Resolution (2026-06-15)
+
+Worker drift closed in commit `285c48e` (`feat(worker): plexus session principal — third auth tier + onboarding state`).
+
+Phase 0 of the implementation plan in `docs/plans/2026-06-15-hermes-multica-paperclip-contract-impl.md` ran end-to-end. The Plexus session principal feature is now deployed to production (Worker version `5d6e5f03-7c37-4202-9889-7c7127457e70`).
+
+Production verification:
+- `https://teamforge-api.sheshnarayan-iyer.workers.dev/v1/bootstrap` → 200 with healthy manifest
+- `https://teamforge-api.sheshnarayan-iyer.workers.dev/v1/whoami` → 401 `access_identity_required` (auth gating verified)
+- D1 migration `0009_plexus_session_onboarding.sql` present in `d1_migrations` registry
+
+Observations (non-blocking):
+- Remote D1 already had `0009` applied before Task 0.4 ran — applied via an earlier session. `wrangler d1 migrations apply --remote` was a no-op; desired state was already in place.
+- Remote `d1_migrations` registry contains a historical orphan entry `0006_time_entries.sql` that no longer exists on disk (superseded by `0007_time_entries.sql`). Cosmetic; consider a cleanup migration in a future maintenance pass.
+- Worker package has no installed `node_modules`; `pnpm -C cloudflare/worker exec tsc` fails until install runs. Workaround used: invoke `tsc` from repo root with `-p cloudflare/worker/tsconfig.json`. Worth adding `typescript` as a devDep to the worker package or documenting the root-tsc workaround in `docs/runbooks/teamforge-worker-deploy.md`.
+- No tests exist for `plexus-session.ts` (445 lines of role + onboarding state machine). Logged as a follow-up; not a Phase 0 blocker.
+
+Phase 1 (command registry) can now begin against a clean baseline. See `docs/plans/2026-06-15-hermes-multica-paperclip-contract-impl.md`.
