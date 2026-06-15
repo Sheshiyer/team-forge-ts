@@ -13,7 +13,7 @@ export async function createRun(
   now: number,
 ): Promise<CommandRun> {
   const id = newId("run");
-  await db
+  const result = await db
     .prepare(
       `INSERT INTO command_runs
        (id, command_id, actor_id, actor_kind, auth_mode, state,
@@ -32,6 +32,7 @@ export async function createRun(
       now,
     )
     .run();
+  if (!result.success) throw new Error("D1 INSERT failed for command_runs");
   return {
     id,
     command_id: intent.id,
@@ -67,13 +68,14 @@ export async function transitionRun(
 ): Promise<void> {
   const acceptedAt = state === "accepted" ? now : null;
   const completedAt = ["succeeded", "failed", "partial", "cancelled"].includes(state) ? now : null;
-  await db
+  const result = await db
     .prepare(
       `UPDATE command_runs SET state = ?, accepted_at = COALESCE(accepted_at, ?),
        completed_at = COALESCE(completed_at, ?) WHERE id = ?`,
     )
     .bind(state, acceptedAt, completedAt, runId)
     .run();
+  if (!result.success) throw new Error("D1 UPDATE failed for command_runs");
 }
 
 export async function recordAuditEvent(
@@ -86,7 +88,7 @@ export async function recordAuditEvent(
   now: number,
 ): Promise<void> {
   const id = newId("evt");
-  await db
+  const result = await db
     .prepare(
       `INSERT INTO command_audit_events
        (id, run_id, kind, actor_id, actor_kind, payload_json, occurred_at)
@@ -102,4 +104,5 @@ export async function recordAuditEvent(
       now,
     )
     .run();
+  if (!result.success) throw new Error("D1 INSERT failed for command_audit_events");
 }
