@@ -245,7 +245,7 @@ export class GithubAppClient {
     return `${signingInput}.${bytesToBase64Url(signature)}`;
   }
 
-  async exchangeOauthCode(code: string): Promise<GithubUser> {
+  async exchangeOauthCode(code: string, requiredInstallationId?: number): Promise<GithubUser> {
     const config = requireGithubAppEnv(this.env);
     const tokenResponse = await this.fetchImpl("https://github.com/login/oauth/access_token", {
       method: "POST",
@@ -262,8 +262,34 @@ export class GithubAppClient {
     const userResponse = await this.fetchImpl(`${GITHUB_API}/user`, {
       headers: this.headers(tokenBody.access_token),
     });
-    const user = await responseJson<GithubUser>(userResponse, "github_oauth_identity_failed");
+    const user = await responseJson<Pick<GithubUser, "id" | "login">>(userResponse, "github_oauth_identity_failed");
     if (!Number.isSafeInteger(user.id) || !user.login) throw new GithubControlPlaneError("github_oauth_identity_failed", "GitHub OAuth identity is invalid.", 502);
+    if (requiredInstallationId !== undefined) {
+      if (!Number.isSafeInteger(requiredInstallationId) || requiredInstallationId <= 0) {
+        throw new GithubControlPlaneError("github_installation_hint_invalid", "Installation ID must be numeric.", 400);
+      }
+      let installationAccessible = false;
+      for (let page = 1; page <= 10; page += 1) {
+        const installationsResponse = await this.fetchImpl(`${GITHUB_API}/user/installations?per_page=100&page=${page}`, {
+          headers: this.headers(tokenBody.access_token),
+        });
+        const installations = await responseJson<{ installations?: Array<{ id?: number }> }>(
+          installationsResponse,
+          "github_oauth_installations_failed",
+        );
+        if (!Array.isArray(installations.installations)) {
+          throw new GithubControlPlaneError("github_oauth_installations_failed", "GitHub App installation authority is invalid.", 502);
+        }
+        if (installations.installations.some((installation) => installation.id === requiredInstallationId)) {
+          installationAccessible = true;
+          break;
+        }
+        if (installations.installations.length < 100) break;
+      }
+      if (!installationAccessible) {
+        throw new GithubControlPlaneError("github_oauth_installation_forbidden", "GitHub OAuth identity cannot access the workspace installation.", 403);
+      }
+    }
     return { id: user.id, login: user.login };
   }
 
