@@ -77,6 +77,16 @@ import {
 import { handleGetSyncJob, handleGetSyncRuns, handlePostSyncJob } from "./sync";
 import { handleGetTeamSnapshot, handlePostTeamRefresh } from "./team";
 import { queryFirst, queryAll } from "../lib/db";
+import {
+  handleGithubActivitySync,
+  handleGithubCallback,
+  handleGithubConnection,
+  handleGithubConnectStart,
+  handleGithubPullRequest,
+  handleGithubRepositories,
+  handleGithubRepoVerify,
+  handleGithubWebhook,
+} from "./github";
 
 interface DatabaseStatus {
   available: boolean;
@@ -85,6 +95,15 @@ interface DatabaseStatus {
 
 export async function handleV1Request(request: Request, env: Env, url: URL): Promise<Response> {
   const { method, pathname } = { method: request.method, pathname: url.pathname };
+
+  // Exact third-party inbound paths. Cloudflare Access must bypass only these
+  // two routes; callback state and webhook HMAC independently fail closed.
+  if (method === "GET" && pathname === "/v1/github/callback") {
+    return handleGithubCallback(env, request, url);
+  }
+  if (method === "POST" && pathname === "/v1/github/webhook") {
+    return handleGithubWebhook(env, request);
+  }
 
   // Per-employee identity (Cloudflare Access). Live since WS5: TF_ACCESS_TEAM_DOMAIN +
   // TF_ACCESS_AUD are set, so a valid Cf-Access-Jwt-Assertion resolves to the caller's email.
@@ -183,6 +202,31 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
       );
     }
     return jsonOk(await buildPlexusSession(env, plexusPrincipal));
+  }
+
+  // Private GitHub App control plane. Shared Bearer/internal credentials are
+  // intentionally not accepted: every identity-bearing route requires the
+  // registered Plexus principal resolved from Cloudflare Access above.
+  if (method === "GET" && pathname === "/v1/github/connection") {
+    return handleGithubConnection(env, plexusPrincipal);
+  }
+  if (method === "POST" && pathname === "/v1/github/connect/start") {
+    return handleGithubConnectStart(env, plexusPrincipal);
+  }
+  if (method === "GET" && pathname === "/v1/github/repositories") {
+    return handleGithubRepositories(env, plexusPrincipal);
+  }
+  const githubRepoVerifyMatch = pathname.match(/^\/v1\/projects\/([^/]+)\/github-repo\/verify$/);
+  if (method === "POST" && githubRepoVerifyMatch) {
+    return handleGithubRepoVerify(env, request, githubRepoVerifyMatch[1], plexusPrincipal);
+  }
+  const githubActivityMatch = pathname.match(/^\/v1\/projects\/([^/]+)\/github-activity\/sync$/);
+  if (method === "POST" && githubActivityMatch) {
+    return handleGithubActivitySync(env, request, githubActivityMatch[1], plexusPrincipal);
+  }
+  const githubPullRequestMatch = pathname.match(/^\/v1\/projects\/([^/]+)\/github-pull-requests$/);
+  if (method === "POST" && githubPullRequestMatch) {
+    return handleGithubPullRequest(env, request, githubPullRequestMatch[1], plexusPrincipal);
   }
 
   // Time entries (Plexus employee tracker → canonical store) + one-time Clockify cutover backfill

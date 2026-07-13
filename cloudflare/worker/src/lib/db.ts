@@ -43,3 +43,14 @@ export async function execute(
   const bound = params.length ? stmt.bind(...params) : stmt;
   await (bound as unknown as { run(): Promise<void> }).run();
 }
+
+export async function executeChanges(
+  db: D1DatabaseLike,
+  sql: string,
+  ...params: unknown[]
+): Promise<number> {
+  const stmt = db.prepare(sql);
+  const bound = params.length ? stmt.bind(...params) : stmt;
+  const result = await bound.run();
+  return result.meta?.changes ?? 0;
+}

@@ -1,0 +1,700 @@
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import type { D1DatabaseLike, Env } from "../../lib/env";
+import type { PlexusPrincipal } from "../../lib/plexus-session";
+import { handleGithubActivitySync, handleGithubCallback, handleGithubConnection, handleGithubPullRequest, handleGithubRepoVerify, handleGithubWebhook, nextInstallationState, reconcileBinding, validateWriteFiles } from "../github";
+import { sha256Hex, signConnectState } from "../../lib/github-app";
+
+let privateKeyPem = "";
+
+beforeAll(async () => {
+  const pair = await crypto.subtle.generateKey(
+    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const exported = new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey));
+  let raw = "";
+  for (const byte of exported) raw += String.fromCharCode(byte);
+  privateKeyPem = `-----BEGIN PRIVATE KEY-----\n${(btoa(raw).match(/.{1,64}/g) ?? []).join("\n")}\n-----END PRIVATE KEY-----`;
+});
+
+function principal(role: "employee" | "admin" = "employee"): PlexusPrincipal {
+  return {
+    identityId: role === "admin" ? "pid_admin" : "pid_member",
+    email: `${role}@example.test`,
+    displayName: role,
+    workspaceId: "ws_test",
+    role,
+    projectVisibility: role === "admin" ? "all" : "active",
+    employeeId: role === "admin" ? null : "emp_member",
+    capabilities: {},
+  };
+}
+
+function activityDb(): D1DatabaseLike {
+  return {
+    prepare(sql: string) {
+      let args: unknown[] = [];
+      const statement = {
+        bind(...values: unknown[]) { args = values; return statement; },
+        async first<T>() {
+          if (sql.includes("FROM projects WHERE id")) return ({ id: args[0] } as T);
+          if (sql.includes("FROM github_workspace_installations b")) {
+            return ({ workspace_id: "ws_test", installation_id: 42, connected_by_identity_id: "pid_admin", verified_github_user_id: 7, verified_github_login: "installer", state: "active", repository_selection: "selected", account_id: 8, account_login: "thoughtseed", account_type: "Organization" } as T);
+          }
+          if (sql.includes("FROM project_github_verifications v")) {
+            return ({ project_id: "proj_test", workspace_id: "ws_test", installation_id: 42, repository_id: 101, repo_owner: "thoughtseed", repo_name: "private-repo", default_branch: "main", verified_at: "2026-07-13T00:00:00.000Z", owner_login: "thoughtseed", name: "private-repo", full_name: "thoughtseed/private-repo", is_private: 1, state: "active" } as T);
+          }
+          return null;
+        },
+        async all<T>() { return { results: [] as T[] }; },
+        async run() { return { success: true, meta: { changes: 1 } }; },
+      };
+      return statement;
+    },
+  };
+}
+
+async function webhookSignature(payload: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload)));
+  return `sha256=${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function deliveryDb(initial?: { event: string; hash: string; result: string; processingStartedAt: string }): D1DatabaseLike {
+  const deliveries = new Map<string, { event_name: string; payload_sha256: string; result: string; processing_started_at: string }>();
+  if (initial) deliveries.set("delivery-stale", { event_name: initial.event, payload_sha256: initial.hash, result: initial.result, processing_started_at: initial.processingStartedAt });
+  return {
+    prepare(sql: string) {
+      let args: unknown[] = [];
+      const statement = {
+        bind(...values: unknown[]) { args = values; return statement; },
+        async first<T>() {
+          if (sql.includes("FROM github_webhook_deliveries")) return ((deliveries.get(String(args[0])) ?? null) as T | null);
+          return null;
+        },
+        async all<T>() { return { results: [] as T[] }; },
+        async run() {
+          if (sql.includes("INSERT OR IGNORE INTO github_webhook_deliveries")) {
+            const id = String(args[0]);
+            if (deliveries.has(id)) return { success: true, meta: { changes: 0 } };
+            deliveries.set(id, { event_name: String(args[1]), payload_sha256: String(args[2]), result: "processing", processing_started_at: String(args[4]) });
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.includes("result = 'processing'") && sql.includes("attempt_count")) {
+            const id = String(args[1]);
+            const delivery = deliveries.get(id);
+            const cutoff = Date.parse(String(args[2]));
+            if (!delivery || (delivery.result === "processing" && Date.parse(delivery.processing_started_at) >= cutoff)) return { success: true, meta: { changes: 0 } };
+            delivery.result = "processing";
+            delivery.processing_started_at = String(args[0]);
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.includes("result = 'ping'")) {
+            const delivery = deliveries.get(String(args[1]));
+            if (delivery) delivery.result = "ping";
+          }
+          if (sql.includes("result = 'failed'")) {
+            const delivery = deliveries.get(String(args[0]));
+            if (delivery) delivery.result = "failed";
+          }
+          return { success: true, meta: { changes: 1 } };
+        },
+      };
+      return statement;
+    },
+  };
+}
+
+function writeDb(existing: Record<string, unknown> | null = null): { db: D1DatabaseLike; runs: Array<{ sql: string; args: unknown[] }> } {
+  const runs: Array<{ sql: string; args: unknown[] }> = [];
+  const db: D1DatabaseLike = {
+    prepare(sql: string) {
+      let args: unknown[] = [];
+      const statement = {
+        bind(...values: unknown[]) { args = values; return statement; },
+        async first<T>() {
+          if (sql.includes("FROM projects WHERE id")) return ({ id: args[0] } as T);
+          if (sql.includes("FROM github_workspace_installations b")) return ({ workspace_id: "ws_test", installation_id: 42, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected" } as T);
+          if (sql.includes("FROM project_github_verifications v")) return ({ project_id: "proj_test", workspace_id: "ws_test", installation_id: 42, repository_id: 101, repo_owner: "thoughtseed", repo_name: "private-repo", default_branch: "main", verified_at: "2026-07-13T00:00:00.000Z", owner_login: "thoughtseed", name: "private-repo", full_name: "thoughtseed/private-repo", is_private: 1, state: "active" } as T);
+          if (sql.includes("FROM github_write_operations")) return (existing as T | null);
+          return null;
+        },
+        async all<T>() { return { results: [] as T[] }; },
+        async run() { runs.push({ sql, args: [...args] }); return { success: true, meta: { changes: 1 } }; },
+      };
+      return statement;
+    },
+  };
+  return { db, runs };
+}
+
+function writeRequest(files: Array<{ path: string; content: string }> = [{ path: "src/proof.ts", content: "export const proof = true;" }]): Request {
+  return new Request("https://worker.test/v1/projects/proj_test/github-pull-requests", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ repositoryId: 101, baseSha: "b".repeat(40), title: "Add private proof", body: "Bounded PR body", commitMessage: "feat: add private proof", files }),
+  });
+}
+
+function guardedWriteFetch(permission: unknown, options: { staleBase?: boolean; finalRace?: boolean } = {}) {
+  const mutations: Array<{ url: string; body: Record<string, unknown> }> = [];
+  let tokenRequest: Record<string, unknown> | null = null;
+  let defaultRefReads = 0;
+  const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (url.includes("/access_tokens")) {
+      tokenRequest = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ token: "write-token", expires_at: new Date(Date.now() + 30 * 60_000).toISOString() }), { status: 201 });
+    }
+    if (url.includes("/collaborators/installer/permission")) return new Response(JSON.stringify(permission));
+    if (url === "https://api.github.com/repos/thoughtseed/private-repo") return new Response(JSON.stringify({ id: 101, name: "private-repo", full_name: "thoughtseed/private-repo", private: true, default_branch: "main", owner: { id: 8, login: "thoughtseed" } }));
+    if (url.includes("/git/ref/heads/plexus%2F")) return new Response(JSON.stringify({ message: "Not Found" }), { status: 404 });
+    if (url.endsWith("/git/ref/heads/main")) {
+      defaultRefReads += 1;
+      const sha = options.staleBase || (options.finalRace && defaultRefReads > 1) ? "d".repeat(40) : "b".repeat(40);
+      return new Response(JSON.stringify({ object: { sha } }));
+    }
+    if (url.endsWith(`/git/commits/${"b".repeat(40)}`) && method === "GET") return new Response(JSON.stringify({ tree: { sha: "t".repeat(40) } }));
+    if (url.endsWith("/git/blobs") && method === "POST") {
+      mutations.push({ url, body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ sha: "e".repeat(40) }), { status: 201 });
+    }
+    if (url.endsWith("/git/trees") && method === "POST") {
+      mutations.push({ url, body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ sha: "f".repeat(40) }), { status: 201 });
+    }
+    if (url.endsWith("/git/commits") && method === "POST") {
+      mutations.push({ url, body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ sha: "c".repeat(40) }), { status: 201 });
+    }
+    if (url.endsWith("/git/refs") && method === "POST") {
+      mutations.push({ url, body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ ref: "refs/heads/plexus/proof" }), { status: 201 });
+    }
+    if (url.endsWith("/pulls") && method === "POST") {
+      mutations.push({ url, body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ number: 9, html_url: "https://github.test/pulls/9" }), { status: 201 });
+    }
+    throw new Error(`unexpected fetch ${method} ${url}`);
+  });
+  return { fetcher, mutations, tokenRequest: () => tokenRequest };
+}
+
+function reconciliationDb(repositorySelection: string, actorActive: boolean) {
+  let bound = false;
+  const state = { nonce_hash: "nonce-hash", workspace_id: "ws_test", plexus_actor_id: "pid_admin", expires_at: Math.floor(Date.now() / 1000) + 600, consumed_at: "now", oauth_user_id: 77, oauth_login: "installer", oauth_verified_at: "now", untrusted_installation_id: 42, status: "oauth_verified" };
+  const db: D1DatabaseLike = {
+    prepare(sql: string) {
+      let args: unknown[] = [];
+      const statement = {
+        bind(...values: unknown[]) { args = values; return statement; },
+        async first<T>() {
+          if (sql.includes("FROM github_connection_states")) return ({ ...state } as T);
+          if (sql.includes("FROM plexus_identities")) return (actorActive ? ({ id: "pid_admin" } as T) : null);
+          if (sql.includes("FROM github_installation_facts")) return ({ installation_id: Number(args[0]), installer_sender_id: 77, repository_selection: repositorySelection, state: "active" } as T);
+          if (sql.includes("FROM github_workspace_installations")) return null;
+          return null;
+        },
+        async all<T>() { return { results: [] as T[] }; },
+        async run() {
+          if (sql.includes("INSERT INTO github_workspace_installations")) bound = true;
+          return { success: true, meta: { changes: 1 } };
+        },
+      };
+      return statement;
+    },
+  };
+  return { db, wasBound: () => bound };
+}
+
+function connectionFlowDb(nonceHash: string) {
+  const state: Record<string, unknown> = {
+    nonce_hash: nonceHash,
+    workspace_id: "ws_test",
+    plexus_actor_id: "pid_admin",
+    expires_at: Math.floor(Date.now() / 1000) + 600,
+    consumed_at: null,
+    oauth_user_id: null,
+    oauth_login: null,
+    oauth_verified_at: null,
+    untrusted_installation_id: null,
+    status: "pending_oauth",
+  };
+  let fact: Record<string, unknown> | null = null;
+  let binding: Record<string, unknown> | null = null;
+  const deliveries = new Map<string, Record<string, unknown>>();
+  const db: D1DatabaseLike = {
+    prepare(sql: string) {
+      let args: unknown[] = [];
+      const statement = {
+        bind(...values: unknown[]) { args = values; return statement; },
+        async first<T>() {
+          if (sql.includes("FROM plexus_identities")) return ({ id: "pid_admin" } as T);
+          if (sql.includes("FROM github_connection_states")) return ({ ...state } as T);
+          if (sql.includes("FROM github_installation_facts")) return (fact ? ({ ...fact } as T) : null);
+          if (sql.includes("FROM github_workspace_installations") && sql.includes("workspace_id <>")) return null;
+          if (sql.includes("FROM github_webhook_deliveries")) return ((deliveries.get(String(args[0])) ?? null) as T | null);
+          return null;
+        },
+        async all<T>() {
+          if (sql.includes("FROM github_connection_states") && sql.includes("untrusted_installation_id")) {
+            const matches = state.untrusted_installation_id === args[0] && state.oauth_user_id === args[1] && state.status === "oauth_verified";
+            return { results: (matches ? [{ nonce_hash: state.nonce_hash }] : []) as T[] };
+          }
+          return { results: [] as T[] };
+        },
+        async run() {
+          if (sql.includes("INSERT OR IGNORE INTO github_webhook_deliveries")) {
+            const id = String(args[0]);
+            if (deliveries.has(id)) return { success: true, meta: { changes: 0 } };
+            deliveries.set(id, { event_name: args[1], payload_sha256: args[2], result: "processing", processing_started_at: args[4] });
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.includes("SET untrusted_installation_id")) {
+            if (state.untrusted_installation_id && state.untrusted_installation_id !== args[0]) return { success: true, meta: { changes: 0 } };
+            state.untrusted_installation_id = args[0];
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.includes("SET consumed_at")) {
+            if (state.consumed_at) return { success: true, meta: { changes: 0 } };
+            state.consumed_at = args[0];
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.includes("SET oauth_user_id")) {
+            state.oauth_user_id = args[0]; state.oauth_login = args[1]; state.oauth_verified_at = args[2]; state.status = "oauth_verified";
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.includes("INSERT INTO github_installation_facts")) {
+            fact = { installation_id: args[0], account_id: args[1], account_login: args[2], account_type: args[3], installer_sender_id: args[4], installer_sender_login: args[5], last_actor_id: args[6], last_actor_login: args[7], repository_selection: args[8], state: "active" };
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.includes("INSERT INTO github_workspace_installations")) {
+            binding = { workspace_id: args[0], installation_id: args[1], connected_by_identity_id: args[2], verified_github_user_id: args[3], verified_github_login: args[4], state: args[6] };
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.includes("UPDATE github_connection_states SET status = 'bound'")) state.status = "bound";
+          if (sql.includes("result = 'processed'")) {
+            const delivery = deliveries.get(String(args[1]));
+            if (delivery) delivery.result = "processed";
+          }
+          return { success: true, meta: { changes: 1 } };
+        },
+      };
+      return statement;
+    },
+  };
+  return { db, state, binding: () => binding };
+}
+
+function env(db: D1DatabaseLike): Env {
+  return {
+    TF_ENV: "test",
+    TEAMFORGE_DB: db,
+    TF_GITHUB_APP_ID: "12345",
+    TF_GITHUB_APP_SLUG: "thoughtseed-test",
+    TF_GITHUB_APP_PRIVATE_KEY: privateKeyPem,
+    TF_GITHUB_APP_CLIENT_ID: "Iv1.test",
+    TF_GITHUB_APP_CLIENT_SECRET: "secret",
+    TF_GITHUB_APP_CALLBACK_URL: "https://worker.test/v1/github/callback",
+    TF_GITHUB_APP_STATE_SIGNING_SECRET: "s".repeat(32),
+  };
+}
+
+describe("GitHub App routes", () => {
+  it("keeps suspended and deleted installations closed across late events", () => {
+    expect(nextInstallationState("suspended", "installation_repositories", "added")).toBe("suspended");
+    expect(nextInstallationState("suspended", "installation", "new_permissions_accepted")).toBe("suspended");
+    expect(nextInstallationState("suspended", "installation", "unsuspend")).toBe("active");
+    expect(nextInstallationState("deleted", "installation_repositories", "added")).toBe("deleted");
+    expect(nextInstallationState("deleted", "installation", "unsuspend")).toBe("deleted");
+  });
+
+  it("rejects workflows, traversal, control characters, and duplicate write paths", () => {
+    expect(() => validateWriteFiles([{ path: ".github/workflows", content: "x" }])).toThrow(/unsafe/);
+    expect(() => validateWriteFiles([{ path: ".GitHub/Workflows/release.yml", content: "x" }])).toThrow(/unsafe/);
+    expect(() => validateWriteFiles([{ path: "src/../secret", content: "x" }])).toThrow(/unsafe/);
+    expect(() => validateWriteFiles([{ path: "src/a\u0000.ts", content: "x" }])).toThrow(/unsafe/);
+    expect(() => validateWriteFiles([{ path: "src/a.ts", content: "x" }, { path: "src/a.ts", content: "y" }])).toThrow(/unsafe/);
+  });
+
+  it("atomically consumes OAuth state and rejects a second code callback", async () => {
+    const nonce = "nonce-atomic";
+    const stateValue = await signConnectState(
+      { workspace: "ws_test", actor: "pid_admin", nonce, exp: Math.floor(Date.now() / 1000) + 600 },
+      "s".repeat(32),
+    );
+    const state: Record<string, unknown> = {
+      nonce_hash: await sha256Hex(nonce),
+      workspace_id: "ws_test",
+      plexus_actor_id: "pid_admin",
+      expires_at: Math.floor(Date.now() / 1000) + 600,
+      consumed_at: null,
+      oauth_user_id: null,
+      oauth_login: null,
+      oauth_verified_at: null,
+      untrusted_installation_id: null,
+      status: "pending_oauth",
+    };
+    const db: D1DatabaseLike = {
+      prepare(sql: string) {
+        let args: unknown[] = [];
+        const statement = {
+          bind(...values: unknown[]) { args = values; return statement; },
+          async first<T>() {
+            if (sql.includes("FROM plexus_identities")) return ({ id: "pid_admin" } as T);
+            if (sql.includes("FROM github_connection_states")) return ({ ...state } as T);
+            return null;
+          },
+          async all<T>() { return { results: [] as T[] }; },
+          async run() {
+            if (sql.includes("SET consumed_at")) {
+              if (state.consumed_at) return { success: true, meta: { changes: 0 } };
+              state.consumed_at = args[0];
+              return { success: true, meta: { changes: 1 } };
+            }
+            if (sql.includes("SET oauth_user_id")) {
+              state.oauth_user_id = args[0];
+              state.oauth_login = args[1];
+              state.oauth_verified_at = args[2];
+              state.status = "oauth_verified";
+            }
+            return { success: true, meta: { changes: 1 } };
+          },
+        };
+        return statement;
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth/access_token")) return new Response(JSON.stringify({ access_token: "oauth-token" }));
+      if (String(input).endsWith("/user")) return new Response(JSON.stringify({ id: 77, login: "installer" }));
+      throw new Error(`unexpected fetch ${String(input)}`);
+    }));
+    const callbackEnv = env(db);
+    const callbackUrl = new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue)}&code=one-time-code`);
+    const first = await handleGithubCallback(callbackEnv, new Request(callbackUrl), callbackUrl);
+    expect(first.status).toBe(302);
+    const replay = await handleGithubCallback(callbackEnv, new Request(callbackUrl), callbackUrl);
+    expect(replay.status).toBe(409);
+    await expect(replay.json()).resolves.toMatchObject({ error: { code: "github_state_consumed" } });
+    vi.unstubAllGlobals();
+  });
+
+  it.each(["callback-first", "webhook-first"])("binds the exact installation when %s", async (order) => {
+    const nonce = `nonce-${order}`;
+    const nonceHash = await sha256Hex(nonce);
+    const fixture = connectionFlowDb(nonceHash);
+    const secret = "webhook-test-secret";
+    const flowEnv = { ...env(fixture.db), TF_GITHUB_APP_WEBHOOK_SECRET: secret };
+    const stateValue = await signConnectState(
+      { workspace: "ws_test", actor: "pid_admin", nonce, exp: Math.floor(Date.now() / 1000) + 600 },
+      "s".repeat(32),
+    );
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth/access_token")) return new Response(JSON.stringify({ access_token: "oauth-token" }));
+      if (String(input).endsWith("/user")) return new Response(JSON.stringify({ id: 77, login: "installer" }));
+      throw new Error(`unexpected fetch ${String(input)}`);
+    }));
+    const callbackUrl = new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue)}&code=one-time-code&installation_id=42`);
+    const invokeCallback = () => handleGithubCallback(flowEnv, new Request(callbackUrl), callbackUrl);
+    const payload = JSON.stringify({
+      action: "created",
+      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected" },
+      sender: { id: 77, login: "installer" },
+      repositories: [],
+    });
+    const signedWebhook = async () => handleGithubWebhook(flowEnv, new Request("https://worker.test/v1/github/webhook", {
+      method: "POST",
+      headers: { "x-hub-signature-256": await webhookSignature(payload, secret), "x-github-delivery": `delivery-${order}`, "x-github-event": "installation" },
+      body: payload,
+    }));
+    if (order === "callback-first") {
+      expect((await invokeCallback()).status).toBe(200);
+      expect(fixture.binding()).toBeNull();
+      expect((await signedWebhook()).status).toBe(200);
+    } else {
+      expect((await signedWebhook()).status).toBe(200);
+      expect(fixture.binding()).toBeNull();
+      expect((await invokeCallback()).status).toBe(200);
+    }
+    expect(fixture.binding()).toMatchObject({ installation_id: 42, verified_github_user_id: 77, workspace_id: "ws_test" });
+    expect(fixture.state.status).toBe("bound");
+    vi.unstubAllGlobals();
+  });
+
+  it("fails closed on invalid webhook signatures and deduplicates signed delivery content", async () => {
+    const secret = "webhook-test-secret";
+    const payload = JSON.stringify({ zen: "keep it secure" });
+    const db = deliveryDb();
+    const webhookEnv = { ...env(db), TF_GITHUB_APP_WEBHOOK_SECRET: secret };
+    const request = async (body: string, signature: string, delivery = "delivery-0001") => handleGithubWebhook(webhookEnv, new Request("https://worker.test/v1/github/webhook", {
+      method: "POST",
+      headers: { "x-hub-signature-256": signature, "x-github-delivery": delivery, "x-github-event": "ping" },
+      body,
+    }));
+    expect((await request(payload, "sha256=" + "0".repeat(64))).status).toBe(401);
+    const validSignature = await webhookSignature(payload, secret);
+    expect((await request(payload, validSignature)).status).toBe(200);
+    const duplicate = await request(payload, validSignature);
+    await expect(duplicate.json()).resolves.toMatchObject({ data: { status: "duplicate" } });
+    const changed = JSON.stringify({ zen: "changed" });
+    const mismatch = await request(changed, await webhookSignature(changed, secret));
+    expect(mismatch.status).toBe(409);
+    await expect(mismatch.json()).resolves.toMatchObject({ error: { code: "github_delivery_mismatch" } });
+  });
+
+  it("reclaims an expired webhook processing lease", async () => {
+    const secret = "webhook-test-secret";
+    const payload = JSON.stringify({ zen: "retry" });
+    const hash = await sha256Hex(payload);
+    const db = deliveryDb({ event: "ping", hash, result: "processing", processingStartedAt: new Date(Date.now() - 10 * 60_000).toISOString() });
+    const response = await handleGithubWebhook({ ...env(db), TF_GITHUB_APP_WEBHOOK_SECRET: secret }, new Request("https://worker.test/v1/github/webhook", {
+      method: "POST",
+      headers: { "x-hub-signature-256": await webhookSignature(payload, secret), "x-github-delivery": "delivery-stale", "x-github-event": "ping" },
+      body: payload,
+    }));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ data: { status: "accepted" } });
+  });
+
+  it("denies activity when the project is outside the principal workspace", async () => {
+    const db: D1DatabaseLike = {
+      prepare() {
+        const statement = {
+          bind() { return statement; },
+          async first<T>() { return null as T | null; },
+          async all<T>() { return { results: [] as T[] }; },
+          async run() { return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    };
+    const request = new Request("https://worker.test/v1/projects/foreign/github-activity/sync", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ from: "2026-07-13T00:00:00.000Z", to: "2026-07-14T00:00:00.000Z" }),
+    });
+    const response = await handleGithubActivitySync(env(db), request, "foreign", principal("employee"));
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "project_not_found" } });
+  });
+
+  it("binds only the exact hinted installation even for the same GitHub actor", async () => {
+    const bound: number[] = [];
+    const state = { nonce_hash: "nonce-hash", workspace_id: "ws_test", plexus_actor_id: "pid_admin", expires_at: Math.floor(Date.now() / 1000) + 600, consumed_at: "now", oauth_user_id: 77, oauth_login: "installer", oauth_verified_at: "now", untrusted_installation_id: 42, status: "oauth_verified" };
+    const db: D1DatabaseLike = {
+      prepare(sql: string) {
+        let args: unknown[] = [];
+        const statement = {
+          bind(...values: unknown[]) { args = values; return statement; },
+          async first<T>() {
+            if (sql.includes("FROM github_connection_states")) return ({ ...state } as T);
+            if (sql.includes("FROM github_installation_facts")) return ({ installation_id: Number(args[0]), installer_sender_id: 77, repository_selection: "selected", state: "active" } as T);
+            if (sql.includes("FROM plexus_identities")) return ({ id: "pid_admin" } as T);
+            if (sql.includes("FROM github_workspace_installations")) return null;
+            return null;
+          },
+          async all<T>() { return { results: [] as T[] }; },
+          async run() {
+            if (sql.includes("INSERT INTO github_workspace_installations")) bound.push(Number(args[1]));
+            return { success: true, meta: { changes: 1 } };
+          },
+        };
+        return statement;
+      },
+    };
+    await expect(reconcileBinding(env(db), "nonce-hash")).resolves.toBe(true);
+    expect(bound).toEqual([42]);
+  });
+
+  it("rejects all-repositories installations and inactive initiating admins", async () => {
+    const allRepositories = reconciliationDb("all", true);
+    await expect(reconcileBinding(env(allRepositories.db), "nonce-hash")).rejects.toMatchObject({ code: "github_repository_selection_forbidden" });
+    expect(allRepositories.wasBound()).toBe(false);
+
+    const inactiveAdmin = reconciliationDb("selected", false);
+    await expect(reconcileBinding(env(inactiveAdmin.db), "nonce-hash")).rejects.toMatchObject({ code: "github_forbidden" });
+    expect(inactiveAdmin.wasBound()).toBe(false);
+  });
+
+  it.each([undefined, "unexpected"])("fails closed when signed repository_selection is %s", async (repositorySelection) => {
+    const secret = "webhook-test-secret";
+    const payload = JSON.stringify({
+      action: "created",
+      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, ...(repositorySelection ? { repository_selection: repositorySelection } : {}) },
+      sender: { id: 77, login: "installer" },
+      repositories: [],
+    });
+    const db = deliveryDb();
+    const response = await handleGithubWebhook({ ...env(db), TF_GITHUB_APP_WEBHOOK_SECRET: secret }, new Request("https://worker.test/v1/github/webhook", {
+      method: "POST",
+      headers: { "x-hub-signature-256": await webhookSignature(payload, secret), "x-github-delivery": `delivery-selection-${repositorySelection ?? "missing"}`, "x-github-event": "installation" },
+      body: payload,
+    }));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "github_webhook_payload_invalid" } });
+  });
+
+  it("rejects numeric repository identity mismatches returned by GitHub", async () => {
+    const db: D1DatabaseLike = {
+      prepare(sql: string) {
+        let args: unknown[] = [];
+        const statement = {
+          bind(...values: unknown[]) { args = values; return statement; },
+          async first<T>() {
+            if (sql.includes("FROM projects WHERE id")) return ({ id: args[0] } as T);
+            if (sql.includes("FROM github_workspace_installations b")) return ({ workspace_id: "ws_test", installation_id: 42, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected" } as T);
+            if (sql.includes("FROM github_installation_repositories r")) return ({ installation_id: 42, repository_id: 101, owner_login: "thoughtseed", name: "private-repo", full_name: "thoughtseed/private-repo", is_private: 1, default_branch: "main", state: "active" } as T);
+            return null;
+          },
+          async all<T>() { return { results: [] as T[] }; },
+          async run() { return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/access_tokens")) return new Response(JSON.stringify({ token: "scoped", expires_at: new Date(Date.now() + 30 * 60_000).toISOString() }), { status: 201 });
+      if (url.includes("/repos/thoughtseed/private-repo")) return new Response(JSON.stringify({ id: 999, name: "private-repo", full_name: "thoughtseed/private-repo", private: true, default_branch: "main", owner: { login: "thoughtseed", id: 8 } }));
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+    const request = new Request("https://worker.test/v1/projects/proj_test/github-repo/verify", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repositoryId: 101 }),
+    });
+    const response = await handleGithubRepoVerify(env(db), request, "proj_test", principal("admin"));
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "github_repository_identity_mismatch" } });
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ["read", { permission: "read", user: { id: 77, login: "installer" } }],
+    ["triage", { permission: "triage", user: { id: 77, login: "installer" } }],
+    ["malformed", { user: { id: 77, login: "installer" } }],
+    ["id mismatch", { permission: "admin", user: { id: 88, login: "installer" } }],
+  ])("denies guarded writes before mutation for %s permission", async (_label, permission) => {
+    const store = writeDb();
+    const github = guardedWriteFetch(permission);
+    vi.stubGlobal("fetch", github.fetcher);
+    const response = await handleGithubPullRequest(env(store.db), writeRequest(), "proj_test", principal("admin"));
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "github_membership_forbidden" } });
+    expect(github.mutations).toHaveLength(0);
+    expect(store.runs).toHaveLength(0);
+    vi.unstubAllGlobals();
+  });
+
+  it.each(["write", "maintain", "admin"])("allows %s permission through the guarded Git-data PR primitive", async (permission) => {
+    const store = writeDb();
+    const github = guardedWriteFetch({ permission, user: { id: 77, login: "installer" } });
+    vi.stubGlobal("fetch", github.fetcher);
+    const response = await handleGithubPullRequest(env(store.db), writeRequest(), "proj_test", principal("admin"));
+    expect(response.status).toBe(201);
+    const payload = await response.json() as { data: { branch: string; commitSha: string; pullRequest: { number: number } } };
+    expect(payload.data.branch).toMatch(/^plexus\/proj_test-[a-f0-9]{12}$/);
+    expect(payload.data.commitSha).toBe("c".repeat(40));
+    expect(payload.data.pullRequest.number).toBe(9);
+    expect(github.tokenRequest()).toEqual({ repository_ids: [101], permissions: { metadata: "read", contents: "write", pull_requests: "write" } });
+    const refMutation = github.mutations.find((item) => item.url.endsWith("/git/refs"));
+    expect(refMutation?.body.ref).toMatch(/^refs\/heads\/plexus\//);
+    expect(refMutation?.body).not.toHaveProperty("force");
+    const commitMutation = github.mutations.find((item) => item.url.endsWith("/git/commits"));
+    expect(commitMutation?.body.message).toContain("Plexus-Workspace: ws_test");
+    expect(commitMutation?.body.message).toContain("Plexus-Actor: pid_admin");
+    const pullMutation = github.mutations.find((item) => item.url.endsWith("/pulls"));
+    expect(pullMutation?.body.body).toContain("workspace `ws_test` actor `pid_admin`");
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects a stale default-branch SHA before tracking or repository mutation", async () => {
+    const store = writeDb();
+    const github = guardedWriteFetch({ permission: "write", user: { id: 77, login: "installer" } }, { staleBase: true });
+    vi.stubGlobal("fetch", github.fetcher);
+    const response = await handleGithubPullRequest(env(store.db), writeRequest(), "proj_test", principal("admin"));
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "github_base_sha_conflict" } });
+    expect(github.mutations).toHaveLength(0);
+    expect(store.runs).toHaveLength(0);
+    vi.unstubAllGlobals();
+  });
+
+  it("creates no GitHub or D1 mutation for workflow paths", async () => {
+    const store = writeDb();
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    const response = await handleGithubPullRequest(env(store.db), writeRequest([{ path: ".github/workflows/release.yml", content: "name: release" }]), "proj_test", principal("admin"));
+    expect(response.status).toBe(403);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(store.runs).toHaveLength(0);
+    vi.unstubAllGlobals();
+  });
+
+  it("returns completed deterministic writes without duplicate GitHub mutation", async () => {
+    const store = writeDb({ status: "completed", branch_name: "plexus/proj_test-existing", pull_request_number: 9, pull_request_url: "https://github.test/pulls/9", commit_sha: "c".repeat(40) });
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    const response = await handleGithubPullRequest(env(store.db), writeRequest(), "proj_test", principal("admin"));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ data: { idempotent: true, branch: "plexus/proj_test-existing", pullRequest: { number: 9 } } });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(store.runs).toHaveLength(0);
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps connection status admin-only", async () => {
+    const response = await handleGithubConnection(env(activityDb()), principal("employee"));
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "github_forbidden" } });
+  });
+
+  it("syncs private repository activity for a registered same-workspace member", async () => {
+    let tokenRequest: Record<string, unknown> | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/access_tokens")) {
+        tokenRequest = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({ token: "scoped-token", expires_at: new Date(Date.now() + 30 * 60_000).toISOString() }), { status: 201 });
+      }
+      if (url.includes("/commits?")) return new Response(JSON.stringify([
+        { sha: "a".repeat(40), html_url: "https://github.test/commit/a", author: { login: "alice" }, commit: { message: "feat: private proof", author: { date: "2026-07-13T12:00:00.000Z" } } },
+        { sha: "b".repeat(40), html_url: "https://github.test/commit/b", author: { login: "alice" }, commit: { message: "outside", author: { date: "2026-07-10T12:00:00.000Z" } } },
+      ]));
+      if (url.includes("/pulls?")) return new Response(JSON.stringify([
+        { id: 501, number: 5, title: "Private PR", html_url: "https://github.test/pull/5", updated_at: "2026-07-13T13:00:00.000Z", user: { login: "bob" }, state: "open" },
+      ]));
+      if (url.includes("/issues?")) return new Response(JSON.stringify([
+        { id: 601, number: 6, title: "Private issue", html_url: "https://github.test/issues/6", updated_at: "2026-07-13T14:00:00.000Z", user: { login: "carol" }, state: "open" },
+      ]));
+      if (url.includes("/actions/runs?")) return new Response(JSON.stringify({ workflow_runs: [
+        { id: 701, name: "CI", html_url: "https://github.test/actions/701", status: "completed", conclusion: "success", head_sha: "a".repeat(40), head_branch: "plexus/proof", run_attempt: 2, event: "pull_request", actor: { login: "alice" }, repository: { id: 101 }, created_at: "2026-07-13T12:00:00.000Z", updated_at: "2026-07-13T12:30:00.000Z" },
+      ] }));
+      if (url.includes("/check-runs?")) return new Response(JSON.stringify({ total_count: 1, check_runs: [
+        { id: 801, name: "unit-tests", html_url: "https://github.test/checks/801", status: "completed", conclusion: "success", head_sha: "a".repeat(40), started_at: "2026-07-13T12:05:00.000Z", completed_at: "2026-07-13T12:20:00.000Z", app: { slug: "github-actions" } },
+      ] }));
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+
+    const request = new Request("https://worker.test/v1/projects/proj_test/github-activity/sync", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ from: "2026-07-13T00:00:00.000Z", to: "2026-07-14T00:00:00.000Z" }),
+    });
+    const response = await handleGithubActivitySync(env(activityDb()), request, "proj_test", principal("employee"));
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { data: { status: string; activity: Array<{ projectId: string; repoFullName: string; kind: string }>; ciEvidence: { items: Array<{ evidenceClass: string; evidenceType: string; externalId: number; headSha: string; conclusion: string; attempt: number | null; event: string | null; branch: string | null }>; truncated: boolean } } };
+    expect(payload.data.status).toBe("synced");
+    expect(payload.data.activity).toHaveLength(3);
+    expect(payload.data.activity.every((item) => item.projectId === "proj_test" && item.repoFullName === "thoughtseed/private-repo")).toBe(true);
+    expect(payload.data.ciEvidence.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ evidenceClass: "ci", evidenceType: "workflow_run", externalId: 701, headSha: "a".repeat(40), conclusion: "success", attempt: 2, event: "pull_request", branch: "plexus/proof" }),
+      expect.objectContaining({ evidenceClass: "ci", evidenceType: "check_run", externalId: 801, headSha: "a".repeat(40), conclusion: "success", event: "pull_request", branch: "plexus/proof" }),
+    ]));
+    expect(payload.data.ciEvidence.truncated).toBe(false);
+    expect(tokenRequest).toEqual({
+      repository_ids: [101],
+      permissions: { metadata: "read", contents: "read", pull_requests: "read", issues: "read", actions: "read", checks: "read" },
+    });
+    vi.unstubAllGlobals();
+  });
+});

@@ -1,7 +1,7 @@
 export interface D1PreparedStatementLike {
   bind(...values: unknown[]): D1PreparedStatementLike;
   first<T = Record<string, unknown>>(): Promise<T | null>;
-  run(): Promise<{ success: boolean }>;
+  run(): Promise<{ success: boolean; meta?: { changes?: number } }>;
   all<T = Record<string, unknown>>(): Promise<{ results: T[] }>;
 }
 
@@ -53,6 +53,16 @@ export interface Env {
   TF_HULY_USER_TOKEN_GLOBAL?: string;
   TF_SLACK_BOT_TOKEN_GLOBAL?: string;
   TF_GITHUB_TOKEN_GLOBAL?: string;
+  // GitHub App control plane. These values are secrets except app id, slug,
+  // client id, and callback URL. Private key material never leaves the Worker.
+  TF_GITHUB_APP_ID?: string;
+  TF_GITHUB_APP_SLUG?: string;
+  TF_GITHUB_APP_PRIVATE_KEY?: string;
+  TF_GITHUB_APP_CLIENT_ID?: string;
+  TF_GITHUB_APP_CLIENT_SECRET?: string;
+  TF_GITHUB_APP_CALLBACK_URL?: string;
+  TF_GITHUB_APP_WEBHOOK_SECRET?: string;
+  TF_GITHUB_APP_STATE_SIGNING_SECRET?: string;
   TF_INTEGRATION_CONFIG_JSON?: string;
   TF_CREDENTIAL_ENVELOPE_KEY?: string;
   TF_WEBHOOK_HMAC_SECRET?: string;
