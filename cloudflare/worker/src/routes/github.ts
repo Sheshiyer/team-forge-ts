@@ -27,6 +27,33 @@ interface ConnectionStateRow {
   status: "pending_oauth" | "oauth_verified" | "bound" | "expired" | "rejected";
 }
 
+interface ActorConnectionStateRow {
+  nonce_hash: string;
+  workspace_id: string;
+  plexus_identity_id: string;
+  expires_at: number;
+  consumed_at: string | null;
+  oauth_user_id: number | null;
+  oauth_login: string | null;
+  status: "pending_oauth" | "bound" | "expired" | "rejected";
+}
+
+interface WorkspaceActorRow {
+  workspace_id: string;
+  plexus_identity_id: string;
+  github_user_id: number;
+  github_login: string;
+  verified_at: string;
+  verification_source: "installation" | "oauth";
+}
+
+interface GithubEnrollmentPolicy {
+  organization: string;
+  organizationId: number;
+  allowedActors: Array<{ id: number; login: string }>;
+  allowedActorByLogin: Map<string, number>;
+}
+
 interface InstallationBindingRow {
   workspace_id: string;
   installation_id: number;
@@ -118,7 +145,50 @@ function githubConfigurationPresent(env: Env): boolean {
     env.TF_GITHUB_APP_CALLBACK_URL,
     env.TF_GITHUB_APP_WEBHOOK_SECRET,
     env.TF_GITHUB_APP_STATE_SIGNING_SECRET,
+    env.TF_GITHUB_EXPECTED_ORG,
+    env.TF_GITHUB_EXPECTED_ORG_ID,
+    env.TF_GITHUB_ALLOWED_ACTORS,
   ].every((value) => Boolean(value?.trim()));
+}
+
+function githubEnrollmentPolicy(env: Env): GithubEnrollmentPolicy {
+  const organization = env.TF_GITHUB_EXPECTED_ORG?.trim() ?? "";
+  const organizationId = Number(env.TF_GITHUB_EXPECTED_ORG_ID);
+  const configuredActors = (env.TF_GITHUB_ALLOWED_ACTORS ?? "")
+    .split(",")
+    .map((actor) => actor.trim())
+    .filter(Boolean);
+  const validLogin = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+  const allowedActors = configuredActors.map((entry) => {
+    const separator = entry.lastIndexOf(":");
+    const login = separator > 0 ? entry.slice(0, separator).trim() : "";
+    const id = Number(separator > 0 ? entry.slice(separator + 1).trim() : "");
+    return { id, login };
+  });
+  const allowedActorByLogin = new Map(allowedActors.map((actor) => [actor.login.toLowerCase(), actor.id]));
+  const actorIds = new Set(allowedActors.map((actor) => actor.id));
+  if (!validLogin.test(organization) || !Number.isSafeInteger(organizationId) || organizationId <= 0 ||
+    allowedActors.length === 0 || allowedActors.some((actor) => !validLogin.test(actor.login) || !Number.isSafeInteger(actor.id) || actor.id <= 0) ||
+    allowedActorByLogin.size !== allowedActors.length || actorIds.size !== allowedActors.length) {
+    throw new GithubControlPlaneError("github_actor_policy_invalid", "GitHub organization and actor allowlist configuration is invalid.", 503);
+  }
+  return { organization, organizationId, allowedActors, allowedActorByLogin };
+}
+
+function isAllowedGithubActor(policy: GithubEnrollmentPolicy, user: { id: number; login: string }): boolean {
+  return policy.allowedActorByLogin.get(user.login.toLowerCase()) === user.id;
+}
+
+function assertAllowedGithubActor(policy: GithubEnrollmentPolicy, user: { id: number; login: string }): void {
+  if (!isAllowedGithubActor(policy, user)) {
+    throw new GithubControlPlaneError("github_actor_forbidden", "GitHub OAuth identity is not allowed for this workspace.", 403);
+  }
+}
+
+function assertExpectedOrganization(policy: GithubEnrollmentPolicy, binding: Pick<InstallationBindingRow, "account_id" | "account_login" | "account_type">): void {
+  if (binding.account_type !== "Organization" || binding.account_id !== policy.organizationId || binding.account_login?.toLowerCase() !== policy.organization.toLowerCase()) {
+    throw new GithubControlPlaneError("github_organization_forbidden", "GitHub App installation is not owned by the configured organization.", 403);
+  }
 }
 
 function requireAdmin(principal: PlexusPrincipal | null): Response | null {
@@ -159,13 +229,90 @@ async function getBinding(env: Env, workspaceId: string): Promise<InstallationBi
   );
 }
 
-async function assertActiveBinding(env: Env, principal: PlexusPrincipal): Promise<InstallationBindingRow> {
+async function assertActiveBinding(env: Env, principal: Pick<PlexusPrincipal, "workspaceId">): Promise<InstallationBindingRow> {
   const binding = await getBinding(env, principal.workspaceId);
   if (!binding) throw new GithubControlPlaneError("github_unconfigured", "No GitHub App installation is connected to this workspace.", 409);
   if (binding.repository_selection !== "selected") throw new GithubControlPlaneError("github_repository_selection_forbidden", "GitHub App access to all repositories is forbidden.", 403);
   if (binding.state === "suspended") throw new GithubControlPlaneError("github_suspended", "The workspace GitHub App installation is suspended.", 409);
   if (binding.state !== "active") throw new GithubControlPlaneError("github_forbidden", "The workspace GitHub App installation is revoked.", 403);
+  assertExpectedOrganization(githubEnrollmentPolicy(env), binding);
   return binding;
+}
+
+async function ensureActiveAdmin(env: Env, principal: Pick<PlexusPrincipal, "identityId" | "workspaceId">): Promise<void> {
+  const actor = await queryFirst<{ id: string }>(
+    database(env),
+    "SELECT id FROM plexus_identities WHERE id = ? AND workspace_id = ? AND role = 'admin' AND is_active = 1 LIMIT 1",
+    principal.identityId,
+    principal.workspaceId,
+  );
+  if (!actor) throw new GithubControlPlaneError("github_forbidden", "Current Plexus administrator access is required.", 403);
+}
+
+async function getWorkspaceActor(env: Env, workspaceId: string, identityId: string): Promise<WorkspaceActorRow | null> {
+  return queryFirst<WorkspaceActorRow>(
+    database(env),
+    "SELECT * FROM github_workspace_actors WHERE workspace_id = ? AND plexus_identity_id = ? LIMIT 1",
+    workspaceId,
+    identityId,
+  );
+}
+
+async function upsertWorkspaceActor(
+  env: Env,
+  input: {
+    workspaceId: string;
+    identityId: string;
+    githubUserId: number;
+    githubLogin: string;
+    source: "installation" | "oauth";
+    nonceHash: string | null;
+  },
+): Promise<void> {
+  if (!Number.isSafeInteger(input.githubUserId) || input.githubUserId <= 0 || !input.githubLogin) {
+    throw new GithubControlPlaneError("github_oauth_identity_failed", "GitHub OAuth identity is invalid.", 502);
+  }
+  const existingActor = await getWorkspaceActor(env, input.workspaceId, input.identityId);
+  if (existingActor && existingActor.github_user_id !== input.githubUserId) {
+    throw new GithubControlPlaneError("github_actor_rebind_forbidden", "Plexus identity is already bound to a different numeric GitHub identity.", 409);
+  }
+  const conflict = await queryFirst<{ plexus_identity_id: string }>(
+    database(env),
+    `SELECT plexus_identity_id FROM github_workspace_actors
+      WHERE workspace_id = ? AND github_user_id = ? AND plexus_identity_id <> ? LIMIT 1`,
+    input.workspaceId,
+    input.githubUserId,
+    input.identityId,
+  );
+  if (conflict) throw new GithubControlPlaneError("github_actor_already_bound", "GitHub identity is already bound to another Plexus identity in this workspace.", 409);
+  const timestamp = now();
+  const changes = await executeChanges(
+    database(env),
+    `INSERT INTO github_workspace_actors
+       (workspace_id, plexus_identity_id, github_user_id, github_login, verified_at,
+        verification_source, connection_nonce_hash, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(workspace_id, plexus_identity_id) DO UPDATE SET
+       github_user_id = excluded.github_user_id,
+       github_login = excluded.github_login,
+       verified_at = excluded.verified_at,
+       verification_source = excluded.verification_source,
+       connection_nonce_hash = excluded.connection_nonce_hash,
+       updated_at = excluded.updated_at
+     WHERE github_workspace_actors.github_user_id = excluded.github_user_id`,
+    input.workspaceId,
+    input.identityId,
+    input.githubUserId,
+    input.githubLogin,
+    timestamp,
+    input.source,
+    input.nonceHash,
+    timestamp,
+    timestamp,
+  );
+  if (changes !== 1) {
+    throw new GithubControlPlaneError("github_actor_rebind_forbidden", "Plexus identity is already bound to a different numeric GitHub identity.", 409);
+  }
 }
 
 export async function reconcileBinding(env: Env, nonceHash: string): Promise<boolean> {
@@ -173,9 +320,17 @@ export async function reconcileBinding(env: Env, nonceHash: string): Promise<boo
   const state = await queryFirst<ConnectionStateRow>(db, "SELECT * FROM github_connection_states WHERE nonce_hash = ? LIMIT 1", nonceHash);
   if (!state?.oauth_user_id || !state.oauth_login || !state.untrusted_installation_id || state.status === "rejected" || state.status === "expired") return false;
   await ensureCallbackActorStillAdmin(env, { workspace: state.workspace_id, actor: state.plexus_actor_id });
-  const fact = await queryFirst<{ installation_id: number; installer_sender_id: number; repository_selection: string; state: string }>(
+  const fact = await queryFirst<{
+    installation_id: number;
+    installer_sender_id: number;
+    account_id: number;
+    account_login: string;
+    account_type: string;
+    repository_selection: string;
+    state: string;
+  }>(
     db,
-    "SELECT installation_id, installer_sender_id, repository_selection, state FROM github_installation_facts WHERE installation_id = ? LIMIT 1",
+    "SELECT installation_id, installer_sender_id, account_id, account_login, account_type, repository_selection, state FROM github_installation_facts WHERE installation_id = ? LIMIT 1",
     state.untrusted_installation_id,
   );
   if (!fact || fact.state === "deleted") return false;
@@ -187,6 +342,14 @@ export async function reconcileBinding(env: Env, nonceHash: string): Promise<boo
     await execute(db, "UPDATE github_connection_states SET status = 'rejected', updated_at = ? WHERE nonce_hash = ?", now(), nonceHash);
     throw new GithubControlPlaneError("github_actor_mismatch", "OAuth actor does not match the signed installation webhook sender.", 403);
   }
+  const policy = githubEnrollmentPolicy(env);
+  try {
+    assertExpectedOrganization(policy, fact);
+    assertAllowedGithubActor(policy, { id: state.oauth_user_id, login: state.oauth_login });
+  } catch (error) {
+    await execute(db, "UPDATE github_connection_states SET status = 'rejected', updated_at = ? WHERE nonce_hash = ?", now(), nonceHash);
+    throw error;
+  }
   const otherWorkspace = await queryFirst<{ workspace_id: string }>(
     db,
     "SELECT workspace_id FROM github_workspace_installations WHERE installation_id = ? AND workspace_id <> ? LIMIT 1",
@@ -194,6 +357,14 @@ export async function reconcileBinding(env: Env, nonceHash: string): Promise<boo
     state.workspace_id,
   );
   if (otherWorkspace) throw new GithubControlPlaneError("github_installation_already_bound", "This GitHub App installation is already bound to another workspace.", 409);
+  await upsertWorkspaceActor(env, {
+    workspaceId: state.workspace_id,
+    identityId: state.plexus_actor_id,
+    githubUserId: state.oauth_user_id,
+    githubLogin: state.oauth_login,
+    source: "installation",
+    nonceHash: null,
+  });
   const timestamp = now();
   await execute(
     db,
@@ -232,7 +403,14 @@ export async function handleGithubConnection(env: Env, principal: PlexusPrincipa
     }
     const binding = await getBinding(env, principal!.workspaceId);
     if (binding) {
-      const status = binding.repository_selection !== "selected"
+      let expectedOrganization = true;
+      try {
+        assertExpectedOrganization(githubEnrollmentPolicy(env), binding);
+      } catch (error) {
+        if (error instanceof GithubControlPlaneError) expectedOrganization = false;
+        else throw error;
+      }
+      const status = !expectedOrganization || binding.repository_selection !== "selected"
         ? "forbidden"
         : binding.state === "active" ? "connected" : binding.state === "suspended" ? "suspended" : "forbidden";
       return jsonOk({ status, installationId: binding.installation_id, account: { id: binding.account_id, login: binding.account_login, type: binding.account_type } });
@@ -285,6 +463,93 @@ export async function handleGithubConnectStart(env: Env, principal: PlexusPrinci
   }
 }
 
+function actorPolicyPayload(policy: GithubEnrollmentPolicy) {
+  return {
+    organization: { id: policy.organizationId, login: policy.organization },
+    allowedLogins: policy.allowedActors.map((actor) => actor.login),
+  };
+}
+
+export async function handleGithubActor(env: Env, principal: PlexusPrincipal | null): Promise<Response> {
+  const denied = requirePrincipal(principal);
+  if (denied) return denied;
+  try {
+    if (!githubConfigurationPresent(env)) return jsonOk({ status: "unconfigured" as const });
+    const policy = githubEnrollmentPolicy(env);
+    const policyPayload = actorPolicyPayload(policy);
+    const binding = await getBinding(env, principal!.workspaceId);
+    if (!binding) return jsonOk({ status: "unconfigured" as const, ...policyPayload });
+    if (binding.repository_selection !== "selected" || binding.state !== "active") {
+      return jsonOk({ status: "forbidden" as const, ...policyPayload });
+    }
+    try {
+      assertExpectedOrganization(policy, binding);
+    } catch (error) {
+      if (error instanceof GithubControlPlaneError) return jsonOk({ status: "forbidden" as const, ...policyPayload });
+      throw error;
+    }
+    const actor = await getWorkspaceActor(env, principal!.workspaceId, principal!.identityId);
+    if (actor) {
+      const actorPayload = { id: actor.github_user_id, login: actor.github_login, verifiedAt: actor.verified_at };
+      return jsonOk({
+        status: isAllowedGithubActor(policy, { id: actor.github_user_id, login: actor.github_login }) ? "verified" as const : "forbidden" as const,
+        ...policyPayload,
+        actor: actorPayload,
+      });
+    }
+    const pending = await queryFirst<{ expires_at: number }>(
+      database(env),
+      `SELECT expires_at FROM github_actor_connection_states
+        WHERE workspace_id = ? AND plexus_identity_id = ? AND status = 'pending_oauth' AND expires_at > ?
+        ORDER BY created_at DESC LIMIT 1`,
+      principal!.workspaceId,
+      principal!.identityId,
+      Math.floor(Date.now() / 1000),
+    );
+    return jsonOk({ status: pending ? "pending" as const : "not_enrolled" as const, ...policyPayload });
+  } catch (error) {
+    return controlPlaneError(error);
+  }
+}
+
+export async function handleGithubActorEnrollStart(env: Env, principal: PlexusPrincipal | null): Promise<Response> {
+  const denied = requireAdmin(principal);
+  if (denied) return denied;
+  try {
+    await ensureActiveAdmin(env, principal!);
+    await assertActiveBinding(env, principal!);
+    const policy = githubEnrollmentPolicy(env);
+    const nonce = randomNonce();
+    const nonceHash = await sha256Hex(nonce);
+    const expiresAt = Math.floor(Date.now() / 1000) + 600;
+    const state = await signConnectState({ workspace: principal!.workspaceId, actor: principal!.identityId, nonce, exp: expiresAt }, stateSecret(env));
+    const timestamp = now();
+    await execute(
+      database(env),
+      `UPDATE github_actor_connection_states SET status = 'rejected', updated_at = ?
+        WHERE workspace_id = ? AND plexus_identity_id = ? AND status = 'pending_oauth'`,
+      timestamp,
+      principal!.workspaceId,
+      principal!.identityId,
+    );
+    await execute(
+      database(env),
+      `INSERT INTO github_actor_connection_states
+       (nonce_hash, workspace_id, plexus_identity_id, expires_at, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'pending_oauth', ?, ?)`,
+      nonceHash,
+      principal!.workspaceId,
+      principal!.identityId,
+      expiresAt,
+      timestamp,
+      timestamp,
+    );
+    return jsonOk({ status: "pending" as const, authorizeUrl: buildOauthAuthorizeUrl(env, state), ...actorPolicyPayload(policy) }, { status: 201 });
+  } catch (error) {
+    return controlPlaneError(error);
+  }
+}
+
 async function ensureCallbackActorStillAdmin(env: Env, state: { workspace: string; actor: string }): Promise<void> {
   const actor = await queryFirst<{ id: string }>(
     database(env),
@@ -295,6 +560,62 @@ async function ensureCallbackActorStillAdmin(env: Env, state: { workspace: strin
   if (!actor) throw new GithubControlPlaneError("github_forbidden", "The initiating Plexus administrator is no longer active in this workspace.", 403);
 }
 
+async function handleGithubActorCallback(
+  env: Env,
+  url: URL,
+  state: { workspace: string; actor: string },
+  nonceHash: string,
+): Promise<Response> {
+  if (url.searchParams.has("installation_id")) {
+    throw new GithubControlPlaneError("github_actor_callback_invalid", "Actor enrollment cannot bind or replace a GitHub App installation.", 400);
+  }
+  const code = url.searchParams.get("code");
+  if (!code) throw new GithubControlPlaneError("github_callback_invalid", "OAuth code is required for GitHub actor enrollment.", 400);
+  const claimedAt = now();
+  const changes = await executeChanges(
+    database(env),
+    `UPDATE github_actor_connection_states SET consumed_at = ?, updated_at = ?
+      WHERE nonce_hash = ? AND workspace_id = ? AND plexus_identity_id = ?
+        AND consumed_at IS NULL AND expires_at > ? AND status = 'pending_oauth'`,
+    claimedAt,
+    claimedAt,
+    nonceHash,
+    state.workspace,
+    state.actor,
+    Math.floor(Date.now() / 1000),
+  );
+  if (changes !== 1) throw new GithubControlPlaneError("github_state_consumed", "GitHub actor enrollment state was already consumed.", 409);
+  try {
+    const policy = githubEnrollmentPolicy(env);
+    const binding = await assertActiveBinding(env, { workspaceId: state.workspace });
+    const user = await new GithubAppClient(env).exchangeOauthCode(code, binding.installation_id);
+    assertAllowedGithubActor(policy, user);
+    await upsertWorkspaceActor(env, {
+      workspaceId: state.workspace,
+      identityId: state.actor,
+      githubUserId: user.id,
+      githubLogin: user.login,
+      source: "oauth",
+      nonceHash,
+    });
+    const timestamp = now();
+    await execute(
+      database(env),
+      `UPDATE github_actor_connection_states
+          SET oauth_user_id = ?, oauth_login = ?, status = 'bound', updated_at = ?
+        WHERE nonce_hash = ?`,
+      user.id,
+      user.login,
+      timestamp,
+      nonceHash,
+    );
+    return jsonOk({ status: "verified" as const, actor: { id: user.id, login: user.login, verifiedAt: timestamp } });
+  } catch (error) {
+    await execute(database(env), "UPDATE github_actor_connection_states SET status = 'rejected', updated_at = ? WHERE nonce_hash = ?", now(), nonceHash);
+    throw error;
+  }
+}
+
 export async function handleGithubCallback(env: Env, _request: Request, url: URL): Promise<Response> {
   try {
     const stateValue = url.searchParams.get("state") ?? "";
@@ -302,6 +623,12 @@ export async function handleGithubCallback(env: Env, _request: Request, url: URL
     await ensureCallbackActorStillAdmin(env, state);
     const nonceHash = await sha256Hex(state.nonce);
     const db = database(env);
+    const actorState = await queryFirst<ActorConnectionStateRow>(
+      db,
+      "SELECT * FROM github_actor_connection_states WHERE nonce_hash = ? LIMIT 1",
+      nonceHash,
+    );
+    if (actorState) return await handleGithubActorCallback(env, url, state, nonceHash);
     const installationParam = url.searchParams.get("installation_id");
     const installationId = installationParam && /^\d+$/.test(installationParam) ? Number(installationParam) : null;
     if (installationParam && (!installationId || !Number.isSafeInteger(installationId))) {
@@ -343,7 +670,9 @@ export async function handleGithubCallback(env: Env, _request: Request, url: URL
       );
       if (changes === 1) {
         try {
+          const policy = githubEnrollmentPolicy(env);
           const user = await new GithubAppClient(env).exchangeOauthCode(code);
+          assertAllowedGithubActor(policy, user);
           await execute(
             db,
             `UPDATE github_connection_states
@@ -953,23 +1282,26 @@ export async function handleGithubPullRequest(env: Env, request: Request, projec
     }
     const files = validateWriteFiles(body.files);
     await assertProjectWorkspace(env, projectId, principal!.workspaceId);
+    await ensureActiveAdmin(env, principal!);
     const binding = await assertActiveBinding(env, principal!);
-    if (binding.connected_by_identity_id !== principal!.identityId) throw new GithubControlPlaneError("github_actor_not_verified", "Current Plexus administrator has not verified this GitHub identity.", 403);
+    const actor = await getWorkspaceActor(env, principal!.workspaceId, principal!.identityId);
+    if (!actor) throw new GithubControlPlaneError("github_actor_not_verified", "Current Plexus administrator has not verified a GitHub identity.", 403);
+    assertAllowedGithubActor(githubEnrollmentPolicy(env), { id: actor.github_user_id, login: actor.github_login });
     const verified = await getVerifiedRepository(env, projectId, principal!.workspaceId);
     if (verified.repository_id !== repositoryId || verified.installation_id !== binding.installation_id) throw new GithubControlPlaneError("github_repository_forbidden", "Repository is not the verified project repository.", 403);
     const operationKey = await sha256Hex(JSON.stringify({ workspace: principal!.workspaceId, actor: principal!.identityId, projectId, repositoryId, baseSha, title, pullBody, commitMessage: requestedCommitMessage, files }));
     const branch = `plexus/${safeBranchPart(projectId)}-${operationKey.slice(0, 12)}`;
     if (branch === verified.default_branch) throw new GithubControlPlaneError("github_default_branch_forbidden", "Default branch writes are forbidden.", 403);
+    const client = new GithubAppClient(env);
+    const token = await client.createInstallationToken(binding.installation_id, [repositoryId], "write");
+    if (!(await client.hasWritePermission(token.token, verified.owner_login, verified.name, actor.github_login, actor.github_user_id))) {
+      throw new GithubControlPlaneError("github_membership_forbidden", "Verified GitHub actor no longer has write, maintain, or admin permission.", 403);
+    }
     const existing = await queryFirst<{ status: string; branch_name: string; pull_request_number: number | null; pull_request_url: string | null; commit_sha: string | null }>(database(env), "SELECT status, branch_name, pull_request_number, pull_request_url, commit_sha FROM github_write_operations WHERE operation_key = ? LIMIT 1", operationKey);
     if (existing?.status === "completed") return jsonOk({ status: "created" as const, idempotent: true, branch: existing.branch_name, commitSha: existing.commit_sha, pullRequest: { number: existing.pull_request_number, url: existing.pull_request_url } });
     if (existing && existing.status !== "failed") throw new GithubControlPlaneError("github_write_in_progress", "An identical guarded write is already in progress.", 409, true);
-    const client = new GithubAppClient(env);
     let operationTracked = Boolean(existing);
     try {
-      const token = await client.createInstallationToken(binding.installation_id, [repositoryId], "write");
-      if (!(await client.hasWritePermission(token.token, verified.owner_login, verified.name, binding.verified_github_login, binding.verified_github_user_id))) {
-        throw new GithubControlPlaneError("github_membership_forbidden", "Verified GitHub actor no longer has write, maintain, or admin permission.", 403);
-      }
       const repoPath = `/repos/${encodeURIComponent(verified.owner_login)}/${encodeURIComponent(verified.name)}`;
       const repo = await client.request<GithubRepository>(token.token, repoPath);
       if (repo.id !== repositoryId || repo.default_branch !== verified.default_branch) throw new GithubControlPlaneError("github_repository_changed", "Repository identity or default branch changed; verify it again.", 409);

@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { D1DatabaseLike, Env } from "../../lib/env";
 import type { PlexusPrincipal } from "../../lib/plexus-session";
-import { handleGithubActivitySync, handleGithubCallback, handleGithubConnection, handleGithubPullRequest, handleGithubRepoVerify, handleGithubWebhook, nextInstallationState, reconcileBinding, validateWriteFiles } from "../github";
+import { handleGithubActivitySync, handleGithubActor, handleGithubActorEnrollStart, handleGithubCallback, handleGithubConnection, handleGithubPullRequest, handleGithubRepoVerify, handleGithubWebhook, nextInstallationState, reconcileBinding, validateWriteFiles } from "../github";
 import { sha256Hex, signConnectState } from "../../lib/github-app";
 
 let privateKeyPem = "";
@@ -115,7 +115,9 @@ function writeDb(existing: Record<string, unknown> | null = null): { db: D1Datab
         bind(...values: unknown[]) { args = values; return statement; },
         async first<T>() {
           if (sql.includes("FROM projects WHERE id")) return ({ id: args[0] } as T);
-          if (sql.includes("FROM github_workspace_installations b")) return ({ workspace_id: "ws_test", installation_id: 42, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected" } as T);
+          if (sql.includes("FROM plexus_identities")) return ({ id: "pid_admin" } as T);
+          if (sql.includes("FROM github_workspace_actors")) return ({ workspace_id: "ws_test", plexus_identity_id: "pid_admin", github_user_id: 77, github_login: "installer", verified_at: "2026-07-13T00:00:00.000Z", verification_source: "oauth" } as T);
+          if (sql.includes("FROM github_workspace_installations b")) return ({ workspace_id: "ws_test", installation_id: 42, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", account_id: 8, account_login: "thoughtseed", account_type: "Organization" } as T);
           if (sql.includes("FROM project_github_verifications v")) return ({ project_id: "proj_test", workspace_id: "ws_test", installation_id: 42, repository_id: 101, repo_owner: "thoughtseed", repo_name: "private-repo", default_branch: "main", verified_at: "2026-07-13T00:00:00.000Z", owner_login: "thoughtseed", name: "private-repo", full_name: "thoughtseed/private-repo", is_private: 1, state: "active" } as T);
           if (sql.includes("FROM github_write_operations")) return (existing as T | null);
           return null;
@@ -182,7 +184,11 @@ function guardedWriteFetch(permission: unknown, options: { staleBase?: boolean; 
   return { fetcher, mutations, tokenRequest: () => tokenRequest };
 }
 
-function reconciliationDb(repositorySelection: string, actorActive: boolean) {
+function reconciliationDb(
+  repositorySelection: string,
+  actorActive: boolean,
+  organization: { id: number; login: string; type: string } = { id: 8, login: "thoughtseed", type: "Organization" },
+) {
   let bound = false;
   const state = { nonce_hash: "nonce-hash", workspace_id: "ws_test", plexus_actor_id: "pid_admin", expires_at: Math.floor(Date.now() / 1000) + 600, consumed_at: "now", oauth_user_id: 77, oauth_login: "installer", oauth_verified_at: "now", untrusted_installation_id: 42, status: "oauth_verified" };
   const db: D1DatabaseLike = {
@@ -193,7 +199,8 @@ function reconciliationDb(repositorySelection: string, actorActive: boolean) {
         async first<T>() {
           if (sql.includes("FROM github_connection_states")) return ({ ...state } as T);
           if (sql.includes("FROM plexus_identities")) return (actorActive ? ({ id: "pid_admin" } as T) : null);
-          if (sql.includes("FROM github_installation_facts")) return ({ installation_id: Number(args[0]), installer_sender_id: 77, repository_selection: repositorySelection, state: "active" } as T);
+          if (sql.includes("FROM github_installation_facts")) return ({ installation_id: Number(args[0]), installer_sender_id: 77, account_id: organization.id, account_login: organization.login, account_type: organization.type, repository_selection: repositorySelection, state: "active" } as T);
+          if (sql.includes("FROM github_workspace_actors")) return null;
           if (sql.includes("FROM github_workspace_installations")) return null;
           return null;
         },
@@ -288,6 +295,70 @@ function connectionFlowDb(nonceHash: string) {
   return { db, state, binding: () => binding };
 }
 
+function actorEnrollmentDb(
+  initialActor: Record<string, unknown> | null = null,
+  concurrentActor: Record<string, unknown> | null = null,
+) {
+  let actorState: Record<string, unknown> | null = null;
+  let actor: Record<string, unknown> | null = initialActor;
+  const runs: Array<{ sql: string; args: unknown[] }> = [];
+  const db: D1DatabaseLike = {
+    prepare(sql: string) {
+      let args: unknown[] = [];
+      const statement = {
+        bind(...values: unknown[]) { args = values; return statement; },
+        async first<T>() {
+          if (sql.includes("FROM plexus_identities")) return ({ id: "pid_admin" } as T);
+          if (sql.includes("FROM github_workspace_installations b")) {
+            return ({ workspace_id: "ws_test", installation_id: 42, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", account_id: 8, account_login: "thoughtseed", account_type: "Organization" } as T);
+          }
+          if (sql.includes("FROM github_actor_connection_states")) {
+            if (!actorState) return null;
+            if (sql.includes("nonce_hash = ?")) return (actorState.nonce_hash === args[0] ? ({ ...actorState } as T) : null);
+            return ({ ...actorState } as T);
+          }
+          if (sql.includes("FROM github_workspace_actors")) {
+            if (sql.includes("github_user_id = ?") && actor && actor.github_user_id === args[1] && actor.plexus_identity_id !== args[2]) {
+              return ({ plexus_identity_id: actor.plexus_identity_id } as T);
+            }
+            return (actor ? ({ ...actor } as T) : null);
+          }
+          return null;
+        },
+        async all<T>() { return { results: [] as T[] }; },
+        async run() {
+          runs.push({ sql, args: [...args] });
+          if (sql.includes("INSERT INTO github_actor_connection_states")) {
+            actorState = {
+              nonce_hash: args[0], workspace_id: args[1], plexus_identity_id: args[2], expires_at: args[3],
+              consumed_at: null, oauth_user_id: null, oauth_login: null, status: "pending_oauth",
+            };
+          } else if (sql.includes("SET consumed_at") && sql.includes("github_actor_connection_states")) {
+            if (!actorState || actorState.consumed_at) return { success: true, meta: { changes: 0 } };
+            actorState.consumed_at = args[0];
+          } else if (sql.includes("INSERT INTO github_workspace_actors")) {
+            if (!actor && concurrentActor) actor = { ...concurrentActor };
+            if (actor && actor.github_user_id !== args[2]) return { success: true, meta: { changes: 0 } };
+            actor = {
+              workspace_id: args[0], plexus_identity_id: args[1], github_user_id: args[2], github_login: args[3],
+              verified_at: args[4], verification_source: args[5], connection_nonce_hash: args[6],
+            };
+          } else if (sql.includes("SET oauth_user_id") && sql.includes("github_actor_connection_states") && actorState) {
+            actorState.oauth_user_id = args[0];
+            actorState.oauth_login = args[1];
+            actorState.status = "bound";
+          } else if (sql.includes("status = 'rejected'") && sql.includes("github_actor_connection_states") && actorState) {
+            actorState.status = "rejected";
+          }
+          return { success: true, meta: { changes: 1 } };
+        },
+      };
+      return statement;
+    },
+  };
+  return { db, actor: () => actor, state: () => actorState, runs };
+}
+
 function env(db: D1DatabaseLike): Env {
   return {
     TF_ENV: "test",
@@ -298,7 +369,11 @@ function env(db: D1DatabaseLike): Env {
     TF_GITHUB_APP_CLIENT_ID: "Iv1.test",
     TF_GITHUB_APP_CLIENT_SECRET: "secret",
     TF_GITHUB_APP_CALLBACK_URL: "https://worker.test/v1/github/callback",
+    TF_GITHUB_APP_WEBHOOK_SECRET: "webhook-test-secret",
     TF_GITHUB_APP_STATE_SIGNING_SECRET: "s".repeat(32),
+    TF_GITHUB_EXPECTED_ORG: "thoughtseed",
+    TF_GITHUB_EXPECTED_ORG_ID: "8",
+    TF_GITHUB_ALLOWED_ACTORS: "installer:77,Sheshiyer:7611727,psychon7:47470954",
   };
 }
 
@@ -317,6 +392,176 @@ describe("GitHub App routes", () => {
     expect(() => validateWriteFiles([{ path: "src/../secret", content: "x" }])).toThrow(/unsafe/);
     expect(() => validateWriteFiles([{ path: "src/a\u0000.ts", content: "x" }])).toThrow(/unsafe/);
     expect(() => validateWriteFiles([{ path: "src/a.ts", content: "x" }, { path: "src/a.ts", content: "y" }])).toThrow(/unsafe/);
+  });
+
+  it("enrolls an active Plexus administrator through one-time OAuth and stores only the numeric actor", async () => {
+    const fixture = actorEnrollmentDb();
+    const actorEnv = { ...env(fixture.db), TF_GITHUB_ALLOWED_ACTORS: "Sheshiyer:7611727,psychon7:47470954" };
+    const start = await handleGithubActorEnrollStart(actorEnv, principal("admin"));
+    expect(start.status).toBe(201);
+    const startPayload = await start.json() as { data: { authorizeUrl: string; organization: { id: number; login: string } } };
+    expect(startPayload.data.organization).toEqual({ id: 8, login: "thoughtseed" });
+    const stateValue = new URL(startPayload.data.authorizeUrl).searchParams.get("state");
+    expect(stateValue).toBeTruthy();
+
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://github.com/login/oauth/access_token") return new Response(JSON.stringify({ access_token: "ephemeral-oauth-token" }));
+      if (url === "https://api.github.com/user") return new Response(JSON.stringify({ id: 7611727, login: "Sheshiyer" }));
+      if (url === "https://api.github.com/user/installations?per_page=100&page=1") return new Response(JSON.stringify({ installations: [{ id: 42 }] }));
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+    const callback = await handleGithubCallback(
+      actorEnv,
+      new Request("https://worker.test/v1/github/callback"),
+      new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue!)}&code=one-time-code`),
+    );
+    expect(callback.status).toBe(200);
+    expect(fixture.actor()).toMatchObject({ github_user_id: 7611727, github_login: "Sheshiyer", plexus_identity_id: "pid_admin", verification_source: "oauth" });
+    expect(JSON.stringify(fixture.runs)).not.toContain("ephemeral-oauth-token");
+
+    const status = await handleGithubActor(actorEnv, principal("admin"));
+    await expect(status.json()).resolves.toMatchObject({ data: { status: "verified", actor: { id: 7611727, login: "Sheshiyer" } } });
+    const replay = await handleGithubCallback(
+      actorEnv,
+      new Request("https://worker.test/v1/github/callback"),
+      new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue!)}&code=replayed-code`),
+    );
+    expect(replay.status).toBe(409);
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ["inaccessible bound installation", 7611727, [{ id: 99 }], "github_oauth_installation_forbidden", 403],
+    ["recycled allowed login with wrong numeric ID", 999, [{ id: 42 }], "github_actor_forbidden", 403],
+    ["malformed installation authority", 7611727, null, "github_oauth_installations_failed", 502],
+  ])("rejects OAuth actor enrollment for %s", async (_label, userId, installations, expectedCode, expectedStatus) => {
+    const fixture = actorEnrollmentDb();
+    const actorEnv = { ...env(fixture.db), TF_GITHUB_ALLOWED_ACTORS: "Sheshiyer:7611727,psychon7:47470954" };
+    const start = await handleGithubActorEnrollStart(actorEnv, principal("admin"));
+    const startPayload = await start.json() as { data: { authorizeUrl: string } };
+    const stateValue = new URL(startPayload.data.authorizeUrl).searchParams.get("state");
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("oauth/access_token")) return new Response(JSON.stringify({ access_token: "ephemeral-oauth-token" }));
+      if (url.endsWith("/user")) return new Response(JSON.stringify({ id: userId, login: "Sheshiyer" }));
+      if (url.includes("/user/installations?")) {
+        return new Response(JSON.stringify(installations === null ? {} : { installations }));
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+    const callback = await handleGithubCallback(
+      actorEnv,
+      new Request("https://worker.test/v1/github/callback"),
+      new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue!)}&code=one-time-code`),
+    );
+    expect(callback.status).toBe(expectedStatus);
+    await expect(callback.json()).resolves.toMatchObject({ error: { code: expectedCode } });
+    expect(fixture.actor()).toBeNull();
+    expect(fixture.state()).toMatchObject({ status: "rejected" });
+    expect(JSON.stringify(fixture.runs)).not.toContain("ephemeral-oauth-token");
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects rebinding one Plexus identity across the two founder numeric IDs", async () => {
+    const fixture = actorEnrollmentDb({
+      workspace_id: "ws_test",
+      plexus_identity_id: "pid_admin",
+      github_user_id: 7611727,
+      github_login: "Sheshiyer",
+      verified_at: "2026-07-13T00:00:00.000Z",
+      verification_source: "oauth",
+    });
+    const actorEnv = { ...env(fixture.db), TF_GITHUB_ALLOWED_ACTORS: "Sheshiyer:7611727,psychon7:47470954" };
+    const start = await handleGithubActorEnrollStart(actorEnv, principal("admin"));
+    const payload = await start.json() as { data: { authorizeUrl: string } };
+    const stateValue = new URL(payload.data.authorizeUrl).searchParams.get("state");
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("oauth/access_token")) return new Response(JSON.stringify({ access_token: "ephemeral-oauth-token" }));
+      if (url.endsWith("/user")) return new Response(JSON.stringify({ id: 47470954, login: "psychon7" }));
+      if (url.includes("/user/installations?")) return new Response(JSON.stringify({ installations: [{ id: 42 }] }));
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+    const callback = await handleGithubCallback(
+      actorEnv,
+      new Request("https://worker.test/v1/github/callback"),
+      new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue!)}&code=one-time-code`),
+    );
+    expect(callback.status).toBe(409);
+    await expect(callback.json()).resolves.toMatchObject({ error: { code: "github_actor_rebind_forbidden" } });
+    expect(fixture.actor()).toMatchObject({ github_user_id: 7611727, github_login: "Sheshiyer" });
+    expect(fixture.state()).toMatchObject({ status: "rejected" });
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the first founder binding when a concurrent CAS update reports zero changes", async () => {
+    const concurrentFounder = {
+      workspace_id: "ws_test",
+      plexus_identity_id: "pid_admin",
+      github_user_id: 47470954,
+      github_login: "psychon7",
+      verified_at: "2026-07-13T00:00:00.000Z",
+      verification_source: "oauth",
+    };
+    const fixture = actorEnrollmentDb(null, concurrentFounder);
+    const actorEnv = { ...env(fixture.db), TF_GITHUB_ALLOWED_ACTORS: "Sheshiyer:7611727,psychon7:47470954" };
+    const start = await handleGithubActorEnrollStart(actorEnv, principal("admin"));
+    const payload = await start.json() as { data: { authorizeUrl: string } };
+    const stateValue = new URL(payload.data.authorizeUrl).searchParams.get("state");
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("oauth/access_token")) return new Response(JSON.stringify({ access_token: "ephemeral-oauth-token" }));
+      if (url.endsWith("/user")) return new Response(JSON.stringify({ id: 7611727, login: "Sheshiyer" }));
+      if (url.includes("/user/installations?")) return new Response(JSON.stringify({ installations: [{ id: 42 }] }));
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+    const callback = await handleGithubCallback(
+      actorEnv,
+      new Request("https://worker.test/v1/github/callback"),
+      new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue!)}&code=one-time-code`),
+    );
+    expect(callback.status).toBe(409);
+    await expect(callback.json()).resolves.toMatchObject({ error: { code: "github_actor_rebind_forbidden" } });
+    expect(fixture.actor()).toEqual(concurrentFounder);
+    expect(fixture.state()).toMatchObject({ status: "rejected" });
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps actor enrollment admin-only and rechecks active admin state", async () => {
+    const fixture = actorEnrollmentDb();
+    expect((await handleGithubActorEnrollStart(env(fixture.db), principal("employee"))).status).toBe(403);
+    const inactiveDb: D1DatabaseLike = {
+      prepare(sql: string) {
+        const statement = {
+          bind() { return statement; },
+          async first<T>() {
+            if (sql.includes("FROM plexus_identities")) return null;
+            return null;
+          },
+          async all<T>() { return { results: [] as T[] }; },
+          async run() { return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    };
+    const response = await handleGithubActorEnrollStart(env(inactiveDb), principal("admin"));
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "github_forbidden" } });
+  });
+
+  it("revokes an enrolled actor when configured login and numeric ID no longer match", async () => {
+    const store = writeDb();
+    const revokedEnv = { ...env(store.db), TF_GITHUB_ALLOWED_ACTORS: "installer:88" };
+    const status = await handleGithubActor(revokedEnv, principal("admin"));
+    await expect(status.json()).resolves.toMatchObject({ data: { status: "forbidden", actor: { id: 77, login: "installer" } } });
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    const response = await handleGithubPullRequest(revokedEnv, writeRequest(), "proj_test", principal("admin"));
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "github_actor_forbidden" } });
+    expect(fetcher).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 
   it("atomically consumes OAuth state and rejects a second code callback", async () => {
@@ -489,7 +734,8 @@ describe("GitHub App routes", () => {
           bind(...values: unknown[]) { args = values; return statement; },
           async first<T>() {
             if (sql.includes("FROM github_connection_states")) return ({ ...state } as T);
-            if (sql.includes("FROM github_installation_facts")) return ({ installation_id: Number(args[0]), installer_sender_id: 77, repository_selection: "selected", state: "active" } as T);
+            if (sql.includes("FROM github_installation_facts")) return ({ installation_id: Number(args[0]), installer_sender_id: 77, account_id: 8, account_login: "thoughtseed", account_type: "Organization", repository_selection: "selected", state: "active" } as T);
+            if (sql.includes("FROM github_workspace_actors")) return null;
             if (sql.includes("FROM plexus_identities")) return ({ id: "pid_admin" } as T);
             if (sql.includes("FROM github_workspace_installations")) return null;
             return null;
@@ -515,6 +761,16 @@ describe("GitHub App routes", () => {
     const inactiveAdmin = reconciliationDb("selected", false);
     await expect(reconcileBinding(env(inactiveAdmin.db), "nonce-hash")).rejects.toMatchObject({ code: "github_forbidden" });
     expect(inactiveAdmin.wasBound()).toBe(false);
+  });
+
+  it.each([
+    ["wrong organization ID", { id: 999, login: "thoughtseed", type: "Organization" }],
+    ["wrong organization login", { id: 8, login: "lookalike", type: "Organization" }],
+    ["personal account", { id: 8, login: "thoughtseed", type: "User" }],
+  ])("rejects installation binding for %s", async (_label, organization) => {
+    const fixture = reconciliationDb("selected", true, organization);
+    await expect(reconcileBinding(env(fixture.db), "nonce-hash")).rejects.toMatchObject({ code: "github_organization_forbidden" });
+    expect(fixture.wasBound()).toBe(false);
   });
 
   it.each([undefined, "unexpected"])("fails closed when signed repository_selection is %s", async (repositorySelection) => {
@@ -543,7 +799,7 @@ describe("GitHub App routes", () => {
           bind(...values: unknown[]) { args = values; return statement; },
           async first<T>() {
             if (sql.includes("FROM projects WHERE id")) return ({ id: args[0] } as T);
-            if (sql.includes("FROM github_workspace_installations b")) return ({ workspace_id: "ws_test", installation_id: 42, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected" } as T);
+            if (sql.includes("FROM github_workspace_installations b")) return ({ workspace_id: "ws_test", installation_id: 42, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", account_id: 8, account_login: "thoughtseed", account_type: "Organization" } as T);
             if (sql.includes("FROM github_installation_repositories r")) return ({ installation_id: 42, repository_id: 101, owner_login: "thoughtseed", name: "private-repo", full_name: "thoughtseed/private-repo", is_private: 1, default_branch: "main", state: "active" } as T);
             return null;
           },
@@ -632,12 +888,12 @@ describe("GitHub App routes", () => {
 
   it("returns completed deterministic writes without duplicate GitHub mutation", async () => {
     const store = writeDb({ status: "completed", branch_name: "plexus/proj_test-existing", pull_request_number: 9, pull_request_url: "https://github.test/pulls/9", commit_sha: "c".repeat(40) });
-    const fetcher = vi.fn();
-    vi.stubGlobal("fetch", fetcher);
+    const github = guardedWriteFetch({ permission: "write", user: { id: 77, login: "installer" } });
+    vi.stubGlobal("fetch", github.fetcher);
     const response = await handleGithubPullRequest(env(store.db), writeRequest(), "proj_test", principal("admin"));
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ data: { idempotent: true, branch: "plexus/proj_test-existing", pullRequest: { number: 9 } } });
-    expect(fetcher).not.toHaveBeenCalled();
+    expect(github.mutations).toHaveLength(0);
     expect(store.runs).toHaveLength(0);
     vi.unstubAllGlobals();
   });

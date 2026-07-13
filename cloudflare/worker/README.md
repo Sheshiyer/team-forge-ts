@@ -144,6 +144,10 @@ Configure the non-secret values as Worker variables:
 - `TF_GITHUB_APP_SLUG`
 - `TF_GITHUB_APP_CLIENT_ID`
 - `TF_GITHUB_APP_CALLBACK_URL` (`https://<worker>/v1/github/callback`)
+- `TF_GITHUB_EXPECTED_ORG` (`thoughtseed-labs`)
+- `TF_GITHUB_EXPECTED_ORG_ID` (`65741640`)
+- `TF_GITHUB_ALLOWED_ACTORS`
+  (`Sheshiyer:7611727,psychon7:47470954`; `login:numeric-user-id` pairs)
 
 Configure secret values with `wrangler secret put`:
 
@@ -160,6 +164,14 @@ Cloudflare Access and resolves a registered Plexus principal; connection,
 repository selection, verification, and writes require a workspace admin.
 Activity sync is available to active registered workspace members for their
 same-workspace project.
+
+Each founder enrolls separately through GitHub App OAuth. During actor
+enrollment, the Worker uses the ephemeral GitHub user access token only for
+`GET /user` and `GET /user/installations`, requires access to the workspace's
+already-bound installation ID, and then discards the token. D1 stores only the
+verified numeric GitHub user ID, login snapshot, and Plexus identity mapping.
+Login text is never sufficient authority: the configured login and immutable
+numeric user ID must both match.
 
 Subscribe the App to the `installation` and `installation_repositories`
 webhook events. During installation, choose **Only select repositories** and
@@ -185,6 +197,8 @@ Routes:
 
 - `GET /v1/github/connection`
 - `POST /v1/github/connect/start`
+- `GET /v1/github/actor`
+- `POST /v1/github/actor/enroll/start`
 - `GET /v1/github/repositories`
 - `POST /v1/projects/:projectId/github-repo/verify`
 - `POST /v1/projects/:projectId/github-activity/sync`
@@ -192,11 +206,20 @@ Routes:
 - `GET /v1/github/callback` (public, signed single-use state)
 - `POST /v1/github/webhook` (public, `X-Hub-Signature-256`)
 
-Apply migration `0012_github_app_control_plane.sql` before enabling the routes.
+Apply migrations `0012_github_app_control_plane.sql` and
+`0013_github_workspace_actors.sql` before enabling the routes.
 It stores OAuth/install correlation state, immutable signed installation
 facts, workspace bindings, numeric repositories, delivery dedupe/leases,
 project verification, and idempotent write receipts. It stores no OAuth token,
 installation token, client secret, webhook secret, or private key.
+
+Immediate founder revocation is fail-closed: remove the founder's
+`login:numeric-id` pair from `TF_GITHUB_ALLOWED_ACTORS` or revoke their active
+Plexus administrator role. Every guarded write rechecks both controls and then
+rechecks the actor's live numeric repository permission before mutation. A
+local organization-membership preflight is setup guidance only; server
+authority is the pinned founder IDs, pinned bound organization installation,
+active Plexus admin, and live per-repository permission.
 
 ### Founder inputs before setup
 

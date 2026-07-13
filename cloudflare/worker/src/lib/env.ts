@@ -63,6 +63,11 @@ export interface Env {
   TF_GITHUB_APP_CALLBACK_URL?: string;
   TF_GITHUB_APP_WEBHOOK_SECRET?: string;
   TF_GITHUB_APP_STATE_SIGNING_SECRET?: string;
+  // Non-secret enrollment policy. Login names are hints/gates at OAuth time;
+  // durable actor authority is always the verified numeric GitHub user ID.
+  TF_GITHUB_EXPECTED_ORG?: string;
+  TF_GITHUB_EXPECTED_ORG_ID?: string;
+  TF_GITHUB_ALLOWED_ACTORS?: string;
   TF_INTEGRATION_CONFIG_JSON?: string;
   TF_CREDENTIAL_ENVELOPE_KEY?: string;
   TF_WEBHOOK_HMAC_SECRET?: string;

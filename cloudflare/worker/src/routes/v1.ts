@@ -79,6 +79,8 @@ import { handleGetTeamSnapshot, handlePostTeamRefresh } from "./team";
 import { queryFirst, queryAll } from "../lib/db";
 import {
   handleGithubActivitySync,
+  handleGithubActor,
+  handleGithubActorEnrollStart,
   handleGithubCallback,
   handleGithubConnection,
   handleGithubConnectStart,
@@ -212,6 +214,12 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   }
   if (method === "POST" && pathname === "/v1/github/connect/start") {
     return handleGithubConnectStart(env, plexusPrincipal);
+  }
+  if (method === "GET" && pathname === "/v1/github/actor") {
+    return handleGithubActor(env, plexusPrincipal);
+  }
+  if (method === "POST" && pathname === "/v1/github/actor/enroll/start") {
+    return handleGithubActorEnrollStart(env, plexusPrincipal);
   }
   if (method === "GET" && pathname === "/v1/github/repositories") {
     return handleGithubRepositories(env, plexusPrincipal);
