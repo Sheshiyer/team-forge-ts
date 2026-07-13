@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "check": "pnpm exec tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --config vitest.config.ts",
     "dev": "pnpm dlx wrangler dev",
     "deploy": "pnpm dlx wrangler deploy",
     "d1:migrate:local": "pnpm dlx wrangler d1 migrations apply TEAMFORGE_DB --local",

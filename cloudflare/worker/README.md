@@ -129,3 +129,87 @@ Example `TF_INTEGRATION_CONFIG_JSON`:
   "clockify": {}
 }
 ```
+
+## Private GitHub App control plane
+
+Private repository authority uses a GitHub App. The new path never reads
+`TF_GITHUB_TOKEN_GLOBAL`; that variable remains only for legacy sync behavior
+outside this control plane. App and installation tokens are held in Worker
+memory only, scoped to numeric repository IDs whenever the repository is
+known, and are never logged or persisted.
+
+Configure the non-secret values as Worker variables:
+
+- `TF_GITHUB_APP_ID`
+- `TF_GITHUB_APP_SLUG`
+- `TF_GITHUB_APP_CLIENT_ID`
+- `TF_GITHUB_APP_CALLBACK_URL` (`https://<worker>/v1/github/callback`)
+
+Configure secret values with `wrangler secret put`:
+
+- `TF_GITHUB_APP_PRIVATE_KEY`
+- `TF_GITHUB_APP_CLIENT_SECRET`
+- `TF_GITHUB_APP_WEBHOOK_SECRET`
+- `TF_GITHUB_APP_STATE_SIGNING_SECRET` (at least 32 characters)
+
+The GitHub App must use the callback path above as both its OAuth callback and
+post-install setup URL, and must send webhooks to
+`POST /v1/github/webhook`. Configure only these two exact paths as public
+Cloudflare Access bypasses. Every other `/v1/github/*` path remains behind
+Cloudflare Access and resolves a registered Plexus principal; connection,
+repository selection, verification, and writes require a workspace admin.
+Activity sync is available to active registered workspace members for their
+same-workspace project.
+
+Subscribe the App to the `installation` and `installation_repositories`
+webhook events. During installation, choose **Only select repositories** and
+select the approved pilot repositories. The Worker rejects the GitHub
+`repository_selection: all` grant and will not bind that installation.
+
+Required GitHub App repository permissions are:
+
+- Metadata: read
+- Contents: read and write
+- Pull requests: read and write
+- Issues: read
+- Actions: read
+- Checks: read
+
+The Worker requests the least subset for each token. Discovery alone receives
+an installation-wide metadata-read token because numeric repository IDs are
+not yet known. Verification and activity tokens are narrowed to one repository;
+write tokens are narrowed to one repository and cannot update the default
+branch, force references, or modify `.github/workflows`.
+
+Routes:
+
+- `GET /v1/github/connection`
+- `POST /v1/github/connect/start`
+- `GET /v1/github/repositories`
+- `POST /v1/projects/:projectId/github-repo/verify`
+- `POST /v1/projects/:projectId/github-activity/sync`
+- `POST /v1/projects/:projectId/github-pull-requests`
+- `GET /v1/github/callback` (public, signed single-use state)
+- `POST /v1/github/webhook` (public, `X-Hub-Signature-256`)
+
+Apply migration `0012_github_app_control_plane.sql` before enabling the routes.
+It stores OAuth/install correlation state, immutable signed installation
+facts, workspace bindings, numeric repositories, delivery dedupe/leases,
+project verification, and idempotent write receipts. It stores no OAuth token,
+installation token, client secret, webhook secret, or private key.
+
+### Founder inputs before setup
+
+Collect only these non-secret decisions/identifiers before an owner-admin
+approves the installation:
+
+- ownership model: one shared GitHub organization or separate founder accounts
+- both founders' GitHub usernames and verified/noreply commit email addresses
+- each pilot repository's `owner/name` (the Worker resolves numeric IDs from the signed installation/API authority)
+- merge policy (required reviews/checks and who may merge)
+- confirmation that an organization/repository owner-admin approves installation
+
+Never paste a PAT, GitHub password, App private key, client secret, webhook
+secret, or state-signing secret into Plexus, an issue, chat, or repository
+documentation. Enter Worker secrets directly with `wrangler secret put` from a
+trusted operator shell.
