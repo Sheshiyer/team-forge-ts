@@ -446,6 +446,80 @@ function env(db: D1DatabaseLike): Env {
   };
 }
 
+async function expectHardenedPlexusCompletion(
+  response: Response,
+  expectedUrl: string,
+  forbiddenValues: string[],
+): Promise<void> {
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(response.headers.get("vary")).toBe("Accept");
+  expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+  expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+  expect(response.headers.get("x-frame-options")).toBe("DENY");
+  expect(response.headers.get("permissions-policy")).toBe("camera=(), geolocation=(), microphone=()");
+  expect(response.headers.get("content-security-policy")).toBe("default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+  const body = await response.text();
+  expect(body).toContain(`<meta http-equiv="refresh" content="0;url=${expectedUrl}">`);
+  expect(body).toContain(`<a href="${expectedUrl}">Return to Plexus</a>`);
+  expect(body.split(expectedUrl)).toHaveLength(3);
+  expect(body.toLowerCase()).not.toMatch(/state=|code=|access_token|installation_id/);
+  for (const forbidden of forbiddenValues) expect(body).not.toContain(forbidden);
+}
+
+async function runInstallationConnectionFlow(
+  order: "callback-first" | "webhook-first",
+  accept?: string,
+) {
+  const nonce = `nonce-${order}-${accept === "text/html" ? "html" : "json"}`;
+  const nonceHash = await sha256Hex(nonce);
+  const fixture = connectionFlowDb(nonceHash);
+  const secret = "webhook-test-secret";
+  const flowEnv = { ...env(fixture.db), TF_GITHUB_APP_WEBHOOK_SECRET: secret };
+  const stateValue = await signConnectState(
+    { workspace: "ws_test", actor: "pid_admin", nonce, exp: Math.floor(Date.now() / 1000) + 600, target: { id: 8, login: "thoughtseed", type: "Organization" } },
+    "s".repeat(32),
+  );
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).includes("oauth/access_token")) return new Response(JSON.stringify({ access_token: "oauth-token" }));
+    if (String(input).endsWith("/user")) return new Response(JSON.stringify({ id: 77, login: "installer" }));
+    throw new Error(`unexpected fetch ${String(input)}`);
+  }));
+  try {
+    const callbackUrl = new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue)}&code=one-time-code&installation_id=42`);
+    const invokeCallback = () => handleGithubCallback(
+      flowEnv,
+      new Request(callbackUrl, accept ? { headers: { accept } } : undefined),
+      callbackUrl,
+    );
+    const payload = JSON.stringify({
+      action: "created",
+      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected" },
+      sender: { id: 77, login: "installer" },
+      repositories: [],
+    });
+    const signedWebhook = async () => handleGithubWebhook(flowEnv, new Request("https://worker.test/v1/github/webhook", {
+      method: "POST",
+      headers: { "x-hub-signature-256": await webhookSignature(payload, secret), "x-github-delivery": `delivery-${order}-${accept === "text/html" ? "html" : "json"}`, "x-github-event": "installation" },
+      body: payload,
+    }));
+    let response: Response;
+    if (order === "callback-first") {
+      response = await invokeCallback();
+      expect(fixture.binding()).toBeNull();
+      expect((await signedWebhook()).status).toBe(200);
+    } else {
+      expect((await signedWebhook()).status).toBe(200);
+      expect(fixture.binding()).toBeNull();
+      response = await invokeCallback();
+    }
+    return { callbackUrl, fixture, response, stateValue };
+  } finally {
+    vi.unstubAllGlobals();
+  }
+}
+
 describe("GitHub App routes", () => {
   it("binds a connection start to one exact allowlisted installation account", async () => {
     const runs: Array<{ sql: string; args: unknown[] }> = [];
@@ -696,6 +770,8 @@ describe("GitHub App routes", () => {
       new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue!)}&code=one-time-code`),
     );
     expect(callback.status).toBe(200);
+    expect(callback.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    await expect(callback.json()).resolves.toMatchObject({ data: { status: "verified", actor: { id: userId, login } } });
     expect(fixture.actor()).toMatchObject({ github_user_id: userId, github_login: login, plexus_identity_id: "pid_admin", verification_source: "oauth" });
     expect(JSON.stringify(fixture.runs)).not.toContain("ephemeral-oauth-token");
 
@@ -708,6 +784,42 @@ describe("GitHub App routes", () => {
     );
     expect(replay.status).toBe(409);
     vi.unstubAllGlobals();
+  });
+
+  it("returns actor verification browsers to the fixed token-free Plexus setup route", async () => {
+    const fixture = actorEnrollmentDb(null, null, [42, 84]);
+    const actorEnv = { ...env(fixture.db), TF_GITHUB_ALLOWED_ACTORS: "Sheshiyer:7611727,psychon7:47470954" };
+    const start = await handleGithubActorEnrollStart(actorEnv, principal("admin"));
+    const startPayload = await start.json() as { data: { authorizeUrl: string } };
+    const stateValue = new URL(startPayload.data.authorizeUrl).searchParams.get("state");
+    expect(stateValue).toBeTruthy();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://github.com/login/oauth/access_token") return new Response(JSON.stringify({ access_token: "ephemeral-oauth-token" }));
+      if (url === "https://api.github.com/user") return new Response(JSON.stringify({ id: 7611727, login: "Sheshiyer" }));
+      if (url === "https://api.github.com/user/installations?per_page=100&page=1") return new Response(JSON.stringify({ installations: [{ id: 84 }] }));
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+    try {
+      const callbackUrl = new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue!)}&code=one-time-code`);
+      const callback = await handleGithubCallback(
+        actorEnv,
+        new Request(callbackUrl, { headers: { accept: "text/html,application/xhtml+xml" } }),
+        callbackUrl,
+      );
+      await expectHardenedPlexusCompletion(callback, "plexus://github/setup/v1", [
+        stateValue!,
+        "one-time-code",
+        "ephemeral-oauth-token",
+        "ws_test",
+        "7611727",
+        "42",
+        "84",
+      ]);
+      expect(fixture.actor()).toMatchObject({ github_user_id: 7611727, github_login: "Sheshiyer", verification_source: "oauth" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it.each([
@@ -900,8 +1012,12 @@ describe("GitHub App routes", () => {
     }));
     const callbackEnv = env(db);
     const callbackUrl = new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue)}&code=one-time-code`);
-    const first = await handleGithubCallback(callbackEnv, new Request(callbackUrl), callbackUrl);
+    const first = await handleGithubCallback(callbackEnv, new Request(callbackUrl, { headers: { accept: "text/html" } }), callbackUrl);
     expect(first.status).toBe(302);
+    const firstLocation = new URL(first.headers.get("location")!);
+    expect(firstLocation.origin).toBe("https://github.com");
+    expect(firstLocation.pathname).toBe("/apps/thoughtseed-test/installations/new");
+    expect(firstLocation.searchParams.get("state")).toBe(stateValue);
     const replay = await handleGithubCallback(callbackEnv, new Request(callbackUrl), callbackUrl);
     expect(replay.status).toBe(409);
     await expect(replay.json()).resolves.toMatchObject({ error: { code: "github_state_consumed" } });
@@ -1038,46 +1154,36 @@ describe("GitHub App routes", () => {
     expect(fixture.delivery("delivery-cross-account-created")).toMatchObject({ result: "failed" });
   });
 
-  it.each(["callback-first", "webhook-first"])("binds the exact installation when %s", async (order) => {
-    const nonce = `nonce-${order}`;
-    const nonceHash = await sha256Hex(nonce);
-    const fixture = connectionFlowDb(nonceHash);
-    const secret = "webhook-test-secret";
-    const flowEnv = { ...env(fixture.db), TF_GITHUB_APP_WEBHOOK_SECRET: secret };
-    const stateValue = await signConnectState(
-      { workspace: "ws_test", actor: "pid_admin", nonce, exp: Math.floor(Date.now() / 1000) + 600, target: { id: 8, login: "thoughtseed", type: "Organization" } },
-      "s".repeat(32),
-    );
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      if (String(input).includes("oauth/access_token")) return new Response(JSON.stringify({ access_token: "oauth-token" }));
-      if (String(input).endsWith("/user")) return new Response(JSON.stringify({ id: 77, login: "installer" }));
-      throw new Error(`unexpected fetch ${String(input)}`);
-    }));
-    const callbackUrl = new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue)}&code=one-time-code&installation_id=42`);
-    const invokeCallback = () => handleGithubCallback(flowEnv, new Request(callbackUrl), callbackUrl);
-    const payload = JSON.stringify({
-      action: "created",
-      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected" },
-      sender: { id: 77, login: "installer" },
-      repositories: [],
+  it.each(["callback-first", "webhook-first"])("preserves exact JSON while binding the installation when %s", async (order: "callback-first" | "webhook-first") => {
+    const { fixture, response } = await runInstallationConnectionFlow(order, "application/json");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      data: { status: order === "callback-first" ? "pending" : "connected" },
     });
-    const signedWebhook = async () => handleGithubWebhook(flowEnv, new Request("https://worker.test/v1/github/webhook", {
-      method: "POST",
-      headers: { "x-hub-signature-256": await webhookSignature(payload, secret), "x-github-delivery": `delivery-${order}`, "x-github-event": "installation" },
-      body: payload,
-    }));
-    if (order === "callback-first") {
-      expect((await invokeCallback()).status).toBe(200);
-      expect(fixture.binding()).toBeNull();
-      expect((await signedWebhook()).status).toBe(200);
-    } else {
-      expect((await signedWebhook()).status).toBe(200);
-      expect(fixture.binding()).toBeNull();
-      expect((await invokeCallback()).status).toBe(200);
-    }
     expect(fixture.binding()).toMatchObject({ installation_id: 42, verified_github_user_id: 77, workspace_id: "ws_test" });
     expect(fixture.state.status).toBe("bound");
-    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ["callback-first", "pending"],
+    ["webhook-first", "connected"],
+  ])("returns a hardened owner completion page for %s %s callback", async (order: "callback-first" | "webhook-first", expectedStatus) => {
+    expect(expectedStatus).toBe(order === "callback-first" ? "pending" : "connected");
+    const { callbackUrl, fixture, response, stateValue } = await runInstallationConnectionFlow(order, "text/html");
+    await expectHardenedPlexusCompletion(response, "plexus://github/connection/v1/8", [
+      callbackUrl.search,
+      stateValue,
+      "one-time-code",
+      "oauth-token",
+      "ws_test",
+      "thoughtseed",
+      "installer",
+      "42",
+    ]);
+    expect(fixture.binding()).toMatchObject({ installation_id: 42, verified_github_user_id: 77, workspace_id: "ws_test" });
+    expect(fixture.state.status).toBe("bound");
   });
 
   it("fails closed on invalid webhook signatures and deduplicates signed delivery content", async () => {
