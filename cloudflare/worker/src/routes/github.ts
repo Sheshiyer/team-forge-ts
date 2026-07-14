@@ -128,6 +128,13 @@ function controlPlaneError(error: unknown): Response {
   if (error instanceof GithubControlPlaneError) {
     return jsonError({ code: error.code, message: error.message, retryable: error.retryable }, error.status);
   }
+  const message = error instanceof Error ? error.message : "";
+  console.error("github_control_plane_unexpected", {
+    name: error instanceof Error ? error.name : typeof error,
+    category: /D1|SQLITE|database|bind|constraint/i.test(message)
+      ? "database"
+      : /fetch|network|connect|socket/i.test(message) ? "transport" : "runtime",
+  });
   return jsonError({ code: "github_control_plane_failed", message: "GitHub control-plane operation failed.", retryable: false }, 500);
 }
 

@@ -325,6 +325,10 @@ function connectionFlowDb(nonceHash: string) {
             state.oauth_user_id = args[0]; state.oauth_login = args[1]; state.oauth_verified_at = args[2]; state.status = "oauth_verified";
             return { success: true, meta: { changes: 1 } };
           }
+          if (sql.includes("SET status = 'rejected'")) {
+            state.status = "rejected";
+            return { success: true, meta: { changes: 1 } };
+          }
           if (sql.includes("INSERT INTO github_installation_facts")) {
             fact = { installation_id: args[0], account_id: args[1], account_login: args[2], account_type: args[3], installer_sender_id: args[4], installer_sender_login: args[5], last_actor_id: args[6], last_actor_login: args[7], repository_selection: args[8], state: "active" };
             return { success: true, meta: { changes: 1 } };
@@ -893,6 +897,27 @@ describe("GitHub App routes", () => {
     const replay = await handleGithubCallback(callbackEnv, new Request(callbackUrl), callbackUrl);
     expect(replay.status).toBe(409);
     await expect(replay.json()).resolves.toMatchObject({ error: { code: "github_state_consumed" } });
+    vi.unstubAllGlobals();
+  });
+
+  it("returns a typed retryable error when the GitHub OAuth transport fails", async () => {
+    const nonce = "nonce-oauth-transport";
+    const nonceHash = await sha256Hex(nonce);
+    const fixture = connectionFlowDb(nonceHash);
+    const stateValue = await signConnectState(
+      { workspace: "ws_test", actor: "pid_admin", nonce, exp: Math.floor(Date.now() / 1000) + 600, target: { id: 8, login: "thoughtseed", type: "Organization" } },
+      "s".repeat(32),
+    );
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new TypeError("network unavailable");
+    }));
+    const callbackUrl = new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue)}&code=one-time-code`);
+    const response = await handleGithubCallback(env(fixture.db), new Request(callbackUrl), callbackUrl);
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "github_oauth_exchange_failed", retryable: true },
+    });
+    expect(fixture.state.status).toBe("rejected");
     vi.unstubAllGlobals();
   });
 

@@ -66,6 +66,33 @@ describe("GitHub App cryptographic boundary", () => {
     await expect(verifyWebhookSignature('{"ok":false}', signature, secret)).resolves.toBe(false);
   });
 
+  it("exchanges OAuth codes using the documented form encoding and never returns the user token", async () => {
+    let tokenRequest: RequestInit | undefined;
+    const mockedFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "https://github.com/login/oauth/access_token") {
+        tokenRequest = init;
+        return new Response(JSON.stringify({ access_token: "ephemeral-user-token" }));
+      }
+      if (String(input) === "https://api.github.com/user") {
+        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer ephemeral-user-token");
+        return new Response(JSON.stringify({ id: 7611727, login: "Sheshiyer" }));
+      }
+      throw new Error(`unexpected fetch ${String(input)}`);
+    }) as unknown as typeof fetch;
+
+    const user = await new GithubAppClient(makeEnv(), mockedFetch).exchangeOauthCode("one-time-code");
+    const body = new URLSearchParams(String(tokenRequest?.body));
+    expect(new Headers(tokenRequest?.headers).get("content-type")).toBe("application/x-www-form-urlencoded");
+    expect(Object.fromEntries(body)).toEqual({
+      client_id: "Iv1.test",
+      client_secret: "client-secret",
+      code: "one-time-code",
+      redirect_uri: "https://worker.test/v1/github/callback",
+    });
+    expect(user).toEqual({ id: 7611727, login: "Sheshiyer" });
+    expect(JSON.stringify(user)).not.toContain("ephemeral-user-token");
+  });
+
   it("narrows write tokens to numeric repositories and least permissions", async () => {
     let requestBody: Record<string, unknown> | null = null;
     let apiVersion = "";
