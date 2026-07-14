@@ -11,6 +11,7 @@ import {
   signConnectState,
   verifyConnectState,
   verifyWebhookSignature,
+  type GithubInstallationAccountTarget,
   type GithubRepository,
 } from "../lib/github-app";
 
@@ -24,6 +25,9 @@ interface ConnectionStateRow {
   oauth_login: string | null;
   oauth_verified_at: string | null;
   untrusted_installation_id: number | null;
+  target_account_id: number | null;
+  target_account_login: string | null;
+  target_account_type: "Organization" | "User" | null;
   status: "pending_oauth" | "oauth_verified" | "bound" | "expired" | "rejected";
 }
 
@@ -47,11 +51,14 @@ interface WorkspaceActorRow {
   verification_source: "installation" | "oauth";
 }
 
-interface GithubEnrollmentPolicy {
-  organization: string;
-  organizationId: number;
+interface GithubActorPolicy {
   allowedActors: Array<{ id: number; login: string }>;
   allowedActorByLogin: Map<string, number>;
+}
+
+interface GithubInstallationPolicy {
+  allowedTargets: GithubInstallationAccountTarget[];
+  allowedTargetById: Map<number, GithubInstallationAccountTarget>;
 }
 
 interface InstallationBindingRow {
@@ -61,10 +68,10 @@ interface InstallationBindingRow {
   verified_github_user_id: number;
   verified_github_login: string;
   state: "active" | "suspended" | "revoked";
-  account_id?: number;
-  account_login?: string;
-  account_type?: string;
-  repository_selection?: string;
+  account_id: number;
+  account_login: string;
+  account_type: "Organization" | "User";
+  repository_selection: string;
 }
 
 interface RepositoryAuthorityRow {
@@ -145,20 +152,18 @@ function githubConfigurationPresent(env: Env): boolean {
     env.TF_GITHUB_APP_CALLBACK_URL,
     env.TF_GITHUB_APP_WEBHOOK_SECRET,
     env.TF_GITHUB_APP_STATE_SIGNING_SECRET,
-    env.TF_GITHUB_EXPECTED_ORG,
-    env.TF_GITHUB_EXPECTED_ORG_ID,
+    env.TF_GITHUB_ALLOWED_INSTALLATION_ACCOUNTS,
     env.TF_GITHUB_ALLOWED_ACTORS,
   ].every((value) => Boolean(value?.trim()));
 }
 
-function githubEnrollmentPolicy(env: Env): GithubEnrollmentPolicy {
-  const organization = env.TF_GITHUB_EXPECTED_ORG?.trim() ?? "";
-  const organizationId = Number(env.TF_GITHUB_EXPECTED_ORG_ID);
+const validGithubLogin = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
+
+function githubActorPolicy(env: Env): GithubActorPolicy {
   const configuredActors = (env.TF_GITHUB_ALLOWED_ACTORS ?? "")
     .split(",")
     .map((actor) => actor.trim())
     .filter(Boolean);
-  const validLogin = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
   const allowedActors = configuredActors.map((entry) => {
     const separator = entry.lastIndexOf(":");
     const login = separator > 0 ? entry.slice(0, separator).trim() : "";
@@ -167,27 +172,55 @@ function githubEnrollmentPolicy(env: Env): GithubEnrollmentPolicy {
   });
   const allowedActorByLogin = new Map(allowedActors.map((actor) => [actor.login.toLowerCase(), actor.id]));
   const actorIds = new Set(allowedActors.map((actor) => actor.id));
-  if (!validLogin.test(organization) || !Number.isSafeInteger(organizationId) || organizationId <= 0 ||
-    allowedActors.length === 0 || allowedActors.some((actor) => !validLogin.test(actor.login) || !Number.isSafeInteger(actor.id) || actor.id <= 0) ||
+  if (allowedActors.length === 0 || allowedActors.some((actor) => !validGithubLogin.test(actor.login) || !Number.isSafeInteger(actor.id) || actor.id <= 0) ||
     allowedActorByLogin.size !== allowedActors.length || actorIds.size !== allowedActors.length) {
-    throw new GithubControlPlaneError("github_actor_policy_invalid", "GitHub organization and actor allowlist configuration is invalid.", 503);
+    throw new GithubControlPlaneError("github_actor_policy_invalid", "GitHub actor allowlist configuration is invalid.", 503);
   }
-  return { organization, organizationId, allowedActors, allowedActorByLogin };
+  return { allowedActors, allowedActorByLogin };
 }
 
-function isAllowedGithubActor(policy: GithubEnrollmentPolicy, user: { id: number; login: string }): boolean {
+function githubInstallationPolicy(env: Env): GithubInstallationPolicy {
+  const entries = (env.TF_GITHUB_ALLOWED_INSTALLATION_ACCOUNTS ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const parsedTargets = entries.map((entry) => entry.split(":").map((part) => part.trim()));
+  const allowedTargets = parsedTargets.map((parts): GithubInstallationAccountTarget => {
+    const type = parts[0] as "Organization" | "User";
+    return { type, login: parts[1] ?? "", id: Number(parts[2] ?? "") };
+  });
+  const allowedTargetById = new Map(allowedTargets.map((target) => [target.id, target]));
+  const logins = new Set(allowedTargets.map((target) => target.login.toLowerCase()));
+  if (allowedTargets.length === 0 || parsedTargets.some((parts) => parts.length !== 3) || allowedTargets.some((target) =>
+    (target.type !== "Organization" && target.type !== "User") || !validGithubLogin.test(target.login) ||
+    !Number.isSafeInteger(target.id) || target.id <= 0) || allowedTargetById.size !== allowedTargets.length || logins.size !== allowedTargets.length) {
+    throw new GithubControlPlaneError("github_installation_policy_invalid", "GitHub installation-account allowlist configuration is invalid.", 503);
+  }
+  return { allowedTargets, allowedTargetById };
+}
+
+function isAllowedGithubActor(policy: GithubActorPolicy, user: { id: number; login: string }): boolean {
   return policy.allowedActorByLogin.get(user.login.toLowerCase()) === user.id;
 }
 
-function assertAllowedGithubActor(policy: GithubEnrollmentPolicy, user: { id: number; login: string }): void {
+function assertAllowedGithubActor(policy: GithubActorPolicy, user: { id: number; login: string }): void {
   if (!isAllowedGithubActor(policy, user)) {
     throw new GithubControlPlaneError("github_actor_forbidden", "GitHub OAuth identity is not allowed for this workspace.", 403);
   }
 }
 
-function assertExpectedOrganization(policy: GithubEnrollmentPolicy, binding: Pick<InstallationBindingRow, "account_id" | "account_login" | "account_type">): void {
-  if (binding.account_type !== "Organization" || binding.account_id !== policy.organizationId || binding.account_login?.toLowerCase() !== policy.organization.toLowerCase()) {
-    throw new GithubControlPlaneError("github_organization_forbidden", "GitHub App installation is not owned by the configured organization.", 403);
+function installationTargetOf(value: Pick<InstallationBindingRow, "account_id" | "account_login" | "account_type">): GithubInstallationAccountTarget {
+  return { id: value.account_id, login: value.account_login, type: value.account_type };
+}
+
+function isAllowedInstallationTarget(policy: GithubInstallationPolicy, value: Pick<InstallationBindingRow, "account_id" | "account_login" | "account_type">): boolean {
+  const expected = policy.allowedTargetById.get(value.account_id);
+  return Boolean(expected && expected.type === value.account_type && expected.login.toLowerCase() === value.account_login.toLowerCase());
+}
+
+function assertAllowedInstallationTarget(policy: GithubInstallationPolicy, value: Pick<InstallationBindingRow, "account_id" | "account_login" | "account_type">): void {
+  if (!isAllowedInstallationTarget(policy, value)) {
+    throw new GithubControlPlaneError("github_installation_account_forbidden", "GitHub App installation account is not allowlisted.", 403);
   }
 }
 
@@ -218,25 +251,49 @@ async function parseJsonObject(request: Request): Promise<Record<string, unknown
   }
 }
 
-async function getBinding(env: Env, workspaceId: string): Promise<InstallationBindingRow | null> {
-  return queryFirst<InstallationBindingRow>(
+async function getBindings(env: Env, workspaceId: string): Promise<InstallationBindingRow[]> {
+  return queryAll<InstallationBindingRow>(
     database(env),
-    `SELECT b.*, f.account_id, f.account_login, f.account_type, f.repository_selection
+    `SELECT b.*, f.account_login, f.account_type, f.repository_selection
        FROM github_workspace_installations b
        JOIN github_installation_facts f ON f.installation_id = b.installation_id
-      WHERE b.workspace_id = ? LIMIT 1`,
+      WHERE b.workspace_id = ?
+      ORDER BY b.created_at ASC, b.installation_id ASC`,
     workspaceId,
   );
 }
 
-async function assertActiveBinding(env: Env, principal: Pick<PlexusPrincipal, "workspaceId">): Promise<InstallationBindingRow> {
-  const binding = await getBinding(env, principal.workspaceId);
+async function getBinding(env: Env, workspaceId: string, installationId: number): Promise<InstallationBindingRow | null> {
+  return queryFirst<InstallationBindingRow>(
+    database(env),
+    `SELECT b.*, f.account_login, f.account_type, f.repository_selection
+       FROM github_workspace_installations b
+       JOIN github_installation_facts f ON f.installation_id = b.installation_id
+      WHERE b.workspace_id = ? AND b.installation_id = ? LIMIT 1`,
+    workspaceId,
+    installationId,
+  );
+}
+
+function assertBindingIsActive(env: Env, binding: InstallationBindingRow): InstallationBindingRow {
   if (!binding) throw new GithubControlPlaneError("github_unconfigured", "No GitHub App installation is connected to this workspace.", 409);
   if (binding.repository_selection !== "selected") throw new GithubControlPlaneError("github_repository_selection_forbidden", "GitHub App access to all repositories is forbidden.", 403);
   if (binding.state === "suspended") throw new GithubControlPlaneError("github_suspended", "The workspace GitHub App installation is suspended.", 409);
   if (binding.state !== "active") throw new GithubControlPlaneError("github_forbidden", "The workspace GitHub App installation is revoked.", 403);
-  assertExpectedOrganization(githubEnrollmentPolicy(env), binding);
+  assertAllowedInstallationTarget(githubInstallationPolicy(env), binding);
   return binding;
+}
+
+async function assertActiveBinding(env: Env, workspaceId: string, installationId: number): Promise<InstallationBindingRow> {
+  const binding = await getBinding(env, workspaceId, installationId);
+  if (!binding) throw new GithubControlPlaneError("github_unconfigured", "No matching GitHub App installation is connected to this workspace.", 409);
+  return assertBindingIsActive(env, binding);
+}
+
+async function assertActiveBindings(env: Env, workspaceId: string): Promise<InstallationBindingRow[]> {
+  const bindings = (await getBindings(env, workspaceId)).filter((binding) => binding.state === "active");
+  if (bindings.length === 0) throw new GithubControlPlaneError("github_unconfigured", "No active GitHub App installation is connected to this workspace.", 409);
+  return bindings.map((binding) => assertBindingIsActive(env, binding));
 }
 
 async function ensureActiveAdmin(env: Env, principal: Pick<PlexusPrincipal, "identityId" | "workspaceId">): Promise<void> {
@@ -318,7 +375,8 @@ async function upsertWorkspaceActor(
 export async function reconcileBinding(env: Env, nonceHash: string): Promise<boolean> {
   const db = database(env);
   const state = await queryFirst<ConnectionStateRow>(db, "SELECT * FROM github_connection_states WHERE nonce_hash = ? LIMIT 1", nonceHash);
-  if (!state?.oauth_user_id || !state.oauth_login || !state.untrusted_installation_id || state.status === "rejected" || state.status === "expired") return false;
+  if (!state?.oauth_user_id || !state.oauth_login || !state.untrusted_installation_id || !state.target_account_id ||
+    !state.target_account_login || !state.target_account_type || state.status === "rejected" || state.status === "expired") return false;
   await ensureCallbackActorStillAdmin(env, { workspace: state.workspace_id, actor: state.plexus_actor_id });
   const fact = await queryFirst<{
     installation_id: number;
@@ -342,10 +400,22 @@ export async function reconcileBinding(env: Env, nonceHash: string): Promise<boo
     await execute(db, "UPDATE github_connection_states SET status = 'rejected', updated_at = ? WHERE nonce_hash = ?", now(), nonceHash);
     throw new GithubControlPlaneError("github_actor_mismatch", "OAuth actor does not match the signed installation webhook sender.", 403);
   }
-  const policy = githubEnrollmentPolicy(env);
+  const installationPolicy = githubInstallationPolicy(env);
+  const actorPolicy = githubActorPolicy(env);
   try {
-    assertExpectedOrganization(policy, fact);
-    assertAllowedGithubActor(policy, { id: state.oauth_user_id, login: state.oauth_login });
+    if (fact.account_type !== "Organization" && fact.account_type !== "User") {
+      throw new GithubControlPlaneError("github_installation_account_forbidden", "GitHub App installation account type is invalid.", 403);
+    }
+    assertAllowedInstallationTarget(installationPolicy, {
+      account_id: fact.account_id,
+      account_login: fact.account_login,
+      account_type: fact.account_type,
+    });
+    assertAllowedGithubActor(actorPolicy, { id: state.oauth_user_id, login: state.oauth_login });
+    if (fact.account_id !== state.target_account_id || fact.account_type !== state.target_account_type ||
+      fact.account_login.toLowerCase() !== state.target_account_login.toLowerCase()) {
+      throw new GithubControlPlaneError("github_installation_target_mismatch", "Signed installation account does not match the selected connection target.", 409);
+    }
   } catch (error) {
     await execute(db, "UPDATE github_connection_states SET status = 'rejected', updated_at = ? WHERE nonce_hash = ?", now(), nonceHash);
     throw error;
@@ -369,10 +439,10 @@ export async function reconcileBinding(env: Env, nonceHash: string): Promise<boo
   await execute(
     db,
     `INSERT INTO github_workspace_installations
-       (workspace_id, installation_id, connected_by_identity_id, verified_github_user_id, verified_github_login,
+       (workspace_id, installation_id, account_id, connected_by_identity_id, verified_github_user_id, verified_github_login,
         connection_nonce_hash, state, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(workspace_id) DO UPDATE SET
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(workspace_id, account_id) DO UPDATE SET
        installation_id = excluded.installation_id,
        connected_by_identity_id = excluded.connected_by_identity_id,
        verified_github_user_id = excluded.verified_github_user_id,
@@ -382,6 +452,7 @@ export async function reconcileBinding(env: Env, nonceHash: string): Promise<boo
        updated_at = excluded.updated_at`,
     state.workspace_id,
     fact.installation_id,
+    fact.account_id,
     state.plexus_actor_id,
     state.oauth_user_id,
     state.oauth_login,
@@ -401,19 +472,19 @@ export async function handleGithubConnection(env: Env, principal: PlexusPrincipa
     if (!githubConfigurationPresent(env)) {
       return jsonOk({ status: "unconfigured" as const });
     }
-    const binding = await getBinding(env, principal!.workspaceId);
-    if (binding) {
-      let expectedOrganization = true;
-      try {
-        assertExpectedOrganization(githubEnrollmentPolicy(env), binding);
-      } catch (error) {
-        if (error instanceof GithubControlPlaneError) expectedOrganization = false;
-        else throw error;
-      }
-      const status = !expectedOrganization || binding.repository_selection !== "selected"
-        ? "forbidden"
-        : binding.state === "active" ? "connected" : binding.state === "suspended" ? "suspended" : "forbidden";
-      return jsonOk({ status, installationId: binding.installation_id, account: { id: binding.account_id, login: binding.account_login, type: binding.account_type } });
+    const installationPolicy = githubInstallationPolicy(env);
+    const bindings = await getBindings(env, principal!.workspaceId);
+    const installations = bindings.map((binding) => {
+      const allowed = isAllowedInstallationTarget(installationPolicy, binding) && binding.repository_selection === "selected";
+      const status = !allowed ? "forbidden" as const
+        : binding.state === "active" ? "connected" as const
+          : binding.state === "suspended" ? "suspended" as const : "forbidden" as const;
+      return { installationId: binding.installation_id, status, account: installationTargetOf(binding) };
+    });
+    if (installations.length > 0) {
+      const status = installations.some((installation) => installation.status === "connected") ? "connected" as const
+        : installations.some((installation) => installation.status === "suspended") ? "suspended" as const : "forbidden" as const;
+      return jsonOk({ status, installations, allowedTargets: installationPolicy.allowedTargets });
     }
     const pending = await queryFirst<{ expires_at: number }>(
       database(env),
@@ -421,21 +492,26 @@ export async function handleGithubConnection(env: Env, principal: PlexusPrincipa
       principal!.workspaceId,
       Math.floor(Date.now() / 1000),
     );
-    return jsonOk({ status: pending ? "pending" as const : "unconfigured" as const });
+    return jsonOk({ status: pending ? "pending" as const : "unconfigured" as const, installations, allowedTargets: installationPolicy.allowedTargets });
   } catch (error) {
     return controlPlaneError(error);
   }
 }
 
-export async function handleGithubConnectStart(env: Env, principal: PlexusPrincipal | null): Promise<Response> {
+export async function handleGithubConnectStart(env: Env, request: Request, principal: PlexusPrincipal | null): Promise<Response> {
   const denied = requireAdmin(principal);
   if (denied) return denied;
   try {
     const db = database(env);
+    const body = await parseJsonObject(request);
+    const accountId = Number(body.accountId);
+    const policy = githubInstallationPolicy(env);
+    const target = Number.isSafeInteger(accountId) && accountId > 0 ? policy.allowedTargetById.get(accountId) : undefined;
+    if (!target) throw new GithubControlPlaneError("github_installation_target_required", "An exact allowlisted numeric accountId is required.", 400);
     const nonce = randomNonce();
     const nonceHash = await sha256Hex(nonce);
     const expiresAt = Math.floor(Date.now() / 1000) + 600;
-    const state = await signConnectState({ workspace: principal!.workspaceId, actor: principal!.identityId, nonce, exp: expiresAt }, stateSecret(env));
+    const state = await signConnectState({ workspace: principal!.workspaceId, actor: principal!.identityId, nonce, exp: expiresAt, target }, stateSecret(env));
     const authorizeUrl = buildOauthAuthorizeUrl(env, state);
     const timestamp = now();
     await execute(
@@ -448,24 +524,27 @@ export async function handleGithubConnectStart(env: Env, principal: PlexusPrinci
     await execute(
       db,
       `INSERT INTO github_connection_states
-       (nonce_hash, workspace_id, plexus_actor_id, expires_at, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'pending_oauth', ?, ?)`,
+       (nonce_hash, workspace_id, plexus_actor_id, expires_at, target_account_id, target_account_login,
+        target_account_type, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_oauth', ?, ?)`,
       nonceHash,
       principal!.workspaceId,
       principal!.identityId,
       expiresAt,
+      target.id,
+      target.login,
+      target.type,
       timestamp,
       timestamp,
     );
-    return jsonOk({ status: "pending" as const, authorizeUrl }, { status: 201 });
+    return jsonOk({ status: "pending" as const, authorizeUrl, target }, { status: 201 });
   } catch (error) {
     return controlPlaneError(error);
   }
 }
 
-function actorPolicyPayload(policy: GithubEnrollmentPolicy) {
+function actorPolicyPayload(policy: GithubActorPolicy) {
   return {
-    organization: { id: policy.organizationId, login: policy.organization },
     allowedLogins: policy.allowedActors.map((actor) => actor.login),
   };
 }
@@ -475,18 +554,14 @@ export async function handleGithubActor(env: Env, principal: PlexusPrincipal | n
   if (denied) return denied;
   try {
     if (!githubConfigurationPresent(env)) return jsonOk({ status: "unconfigured" as const });
-    const policy = githubEnrollmentPolicy(env);
+    const policy = githubActorPolicy(env);
     const policyPayload = actorPolicyPayload(policy);
-    const binding = await getBinding(env, principal!.workspaceId);
-    if (!binding) return jsonOk({ status: "unconfigured" as const, ...policyPayload });
-    if (binding.repository_selection !== "selected" || binding.state !== "active") {
+    const bindings = await getBindings(env, principal!.workspaceId);
+    if (bindings.length === 0) return jsonOk({ status: "unconfigured" as const, ...policyPayload });
+    const activeBindings = bindings.filter((binding) => binding.state === "active" && binding.repository_selection === "selected" &&
+      isAllowedInstallationTarget(githubInstallationPolicy(env), binding));
+    if (activeBindings.length === 0) {
       return jsonOk({ status: "forbidden" as const, ...policyPayload });
-    }
-    try {
-      assertExpectedOrganization(policy, binding);
-    } catch (error) {
-      if (error instanceof GithubControlPlaneError) return jsonOk({ status: "forbidden" as const, ...policyPayload });
-      throw error;
     }
     const actor = await getWorkspaceActor(env, principal!.workspaceId, principal!.identityId);
     if (actor) {
@@ -517,8 +592,8 @@ export async function handleGithubActorEnrollStart(env: Env, principal: PlexusPr
   if (denied) return denied;
   try {
     await ensureActiveAdmin(env, principal!);
-    await assertActiveBinding(env, principal!);
-    const policy = githubEnrollmentPolicy(env);
+    await assertActiveBindings(env, principal!.workspaceId);
+    const policy = githubActorPolicy(env);
     const nonce = randomNonce();
     const nonceHash = await sha256Hex(nonce);
     const expiresAt = Math.floor(Date.now() / 1000) + 600;
@@ -586,9 +661,9 @@ async function handleGithubActorCallback(
   );
   if (changes !== 1) throw new GithubControlPlaneError("github_state_consumed", "GitHub actor enrollment state was already consumed.", 409);
   try {
-    const policy = githubEnrollmentPolicy(env);
-    const binding = await assertActiveBinding(env, { workspaceId: state.workspace });
-    const user = await new GithubAppClient(env).exchangeOauthCode(code, binding.installation_id);
+    const policy = githubActorPolicy(env);
+    const bindings = await assertActiveBindings(env, state.workspace);
+    const user = await new GithubAppClient(env).exchangeOauthCode(code, bindings.map((binding) => binding.installation_id));
     assertAllowedGithubActor(policy, user);
     await upsertWorkspaceActor(env, {
       workspaceId: state.workspace,
@@ -629,6 +704,12 @@ export async function handleGithubCallback(env: Env, _request: Request, url: URL
       nonceHash,
     );
     if (actorState) return await handleGithubActorCallback(env, url, state, nonceHash);
+    const connectionState = await queryFirst<ConnectionStateRow>(db, "SELECT * FROM github_connection_states WHERE nonce_hash = ? LIMIT 1", nonceHash);
+    if (!state.target || !connectionState || connectionState.workspace_id !== state.workspace || connectionState.plexus_actor_id !== state.actor ||
+      connectionState.target_account_id !== state.target.id || connectionState.target_account_type !== state.target.type ||
+      connectionState.target_account_login?.toLowerCase() !== state.target.login.toLowerCase()) {
+      throw new GithubControlPlaneError("github_installation_target_mismatch", "GitHub connection state is not bound to the selected installation account.", 409);
+    }
     const installationParam = url.searchParams.get("installation_id");
     const installationId = installationParam && /^\d+$/.test(installationParam) ? Number(installationParam) : null;
     if (installationParam && (!installationId || !Number.isSafeInteger(installationId))) {
@@ -670,7 +751,7 @@ export async function handleGithubCallback(env: Env, _request: Request, url: URL
       );
       if (changes === 1) {
         try {
-          const policy = githubEnrollmentPolicy(env);
+          const policy = githubActorPolicy(env);
           const user = await new GithubAppClient(env).exchangeOauthCode(code);
           assertAllowedGithubActor(policy, user);
           await execute(
@@ -698,6 +779,7 @@ export async function handleGithubCallback(env: Env, _request: Request, url: URL
     if (row?.oauth_user_id && !row.untrusted_installation_id) {
       const installationUrl = new URL(buildInstallationUrl(env));
       installationUrl.searchParams.set("state", stateValue);
+      installationUrl.searchParams.set("target_id", String(state.target.id));
       return Response.redirect(installationUrl.toString(), 302);
     }
     return jsonOk({ status: "pending" as const });
@@ -799,11 +881,22 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
     const installationId = Number(installation?.id);
     const senderId = Number(sender?.id);
     const accountId = Number(account?.id);
+    const accountType = account?.type;
     const repositorySelection = installation?.repository_selection;
     if (!Number.isSafeInteger(installationId) || installationId <= 0 || !Number.isSafeInteger(senderId) || senderId <= 0 ||
       !Number.isSafeInteger(accountId) || accountId <= 0 || !account?.login || !sender?.login ||
+      (accountType !== "Organization" && accountType !== "User") ||
       (repositorySelection !== "selected" && repositorySelection !== "all")) {
       throw new GithubControlPlaneError("github_webhook_payload_invalid", "Signed installation facts are incomplete.", 400);
+    }
+    const accountTarget: GithubInstallationAccountTarget = { id: accountId, login: String(account.login), type: accountType };
+    if (!isAllowedInstallationTarget(githubInstallationPolicy(env), {
+      account_id: accountTarget.id,
+      account_login: accountTarget.login,
+      account_type: accountTarget.type,
+    })) {
+      await execute(db, "UPDATE github_webhook_deliveries SET processed_at = ?, result = 'ignored' WHERE delivery_id = ?", now(), deliveryId);
+      return jsonOk({ status: "ignored" as const });
     }
     const action = String(payload.action ?? "");
     const allowedActions = eventName === "installation"
@@ -826,7 +919,7 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
            last_actor_id = excluded.last_actor_id, last_actor_login = excluded.last_actor_login,
            repository_selection = excluded.repository_selection, last_delivery_id = excluded.last_delivery_id,
            observed_at = excluded.observed_at, updated_at = excluded.updated_at`,
-        installationId, accountId, String(account.login), String(account.type ?? "Organization"),
+        installationId, accountId, String(account.login), accountType,
         senderId, String(sender.login), senderId, String(sender.login),
         repositorySelection, deliveryId, observedAt, observedAt,
       );
@@ -840,7 +933,7 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
            account_id = ?, account_login = ?, account_type = ?, last_actor_id = ?, last_actor_login = ?,
            repository_selection = ?, state = ?, last_delivery_id = ?, observed_at = ?, updated_at = ?
          WHERE installation_id = ?`,
-        accountId, String(account.login), String(account.type ?? "Organization"), senderId, String(sender.login),
+        accountId, String(account.login), accountType, senderId, String(sender.login),
         repositorySelection, factState, deliveryId, observedAt, observedAt, installationId,
       );
     }
@@ -960,17 +1053,20 @@ export async function handleGithubRepositories(env: Env, principal: PlexusPrinci
   const denied = requireAdmin(principal);
   if (denied) return denied;
   try {
-    const binding = await assertActiveBinding(env, principal!);
-    const repositories = await discoverRepositories(env, binding);
+    const bindings = await assertActiveBindings(env, principal!.workspaceId);
+    const repositories = (await Promise.all(bindings.map(async (binding) => ({ binding, repositories: await discoverRepositories(env, binding) }))))
+      .flatMap(({ binding, repositories: installationRepositories }) => installationRepositories.map((repo) => ({ binding, repo })));
     return jsonOk({
       status: "connected" as const,
-      repositories: repositories.map((repo) => ({
+      repositories: repositories.map(({ binding, repo }) => ({
         id: repo.id,
         name: repo.name,
         fullName: repo.full_name,
         private: repo.private,
         defaultBranch: repo.default_branch,
         owner: repo.owner.login,
+        installationId: binding.installation_id,
+        account: installationTargetOf(binding),
       })),
     });
   } catch (error) {
@@ -1002,11 +1098,14 @@ export async function handleGithubRepoVerify(env: Env, request: Request, project
   if (denied) return denied;
   try {
     const body = await parseJsonObject(request);
+    const installationId = Number(body.installationId);
     const repositoryId = Number(body.repositoryId);
-    if (!Number.isSafeInteger(repositoryId) || repositoryId <= 0) throw new GithubControlPlaneError("github_repository_id_required", "numeric repositoryId is required.", 400);
+    if (!Number.isSafeInteger(installationId) || installationId <= 0 || !Number.isSafeInteger(repositoryId) || repositoryId <= 0) {
+      throw new GithubControlPlaneError("github_repository_id_required", "numeric installationId and repositoryId are required.", 400);
+    }
     await assertProjectWorkspace(env, projectId, principal!.workspaceId);
-    const binding = await assertActiveBinding(env, principal!);
-    const authority = await getRepositoryAuthority(env, principal!.workspaceId, binding.installation_id, repositoryId);
+    const binding = await assertActiveBinding(env, principal!.workspaceId, installationId);
+    const authority = await getRepositoryAuthority(env, principal!.workspaceId, installationId, repositoryId);
     const client = new GithubAppClient(env);
     const token = await client.createInstallationToken(binding.installation_id, [repositoryId], "metadata");
     const repo = await client.request<GithubRepository>(token.token, `/repos/${encodeURIComponent(authority.owner_login)}/${encodeURIComponent(authority.name)}`);
@@ -1024,7 +1123,7 @@ export async function handleGithubRepoVerify(env: Env, request: Request, project
          verified_by_identity_id = excluded.verified_by_identity_id, verified_at = excluded.verified_at, updated_at = excluded.updated_at`,
       projectId,
       principal!.workspaceId,
-      binding.installation_id,
+      installationId,
       repo.id,
       repo.owner.login,
       repo.name,
@@ -1036,7 +1135,17 @@ export async function handleGithubRepoVerify(env: Env, request: Request, project
     return jsonOk({
       status: "verified" as const,
       repoVerifiedAt: verifiedAt,
-      repository: { id: repo.id, owner: repo.owner.login, name: repo.name, fullName: repo.full_name, private: repo.private, defaultBranch: repo.default_branch, verifiedAt },
+      repository: {
+        id: repo.id,
+        owner: repo.owner.login,
+        name: repo.name,
+        fullName: repo.full_name,
+        private: repo.private,
+        defaultBranch: repo.default_branch,
+        verifiedAt,
+        installationId: binding.installation_id,
+        account: installationTargetOf(binding),
+      },
     });
   } catch (error) {
     return controlPlaneError(error);
@@ -1115,9 +1224,8 @@ export async function handleGithubActivitySync(env: Env, request: Request, proje
   try {
     const range = parseActivityRange(await parseJsonObject(request));
     await assertProjectWorkspace(env, projectId, principal!.workspaceId);
-    const binding = await assertActiveBinding(env, principal!);
     const verified = await getVerifiedRepository(env, projectId, principal!.workspaceId);
-    if (verified.installation_id !== binding.installation_id) throw new GithubControlPlaneError("github_repository_forbidden", "Verified repository does not belong to the active workspace installation.", 403);
+    const binding = await assertActiveBinding(env, principal!.workspaceId, verified.installation_id);
     const client = new GithubAppClient(env);
     const token = await client.createInstallationToken(binding.installation_id, [verified.repository_id], "activity");
     const repoPath = `/repos/${encodeURIComponent(verified.owner_login)}/${encodeURIComponent(verified.name)}`;
@@ -1283,12 +1391,12 @@ export async function handleGithubPullRequest(env: Env, request: Request, projec
     const files = validateWriteFiles(body.files);
     await assertProjectWorkspace(env, projectId, principal!.workspaceId);
     await ensureActiveAdmin(env, principal!);
-    const binding = await assertActiveBinding(env, principal!);
     const actor = await getWorkspaceActor(env, principal!.workspaceId, principal!.identityId);
     if (!actor) throw new GithubControlPlaneError("github_actor_not_verified", "Current Plexus administrator has not verified a GitHub identity.", 403);
-    assertAllowedGithubActor(githubEnrollmentPolicy(env), { id: actor.github_user_id, login: actor.github_login });
+    assertAllowedGithubActor(githubActorPolicy(env), { id: actor.github_user_id, login: actor.github_login });
     const verified = await getVerifiedRepository(env, projectId, principal!.workspaceId);
-    if (verified.repository_id !== repositoryId || verified.installation_id !== binding.installation_id) throw new GithubControlPlaneError("github_repository_forbidden", "Repository is not the verified project repository.", 403);
+    if (verified.repository_id !== repositoryId) throw new GithubControlPlaneError("github_repository_forbidden", "Repository is not the verified project repository.", 403);
+    const binding = await assertActiveBinding(env, principal!.workspaceId, verified.installation_id);
     const operationKey = await sha256Hex(JSON.stringify({ workspace: principal!.workspaceId, actor: principal!.identityId, projectId, repositoryId, baseSha, title, pullBody, commitMessage: requestedCommitMessage, files }));
     const branch = `plexus/${safeBranchPart(projectId)}-${operationKey.slice(0, 12)}`;
     if (branch === verified.default_branch) throw new GithubControlPlaneError("github_default_branch_forbidden", "Default branch writes are forbidden.", 403);

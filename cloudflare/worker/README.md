@@ -130,9 +130,11 @@ Example `TF_INTEGRATION_CONFIG_JSON`:
 }
 ```
 
-## Private GitHub App control plane
+## GitHub App control plane
 
-Private repository authority uses a GitHub App. The new path never reads
+Private repository authority uses one public, unlisted GitHub App so the same
+App can be installed on the Thoughtseed Labs organization and the founders'
+personal accounts. The path never reads
 `TF_GITHUB_TOKEN_GLOBAL`; that variable remains only for legacy sync behavior
 outside this control plane. App and installation tokens are held in Worker
 memory only, scoped to numeric repository IDs whenever the repository is
@@ -144,8 +146,9 @@ Configure the non-secret values as Worker variables:
 - `TF_GITHUB_APP_SLUG`
 - `TF_GITHUB_APP_CLIENT_ID`
 - `TF_GITHUB_APP_CALLBACK_URL` (`https://<worker>/v1/github/callback`)
-- `TF_GITHUB_EXPECTED_ORG` (`thoughtseed-labs`)
-- `TF_GITHUB_EXPECTED_ORG_ID` (`65741640`)
+- `TF_GITHUB_ALLOWED_INSTALLATION_ACCOUNTS`
+  (`Organization:thoughtseed-labs:65741640,User:Sheshiyer:7611727,User:psychon7:47470954`;
+  exact `Type:login:numeric-account-id` entries)
 - `TF_GITHUB_ALLOWED_ACTORS`
   (`Sheshiyer:7611727,psychon7:47470954`; `login:numeric-user-id` pairs)
 
@@ -167,16 +170,18 @@ same-workspace project.
 
 Each founder enrolls separately through GitHub App OAuth. During actor
 enrollment, the Worker uses the ephemeral GitHub user access token only for
-`GET /user` and `GET /user/installations`, requires access to the workspace's
-already-bound installation ID, and then discards the token. D1 stores only the
+`GET /user` and `GET /user/installations`, requires access to any active
+installation already bound to the workspace, and then discards the token. D1 stores only the
 verified numeric GitHub user ID, login snapshot, and Plexus identity mapping.
 Login text is never sufficient authority: the configured login and immutable
 numeric user ID must both match.
 
 Subscribe the App to the `installation` and `installation_repositories`
-webhook events. During installation, choose **Only select repositories** and
-select the approved pilot repositories. The Worker rejects the GitHub
-`repository_selection: all` grant and will not bind that installation.
+webhook events. Install it separately on each approved account, choose **Only
+select repositories**, and select only that account's approved repositories.
+The Worker rejects the GitHub `repository_selection: all` grant and ignores
+signed public-App webhooks from non-allowlisted accounts before persisting
+installation or repository facts.
 
 Required GitHub App repository permissions are:
 
@@ -196,7 +201,7 @@ branch, force references, or modify `.github/workflows`.
 Routes:
 
 - `GET /v1/github/connection`
-- `POST /v1/github/connect/start`
+- `POST /v1/github/connect/start` (`{ "accountId": <numeric allowlisted ID> }`)
 - `GET /v1/github/actor`
 - `POST /v1/github/actor/enroll/start`
 - `GET /v1/github/repositories`
@@ -206,19 +211,23 @@ Routes:
 - `GET /v1/github/callback` (public, signed single-use state)
 - `POST /v1/github/webhook` (public, `X-Hub-Signature-256`)
 
-Apply migrations `0012_github_app_control_plane.sql` and
-`0013_github_workspace_actors.sql` before enabling the routes.
+Apply migrations `0012_github_app_control_plane.sql`,
+`0013_github_workspace_actors.sql`, and
+`0014_github_multi_owner_installations.sql` before enabling the routes.
 It stores OAuth/install correlation state, immutable signed installation
-facts, workspace bindings, numeric repositories, delivery dedupe/leases,
-project verification, and idempotent write receipts. It stores no OAuth token,
-installation token, client secret, webhook secret, or private key.
+facts, multiple exact account-scoped workspace bindings, numeric repositories,
+delivery dedupe/leases, project verification, and idempotent write receipts.
+Repository verification requires numeric `installationId` and `repositoryId`;
+activity and writes use the project's persisted installation. It stores no
+OAuth token, installation token, client secret, webhook secret, private key,
+or PAT.
 
 Immediate founder revocation is fail-closed: remove the founder's
 `login:numeric-id` pair from `TF_GITHUB_ALLOWED_ACTORS` or revoke their active
 Plexus administrator role. Every guarded write rechecks both controls and then
 rechecks the actor's live numeric repository permission before mutation. A
 local organization-membership preflight is setup guidance only; server
-authority is the pinned founder IDs, pinned bound organization installation,
+authority is the pinned founder IDs, exact allowlisted installation accounts,
 active Plexus admin, and live per-repository permission.
 
 ### Founder inputs before setup

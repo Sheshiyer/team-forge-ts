@@ -213,7 +213,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
     return handleGithubConnection(env, plexusPrincipal);
   }
   if (method === "POST" && pathname === "/v1/github/connect/start") {
-    return handleGithubConnectStart(env, plexusPrincipal);
+    return handleGithubConnectStart(env, request, plexusPrincipal);
   }
   if (method === "GET" && pathname === "/v1/github/actor") {
     return handleGithubActor(env, plexusPrincipal);
