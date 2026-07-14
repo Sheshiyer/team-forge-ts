@@ -346,6 +346,10 @@ function connectionFlowDb(nonceHash: string) {
             const delivery = deliveries.get(String(args[1]));
             if (delivery) delivery.result = "processed";
           }
+          if (sql.includes("result = 'failed'")) {
+            const delivery = deliveries.get(String(args[0]));
+            if (delivery) delivery.result = "failed";
+          }
           return { success: true, meta: { changes: 1 } };
         },
       };
@@ -988,6 +992,50 @@ describe("GitHub App routes", () => {
     await expect(deletedResponse.json()).resolves.toMatchObject({ data: { status: "accepted" } });
     expect(fixture.fact()).toMatchObject({ state: "deleted" });
     expect(fixture.delivery("delivery-deleted")).toMatchObject({ result: "processed" });
+  });
+
+  it("accepts GitHub's compact repository facts on installation creation", async () => {
+    const nonceHash = await sha256Hex("nonce-compact-created");
+    const fixture = connectionFlowDb(nonceHash);
+    const secret = "webhook-test-secret";
+    const webhookEnv = { ...env(fixture.db), TF_GITHUB_APP_WEBHOOK_SECRET: secret };
+    const created = JSON.stringify({
+      action: "created",
+      installation: { id: 42, account: { id: 7611727, login: "Sheshiyer", type: "User" }, repository_selection: "selected" },
+      sender: { id: 7611727, login: "Sheshiyer" },
+      repositories: [{ id: 1211794578, name: "parkarea-aleph", full_name: "Sheshiyer/parkarea-aleph", private: true }],
+    });
+    const response = await handleGithubWebhook(webhookEnv, new Request("https://worker.test/v1/github/webhook", {
+      method: "POST",
+      headers: { "x-hub-signature-256": await webhookSignature(created, secret), "x-github-delivery": "delivery-compact-created", "x-github-event": "installation" },
+      body: created,
+    }));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ data: { status: "accepted" } });
+    expect(fixture.fact()).toMatchObject({ installation_id: 42, account_id: 7611727, repository_selection: "selected", state: "active" });
+    expect(fixture.delivery("delivery-compact-created")).toMatchObject({ result: "processed" });
+  });
+
+  it("rejects compact repository facts outside the signed installation account", async () => {
+    const nonceHash = await sha256Hex("nonce-cross-account-created");
+    const fixture = connectionFlowDb(nonceHash);
+    const secret = "webhook-test-secret";
+    const webhookEnv = { ...env(fixture.db), TF_GITHUB_APP_WEBHOOK_SECRET: secret };
+    const created = JSON.stringify({
+      action: "created",
+      installation: { id: 42, account: { id: 7611727, login: "Sheshiyer", type: "User" }, repository_selection: "selected" },
+      sender: { id: 7611727, login: "Sheshiyer" },
+      repositories: [{ id: 101, name: "private-repo", full_name: "outsider/private-repo", private: true }],
+    });
+    const response = await handleGithubWebhook(webhookEnv, new Request("https://worker.test/v1/github/webhook", {
+      method: "POST",
+      headers: { "x-hub-signature-256": await webhookSignature(created, secret), "x-github-delivery": "delivery-cross-account-created", "x-github-event": "installation" },
+      body: created,
+    }));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "github_webhook_repository_invalid" } });
+    expect(fixture.binding()).toBeNull();
+    expect(fixture.delivery("delivery-cross-account-created")).toMatchObject({ result: "failed" });
   });
 
   it.each(["callback-first", "webhook-first"])("binds the exact installation when %s", async (order) => {
