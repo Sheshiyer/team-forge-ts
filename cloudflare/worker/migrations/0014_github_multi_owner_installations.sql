@@ -51,4 +51,3 @@ DROP TABLE github_workspace_installations_0013;
 
 CREATE INDEX idx_github_workspace_installations_workspace_state
   ON github_workspace_installations(workspace_id, state, account_id);
-
