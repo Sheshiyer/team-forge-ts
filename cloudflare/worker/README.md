@@ -176,9 +176,11 @@ verified numeric GitHub user ID, login snapshot, and Plexus identity mapping.
 Login text is never sufficient authority: the configured login and immutable
 numeric user ID must both match.
 
-Subscribe the App to the `installation` and `installation_repositories`
-webhook events. Install it separately on each approved account, choose **Only
-select repositories**, and select only that account's approved repositories.
+GitHub delivers the `installation` and `installation_repositories` webhook
+events to every GitHub App automatically; they are not selectable in the
+optional event-subscription list. Leave unrelated optional events unchecked.
+Install the App separately on each approved account, choose **Only select
+repositories**, and select only that account's approved repositories.
 The Worker rejects the GitHub `repository_selection: all` grant and ignores
 signed public-App webhooks from non-allowlisted accounts before persisting
 installation or repository facts.
