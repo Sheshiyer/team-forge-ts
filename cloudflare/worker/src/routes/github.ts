@@ -779,7 +779,18 @@ export async function handleGithubCallback(env: Env, _request: Request, url: URL
           await execute(db, "UPDATE github_connection_states SET status = 'rejected', updated_at = ? WHERE nonce_hash = ?", now(), nonceHash);
           throw error;
         }
-      } else throw new GithubControlPlaneError("github_state_consumed", "GitHub connection state was already consumed.", 409);
+      } else {
+        const isPostInstallationReturn = Boolean(
+          installationId &&
+          connectionState.consumed_at &&
+          connectionState.oauth_user_id &&
+          connectionState.oauth_login &&
+          connectionState.status === "oauth_verified",
+        );
+        if (!isPostInstallationReturn) {
+          throw new GithubControlPlaneError("github_state_consumed", "GitHub connection state was already consumed.", 409);
+        }
+      }
     } else if (!installationId) {
       throw new GithubControlPlaneError("github_callback_invalid", "OAuth code or installation hint is required.", 400);
     }
@@ -947,37 +958,42 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
         repositorySelection, factState, deliveryId, observedAt, observedAt, installationId,
       );
     }
-    const repositoryFactState = await queryFirst<{ state: string }>(db, "SELECT state FROM github_installation_facts WHERE installation_id = ? LIMIT 1", installationId);
-    const repositoryState = repositoryFactState?.state === "active" ? "active" : "removed";
-    const addedValues = eventName === "installation_repositories" ? payload.repositories_added : payload.repositories;
-    for (const value of Array.isArray(addedValues) ? addedValues : []) {
-      const repo = webhookRepository(value);
-      if (!repo) throw new GithubControlPlaneError("github_webhook_repository_invalid", "Signed webhook contains an invalid repository fact.", 400);
-      await execute(
-        db,
-        `INSERT INTO github_installation_repositories
-         (installation_id, repository_id, owner_login, name, full_name, is_private, default_branch, state, observed_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(installation_id, repository_id) DO UPDATE SET
-           owner_login = excluded.owner_login, name = excluded.name, full_name = excluded.full_name,
-           is_private = excluded.is_private, default_branch = excluded.default_branch, state = excluded.state,
-           observed_at = excluded.observed_at, updated_at = excluded.updated_at`,
-        installationId,
-        repo.id,
-        repo.owner.login,
-        repo.name,
-        repo.full_name,
-        repo.private ? 1 : 0,
-        repo.default_branch ?? null,
-        repositoryState,
-        observedAt,
-        observedAt,
-      );
-    }
-    for (const value of Array.isArray(payload.repositories_removed) ? payload.repositories_removed : []) {
-      const repo = webhookRepository(value);
-      if (!repo) throw new GithubControlPlaneError("github_webhook_repository_invalid", "Signed webhook contains an invalid removed repository fact.", 400);
-      await execute(db, "UPDATE github_installation_repositories SET state = 'removed', updated_at = ? WHERE installation_id = ? AND repository_id = ?", observedAt, installationId, repo.id);
+    const installationDeleted = eventName === "installation" && action === "deleted";
+    if (installationDeleted) {
+      await execute(db, "UPDATE github_installation_repositories SET state = 'removed', updated_at = ? WHERE installation_id = ?", observedAt, installationId);
+    } else {
+      const repositoryFactState = await queryFirst<{ state: string }>(db, "SELECT state FROM github_installation_facts WHERE installation_id = ? LIMIT 1", installationId);
+      const repositoryState = repositoryFactState?.state === "active" ? "active" : "removed";
+      const addedValues = eventName === "installation_repositories" ? payload.repositories_added : payload.repositories;
+      for (const value of Array.isArray(addedValues) ? addedValues : []) {
+        const repo = webhookRepository(value);
+        if (!repo) throw new GithubControlPlaneError("github_webhook_repository_invalid", "Signed webhook contains an invalid repository fact.", 400);
+        await execute(
+          db,
+          `INSERT INTO github_installation_repositories
+           (installation_id, repository_id, owner_login, name, full_name, is_private, default_branch, state, observed_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(installation_id, repository_id) DO UPDATE SET
+             owner_login = excluded.owner_login, name = excluded.name, full_name = excluded.full_name,
+             is_private = excluded.is_private, default_branch = excluded.default_branch, state = excluded.state,
+             observed_at = excluded.observed_at, updated_at = excluded.updated_at`,
+          installationId,
+          repo.id,
+          repo.owner.login,
+          repo.name,
+          repo.full_name,
+          repo.private ? 1 : 0,
+          repo.default_branch ?? null,
+          repositoryState,
+          observedAt,
+          observedAt,
+        );
+      }
+      for (const value of Array.isArray(payload.repositories_removed) ? payload.repositories_removed : []) {
+        const repo = webhookRepository(value);
+        if (!repo) throw new GithubControlPlaneError("github_webhook_repository_invalid", "Signed webhook contains an invalid removed repository fact.", 400);
+        await execute(db, "UPDATE github_installation_repositories SET state = 'removed', updated_at = ? WHERE installation_id = ? AND repository_id = ?", observedAt, installationId, repo.id);
+      }
     }
     const storedFact = await queryFirst<{ installer_sender_id: number; state: string }>(db, "SELECT installer_sender_id, state FROM github_installation_facts WHERE installation_id = ? LIMIT 1", installationId);
     if (!storedFact) throw new GithubControlPlaneError("github_installation_untrusted", "Installation trust anchor is missing.", 409, true);

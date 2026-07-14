@@ -333,6 +333,10 @@ function connectionFlowDb(nonceHash: string) {
             fact = { installation_id: args[0], account_id: args[1], account_login: args[2], account_type: args[3], installer_sender_id: args[4], installer_sender_login: args[5], last_actor_id: args[6], last_actor_login: args[7], repository_selection: args[8], state: "active" };
             return { success: true, meta: { changes: 1 } };
           }
+          if (sql.includes("UPDATE github_installation_facts SET")) {
+            fact = { ...fact, account_id: args[0], account_login: args[1], account_type: args[2], repository_selection: args[5], state: args[6] };
+            return { success: true, meta: { changes: 1 } };
+          }
           if (sql.includes("INSERT INTO github_workspace_installations")) {
             binding = { workspace_id: args[0], installation_id: args[1], account_id: args[2], connected_by_identity_id: args[3], verified_github_user_id: args[4], verified_github_login: args[5], state: args[7] };
             return { success: true, meta: { changes: 1 } };
@@ -348,7 +352,7 @@ function connectionFlowDb(nonceHash: string) {
       return statement;
     },
   };
-  return { db, state, binding: () => binding };
+  return { db, state, binding: () => binding, fact: () => fact, delivery: (id: string) => deliveries.get(id) };
 }
 
 function actorEnrollmentDb(
@@ -919,6 +923,71 @@ describe("GitHub App routes", () => {
     });
     expect(fixture.state.status).toBe("rejected");
     vi.unstubAllGlobals();
+  });
+
+  it("accepts GitHub's post-install callback when it repeats code with an installation id", async () => {
+    const nonce = "nonce-post-install-code";
+    const nonceHash = await sha256Hex(nonce);
+    const fixture = connectionFlowDb(nonceHash);
+    const stateValue = await signConnectState(
+      { workspace: "ws_test", actor: "pid_admin", nonce, exp: Math.floor(Date.now() / 1000) + 600, target: { id: 8, login: "thoughtseed", type: "Organization" } },
+      "s".repeat(32),
+    );
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("oauth/access_token")) return new Response(JSON.stringify({ access_token: "oauth-token" }));
+      if (String(input).endsWith("/user")) return new Response(JSON.stringify({ id: 77, login: "installer" }));
+      throw new Error(`unexpected fetch ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const oauthCallback = new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue)}&code=one-time-code`);
+    expect((await handleGithubCallback(env(fixture.db), new Request(oauthCallback), oauthCallback)).status).toBe(302);
+
+    const installCallback = new URL(`https://worker.test/v1/github/callback?state=${encodeURIComponent(stateValue)}&code=second-code&installation_id=42&setup_action=install`);
+    const response = await handleGithubCallback(env(fixture.db), new Request(installCallback), installCallback);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ data: { status: "pending" } });
+    expect(fixture.state).toMatchObject({ status: "oauth_verified", untrusted_installation_id: 42, oauth_user_id: 77 });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    fixture.state.status = "bound";
+    const boundReplay = await handleGithubCallback(env(fixture.db), new Request(installCallback), installCallback);
+    expect(boundReplay.status).toBe(409);
+    await expect(boundReplay.json()).resolves.toMatchObject({ error: { code: "github_state_consumed" } });
+    vi.unstubAllGlobals();
+  });
+
+  it("processes installation deletion without trusting sparse repository objects", async () => {
+    const nonceHash = await sha256Hex("nonce-deleted-installation");
+    const fixture = connectionFlowDb(nonceHash);
+    const secret = "webhook-test-secret";
+    const webhookEnv = { ...env(fixture.db), TF_GITHUB_APP_WEBHOOK_SECRET: secret };
+    const created = JSON.stringify({
+      action: "created",
+      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected" },
+      sender: { id: 77, login: "installer" },
+      repositories: [],
+    });
+    const createdResponse = await handleGithubWebhook(webhookEnv, new Request("https://worker.test/v1/github/webhook", {
+      method: "POST",
+      headers: { "x-hub-signature-256": await webhookSignature(created, secret), "x-github-delivery": "delivery-created", "x-github-event": "installation" },
+      body: created,
+    }));
+    expect(createdResponse.status).toBe(200);
+
+    const deleted = JSON.stringify({
+      action: "deleted",
+      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected" },
+      sender: { id: 77, login: "installer" },
+      repositories: [{ id: 101 }],
+    });
+    const deletedResponse = await handleGithubWebhook(webhookEnv, new Request("https://worker.test/v1/github/webhook", {
+      method: "POST",
+      headers: { "x-hub-signature-256": await webhookSignature(deleted, secret), "x-github-delivery": "delivery-deleted", "x-github-event": "installation" },
+      body: deleted,
+    }));
+    expect(deletedResponse.status).toBe(200);
+    await expect(deletedResponse.json()).resolves.toMatchObject({ data: { status: "accepted" } });
+    expect(fixture.fact()).toMatchObject({ state: "deleted" });
+    expect(fixture.delivery("delivery-deleted")).toMatchObject({ result: "processed" });
   });
 
   it.each(["callback-first", "webhook-first"])("binds the exact installation when %s", async (order) => {
