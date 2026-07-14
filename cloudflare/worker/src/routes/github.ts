@@ -85,6 +85,15 @@ interface RepositoryAuthorityRow {
   state: "active" | "removed";
 }
 
+interface WebhookRepositoryFact {
+  id: number;
+  name: string;
+  full_name: string;
+  private: boolean;
+  default_branch: string | null;
+  owner: { id: number; login: string };
+}
+
 interface VerificationRow extends RepositoryAuthorityRow {
   project_id: string;
   workspace_id: string;
@@ -809,11 +818,36 @@ export async function handleGithubCallback(env: Env, _request: Request, url: URL
   }
 }
 
-function webhookRepository(value: unknown): GithubRepository | null {
-  const repo = value as Partial<GithubRepository>;
-  if (!repo || !Number.isSafeInteger(repo.id) || (repo.id ?? 0) <= 0 || !repo.name || !repo.full_name ||
-    !repo.owner?.login || !Number.isSafeInteger(repo.owner.id) || repo.owner.id <= 0) return null;
-  return repo as GithubRepository;
+function webhookRepository(value: unknown, account: GithubInstallationAccountTarget): WebhookRepositoryFact | null {
+  if (!value || typeof value !== "object") return null;
+  const repo = value as Record<string, unknown>;
+  const id = repo.id;
+  const name = repo.name;
+  const fullName = repo.full_name;
+  const isPrivate = repo.private;
+  const defaultBranch = repo.default_branch;
+  if (!Number.isSafeInteger(id) || Number(id) <= 0 || typeof name !== "string" || !name || name.includes("/") ||
+    typeof fullName !== "string" || typeof isPrivate !== "boolean" ||
+    (defaultBranch !== undefined && defaultBranch !== null && (typeof defaultBranch !== "string" || !defaultBranch))) return null;
+  const slash = fullName.indexOf("/");
+  if (slash <= 0 || slash !== fullName.lastIndexOf("/")) return null;
+  const fullNameOwner = fullName.slice(0, slash);
+  const fullNameRepo = fullName.slice(slash + 1);
+  if (fullNameOwner.toLowerCase() !== account.login.toLowerCase() || fullNameRepo.toLowerCase() !== name.toLowerCase()) return null;
+  if (repo.owner !== undefined) {
+    if (!repo.owner || typeof repo.owner !== "object") return null;
+    const owner = repo.owner as Record<string, unknown>;
+    if (!Number.isSafeInteger(owner.id) || Number(owner.id) !== account.id || typeof owner.login !== "string" ||
+      owner.login.toLowerCase() !== account.login.toLowerCase()) return null;
+  }
+  return {
+    id: Number(id),
+    name,
+    full_name: fullName,
+    private: isPrivate,
+    default_branch: typeof defaultBranch === "string" ? defaultBranch : null,
+    owner: { id: account.id, login: account.login },
+  };
 }
 
 export function nextInstallationState(
@@ -966,7 +1000,7 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
       const repositoryState = repositoryFactState?.state === "active" ? "active" : "removed";
       const addedValues = eventName === "installation_repositories" ? payload.repositories_added : payload.repositories;
       for (const value of Array.isArray(addedValues) ? addedValues : []) {
-        const repo = webhookRepository(value);
+        const repo = webhookRepository(value, accountTarget);
         if (!repo) throw new GithubControlPlaneError("github_webhook_repository_invalid", "Signed webhook contains an invalid repository fact.", 400);
         await execute(
           db,
@@ -990,7 +1024,7 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
         );
       }
       for (const value of Array.isArray(payload.repositories_removed) ? payload.repositories_removed : []) {
-        const repo = webhookRepository(value);
+        const repo = webhookRepository(value, accountTarget);
         if (!repo) throw new GithubControlPlaneError("github_webhook_repository_invalid", "Signed webhook contains an invalid removed repository fact.", 400);
         await execute(db, "UPDATE github_installation_repositories SET state = 'removed', updated_at = ? WHERE installation_id = ? AND repository_id = ?", observedAt, installationId, repo.id);
       }
