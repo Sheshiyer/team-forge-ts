@@ -10,6 +10,13 @@ export interface GithubConnectState {
   actor: string;
   nonce: string;
   exp: number;
+  target?: GithubInstallationAccountTarget;
+}
+
+export interface GithubInstallationAccountTarget {
+  id: number;
+  login: string;
+  type: "Organization" | "User";
 }
 
 export interface GithubUser {
@@ -145,7 +152,13 @@ export async function verifyConnectState(value: string, secret: string, nowSecon
   }
   const state = parsed as Partial<GithubConnectState>;
   const keys = Object.keys(state).sort().join(",");
-  if (keys !== "actor,exp,nonce,workspace" || !state.workspace || !state.actor || !state.nonce || !Number.isInteger(state.exp)) {
+  const target = state.target as Partial<GithubInstallationAccountTarget> | undefined;
+  const targetKeys = target ? Object.keys(target).sort().join(",") : "";
+  const baseValid = (keys === "actor,exp,nonce,workspace" || keys === "actor,exp,nonce,target,workspace") &&
+    Boolean(state.workspace && state.actor && state.nonce && Number.isInteger(state.exp));
+  const targetValid = !target || (targetKeys === "id,login,type" && Number.isSafeInteger(target.id) && (target.id ?? 0) > 0 &&
+    typeof target.login === "string" && Boolean(target.login) && (target.type === "Organization" || target.type === "User"));
+  if (!baseValid || !targetValid) {
     throw new GithubControlPlaneError("github_state_invalid", "GitHub connection state fields are invalid.", 400);
   }
   if ((state.exp as number) <= nowSeconds) throw new GithubControlPlaneError("github_state_expired", "GitHub connection state has expired.", 410);
@@ -245,7 +258,7 @@ export class GithubAppClient {
     return `${signingInput}.${bytesToBase64Url(signature)}`;
   }
 
-  async exchangeOauthCode(code: string, requiredInstallationId?: number): Promise<GithubUser> {
+  async exchangeOauthCode(code: string, requiredInstallationIds?: number[]): Promise<GithubUser> {
     const config = requireGithubAppEnv(this.env);
     const tokenResponse = await this.fetchImpl("https://github.com/login/oauth/access_token", {
       method: "POST",
@@ -264,9 +277,10 @@ export class GithubAppClient {
     });
     const user = await responseJson<Pick<GithubUser, "id" | "login">>(userResponse, "github_oauth_identity_failed");
     if (!Number.isSafeInteger(user.id) || !user.login) throw new GithubControlPlaneError("github_oauth_identity_failed", "GitHub OAuth identity is invalid.", 502);
-    if (requiredInstallationId !== undefined) {
-      if (!Number.isSafeInteger(requiredInstallationId) || requiredInstallationId <= 0) {
-        throw new GithubControlPlaneError("github_installation_hint_invalid", "Installation ID must be numeric.", 400);
+    if (requiredInstallationIds !== undefined) {
+      const required = new Set(requiredInstallationIds);
+      if (required.size === 0 || [...required].some((installationId) => !Number.isSafeInteger(installationId) || installationId <= 0)) {
+        throw new GithubControlPlaneError("github_installation_hint_invalid", "Installation IDs must be positive integers.", 400);
       }
       let installationAccessible = false;
       for (let page = 1; page <= 10; page += 1) {
@@ -280,14 +294,14 @@ export class GithubAppClient {
         if (!Array.isArray(installations.installations)) {
           throw new GithubControlPlaneError("github_oauth_installations_failed", "GitHub App installation authority is invalid.", 502);
         }
-        if (installations.installations.some((installation) => installation.id === requiredInstallationId)) {
+        if (installations.installations.some((installation) => installation.id !== undefined && required.has(installation.id))) {
           installationAccessible = true;
           break;
         }
         if (installations.installations.length < 100) break;
       }
       if (!installationAccessible) {
-        throw new GithubControlPlaneError("github_oauth_installation_forbidden", "GitHub OAuth identity cannot access the workspace installation.", 403);
+        throw new GithubControlPlaneError("github_oauth_installation_forbidden", "GitHub OAuth identity cannot access any active workspace installation.", 403);
       }
     }
     return { id: user.id, login: user.login };
