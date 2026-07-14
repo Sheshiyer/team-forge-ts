@@ -236,6 +236,19 @@ async function responseJson<T>(response: Response, code: string): Promise<T> {
   }
 }
 
+async function githubFetch(
+  fetchImpl: typeof fetch,
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  code: string,
+): Promise<Response> {
+  try {
+    return await fetchImpl(input, init);
+  } catch {
+    throw new GithubControlPlaneError(code, "GitHub request could not be completed.", 502, true);
+  }
+}
+
 export class GithubAppClient {
   constructor(
     private readonly env: Env,
@@ -260,21 +273,22 @@ export class GithubAppClient {
 
   async exchangeOauthCode(code: string, requiredInstallationIds?: number[]): Promise<GithubUser> {
     const config = requireGithubAppEnv(this.env);
-    const tokenResponse = await this.fetchImpl("https://github.com/login/oauth/access_token", {
+    const tokenBody = new URLSearchParams({
+      client_id: config.TF_GITHUB_APP_CLIENT_ID,
+      client_secret: config.TF_GITHUB_APP_CLIENT_SECRET,
+      code,
+      redirect_uri: config.TF_GITHUB_APP_CALLBACK_URL,
+    });
+    const tokenResponse = await githubFetch(this.fetchImpl, "https://github.com/login/oauth/access_token", {
       method: "POST",
-      headers: { accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify({
-        client_id: config.TF_GITHUB_APP_CLIENT_ID,
-        client_secret: config.TF_GITHUB_APP_CLIENT_SECRET,
-        code,
-        redirect_uri: config.TF_GITHUB_APP_CALLBACK_URL,
-      }),
-    });
-    const tokenBody = await responseJson<{ access_token?: string; error?: string }>(tokenResponse, "github_oauth_exchange_failed");
-    if (!tokenBody.access_token) throw new GithubControlPlaneError("github_oauth_exchange_failed", "GitHub OAuth did not return an access token.", 502);
-    const userResponse = await this.fetchImpl(`${GITHUB_API}/user`, {
-      headers: this.headers(tokenBody.access_token),
-    });
+      headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
+      body: tokenBody.toString(),
+    }, "github_oauth_exchange_failed");
+    const tokenPayload = await responseJson<{ access_token?: string; error?: string }>(tokenResponse, "github_oauth_exchange_failed");
+    if (!tokenPayload.access_token) throw new GithubControlPlaneError("github_oauth_exchange_failed", "GitHub OAuth did not return an access token.", 502);
+    const userResponse = await githubFetch(this.fetchImpl, `${GITHUB_API}/user`, {
+      headers: this.headers(tokenPayload.access_token),
+    }, "github_oauth_identity_failed");
     const user = await responseJson<Pick<GithubUser, "id" | "login">>(userResponse, "github_oauth_identity_failed");
     if (!Number.isSafeInteger(user.id) || !user.login) throw new GithubControlPlaneError("github_oauth_identity_failed", "GitHub OAuth identity is invalid.", 502);
     if (requiredInstallationIds !== undefined) {
@@ -284,9 +298,9 @@ export class GithubAppClient {
       }
       let installationAccessible = false;
       for (let page = 1; page <= 10; page += 1) {
-        const installationsResponse = await this.fetchImpl(`${GITHUB_API}/user/installations?per_page=100&page=${page}`, {
-          headers: this.headers(tokenBody.access_token),
-        });
+        const installationsResponse = await githubFetch(this.fetchImpl, `${GITHUB_API}/user/installations?per_page=100&page=${page}`, {
+          headers: this.headers(tokenPayload.access_token),
+        }, "github_oauth_installations_failed");
         const installations = await responseJson<{ installations?: Array<{ id?: number }> }>(
           installationsResponse,
           "github_oauth_installations_failed",
@@ -327,11 +341,11 @@ export class GithubAppClient {
           : { metadata: "read" };
     const tokenRequest: Record<string, unknown> = { permissions };
     if (repositoryIds !== null) tokenRequest.repository_ids = [...new Set(repositoryIds)];
-    const response = await this.fetchImpl(`${GITHUB_API}/app/installations/${installationId}/access_tokens`, {
+    const response = await githubFetch(this.fetchImpl, `${GITHUB_API}/app/installations/${installationId}/access_tokens`, {
       method: "POST",
       headers: this.headers(await this.createAppJwt()),
       body: JSON.stringify(tokenRequest),
-    });
+    }, "github_installation_token_failed");
     const body = await responseJson<{ token?: string; expires_at?: string }>(response, "github_installation_token_failed");
     const expiresAtMs = Date.parse(body.expires_at ?? "");
     const nowMs = Date.now();
@@ -342,18 +356,18 @@ export class GithubAppClient {
   }
 
   async request<T>(token: string, path: string, init: RequestInit = {}): Promise<T> {
-    const response = await this.fetchImpl(`${GITHUB_API}${path}`, {
+    const response = await githubFetch(this.fetchImpl, `${GITHUB_API}${path}`, {
       ...init,
       headers: { ...this.headers(token), ...(init.body ? { "content-type": "application/json" } : {}), ...init.headers },
-    });
+    }, "github_api_failed");
     return responseJson<T>(response, "github_api_failed");
   }
 
   async requestOptional<T>(token: string, path: string, init: RequestInit = {}): Promise<T | null> {
-    const response = await this.fetchImpl(`${GITHUB_API}${path}`, {
+    const response = await githubFetch(this.fetchImpl, `${GITHUB_API}${path}`, {
       ...init,
       headers: { ...this.headers(token), ...(init.body ? { "content-type": "application/json" } : {}), ...init.headers },
-    });
+    }, "github_api_failed");
     if (response.status === 404) return null;
     return responseJson<T>(response, "github_api_failed");
   }
