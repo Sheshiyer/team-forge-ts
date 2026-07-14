@@ -291,9 +291,12 @@ async function assertActiveBinding(env: Env, workspaceId: string, installationId
 }
 
 async function assertActiveBindings(env: Env, workspaceId: string): Promise<InstallationBindingRow[]> {
-  const bindings = (await getBindings(env, workspaceId)).filter((binding) => binding.state === "active");
+  const activeBindings = (await getBindings(env, workspaceId)).filter((binding) => binding.state === "active");
+  if (activeBindings.length === 0) throw new GithubControlPlaneError("github_unconfigured", "No active GitHub App installation is connected to this workspace.", 409);
+  const policy = githubInstallationPolicy(env);
+  const bindings = activeBindings.filter((binding) => binding.repository_selection === "selected" && isAllowedInstallationTarget(policy, binding));
   if (bindings.length === 0) throw new GithubControlPlaneError("github_unconfigured", "No active GitHub App installation is connected to this workspace.", 409);
-  return bindings.map((binding) => assertBindingIsActive(env, binding));
+  return bindings;
 }
 
 async function ensureActiveAdmin(env: Env, principal: Pick<PlexusPrincipal, "identityId" | "workspaceId">): Promise<void> {

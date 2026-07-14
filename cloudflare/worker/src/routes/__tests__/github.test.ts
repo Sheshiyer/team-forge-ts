@@ -555,6 +555,75 @@ describe("GitHub App routes", () => {
     vi.unstubAllGlobals();
   });
 
+  it("skips active bindings with forbidden repository selection or removed allowlist authority when a valid binding remains", async () => {
+    const bindings = [
+      { workspace_id: "ws_test", installation_id: 42, account_id: 8, account_login: "thoughtseed", account_type: "Organization", state: "active", repository_selection: "selected" },
+      { workspace_id: "ws_test", installation_id: 84, account_id: 7611727, account_login: "Sheshiyer", account_type: "User", state: "active", repository_selection: "all" },
+      { workspace_id: "ws_test", installation_id: 126, account_id: 999, account_login: "former-owner", account_type: "User", state: "active", repository_selection: "selected" },
+    ];
+    const db: D1DatabaseLike = {
+      prepare(sql: string) {
+        const statement = {
+          bind() { return statement; },
+          async first<T>() { return null as T | null; },
+          async all<T>() { return { results: (sql.includes("FROM github_workspace_installations b") ? bindings : []) as T[] }; },
+          async run() { return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    };
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/app/installations/42/access_tokens")) {
+        return new Response(JSON.stringify({ token: "org-token", expires_at: new Date(Date.now() + 30 * 60_000).toISOString() }), { status: 201 });
+      }
+      if (url.includes("/installation/repositories")) {
+        return new Response(JSON.stringify({ repositories: [{ id: 101, name: "plexus", full_name: "thoughtseed/plexus", private: true, default_branch: "main", owner: { id: 8, login: "thoughtseed" } }] }));
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    const response = await handleGithubRepositories(env(db), principal("admin"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        repositories: [expect.objectContaining({ id: 101, installationId: 42 })],
+      },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls.some(([input]) => /installations\/(84|126)\//.test(String(input)))).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("fails closed when no active binding has selected repositories and current allowlist authority", async () => {
+    const bindings = [
+      { workspace_id: "ws_test", installation_id: 84, account_id: 7611727, account_login: "Sheshiyer", account_type: "User", state: "active", repository_selection: "all" },
+      { workspace_id: "ws_test", installation_id: 126, account_id: 999, account_login: "former-owner", account_type: "User", state: "active", repository_selection: "selected" },
+    ];
+    const db: D1DatabaseLike = {
+      prepare(sql: string) {
+        const statement = {
+          bind() { return statement; },
+          async first<T>() { return null as T | null; },
+          async all<T>() { return { results: (sql.includes("FROM github_workspace_installations b") ? bindings : []) as T[] }; },
+          async run() { return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    };
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+
+    const response = await handleGithubRepositories(env(db), principal("admin"));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "github_unconfigured" } });
+    expect(fetcher).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it("ignores signed public-App installation events for non-allowlisted accounts before persisting facts", async () => {
     const store = recordingDeliveryDb();
     const payload = JSON.stringify({
