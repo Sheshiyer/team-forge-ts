@@ -133,6 +133,62 @@ interface GithubCiEvidence {
   metadata: Record<string, unknown>;
 }
 
+const PLEXUS_GITHUB_ACTOR_RETURN_URL = "plexus://github/setup/v1";
+
+function acceptsHtml(request: Request): boolean {
+  return (request.headers.get("accept") ?? "")
+    .split(",")
+    .some((entry) => {
+      const [mediaType, ...parameters] = entry.split(";").map((part) => part.trim().toLowerCase());
+      if (mediaType !== "text/html") return false;
+      const quality = parameters.find((parameter) => parameter.startsWith("q="));
+      if (!quality) return true;
+      const value = Number(quality.slice(2));
+      return Number.isFinite(value) && value > 0;
+    });
+}
+
+function githubCallbackCompletion<T>(request: Request, plexusUrl: string, data: T): Response {
+  if (!acceptsHtml(request)) return jsonOk(data);
+  const body = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="0;url=${plexusUrl}">
+<title>Return to Plexus</title>
+</head>
+<body>
+<main>
+<h1>GitHub step received</h1>
+<p>Plexus should open automatically.</p>
+<p><a href="${plexusUrl}">Return to Plexus</a></p>
+</main>
+</body>
+</html>`;
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "cache-control": "no-store",
+      "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "content-type": "text/html; charset=utf-8",
+      "permissions-policy": "camera=(), geolocation=(), microphone=()",
+      "referrer-policy": "no-referrer",
+      "vary": "Accept",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+    },
+  });
+}
+
+function plexusGithubInstallationReturnUrl(env: Env, target: GithubInstallationAccountTarget): string {
+  const allowed = githubInstallationPolicy(env).allowedTargetById.get(target.id);
+  if (!allowed || allowed.type !== target.type || allowed.login.toLowerCase() !== target.login.toLowerCase()) {
+    throw new GithubControlPlaneError("github_installation_account_forbidden", "GitHub App installation account is not allowlisted.", 403);
+  }
+  return `plexus://github/connection/v1/${allowed.id}`;
+}
+
 function controlPlaneError(error: unknown): Response {
   if (error instanceof GithubControlPlaneError) {
     return jsonError({ code: error.code, message: error.message, retryable: error.retryable }, error.status);
@@ -656,6 +712,7 @@ async function ensureCallbackActorStillAdmin(env: Env, state: { workspace: strin
 
 async function handleGithubActorCallback(
   env: Env,
+  request: Request,
   url: URL,
   state: { workspace: string; actor: string },
   nonceHash: string,
@@ -703,14 +760,17 @@ async function handleGithubActorCallback(
       timestamp,
       nonceHash,
     );
-    return jsonOk({ status: "verified" as const, actor: { id: user.id, login: user.login, verifiedAt: timestamp } });
+    return githubCallbackCompletion(request, PLEXUS_GITHUB_ACTOR_RETURN_URL, {
+      status: "verified" as const,
+      actor: { id: user.id, login: user.login, verifiedAt: timestamp },
+    });
   } catch (error) {
     await execute(database(env), "UPDATE github_actor_connection_states SET status = 'rejected', updated_at = ? WHERE nonce_hash = ?", now(), nonceHash);
     throw error;
   }
 }
 
-export async function handleGithubCallback(env: Env, _request: Request, url: URL): Promise<Response> {
+export async function handleGithubCallback(env: Env, request: Request, url: URL): Promise<Response> {
   try {
     const stateValue = url.searchParams.get("state") ?? "";
     const state = await verifyConnectState(stateValue, stateSecret(env));
@@ -722,7 +782,7 @@ export async function handleGithubCallback(env: Env, _request: Request, url: URL
       "SELECT * FROM github_actor_connection_states WHERE nonce_hash = ? LIMIT 1",
       nonceHash,
     );
-    if (actorState) return await handleGithubActorCallback(env, url, state, nonceHash);
+    if (actorState) return await handleGithubActorCallback(env, request, url, state, nonceHash);
     const connectionState = await queryFirst<ConnectionStateRow>(db, "SELECT * FROM github_connection_states WHERE nonce_hash = ? LIMIT 1", nonceHash);
     if (!state.target || !connectionState || connectionState.workspace_id !== state.workspace || connectionState.plexus_actor_id !== state.actor ||
       connectionState.target_account_id !== state.target.id || connectionState.target_account_type !== state.target.type ||
@@ -804,7 +864,9 @@ export async function handleGithubCallback(env: Env, _request: Request, url: URL
       throw new GithubControlPlaneError("github_callback_invalid", "OAuth code or installation hint is required.", 400);
     }
     const bound = await reconcileBinding(env, nonceHash);
-    if (bound) return jsonOk({ status: "connected" as const });
+    if (bound) {
+      return githubCallbackCompletion(request, plexusGithubInstallationReturnUrl(env, state.target), { status: "connected" as const });
+    }
     const row = await queryFirst<ConnectionStateRow>(db, "SELECT * FROM github_connection_states WHERE nonce_hash = ? LIMIT 1", nonceHash);
     if (row?.oauth_user_id && !row.untrusted_installation_id) {
       const installationUrl = new URL(buildInstallationUrl(env));
@@ -812,7 +874,7 @@ export async function handleGithubCallback(env: Env, _request: Request, url: URL
       installationUrl.searchParams.set("target_id", String(state.target.id));
       return Response.redirect(installationUrl.toString(), 302);
     }
-    return jsonOk({ status: "pending" as const });
+    return githubCallbackCompletion(request, plexusGithubInstallationReturnUrl(env, state.target), { status: "pending" as const });
   } catch (error) {
     return controlPlaneError(error);
   }
