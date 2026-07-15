@@ -63,6 +63,19 @@ export interface CommandIntent {
   payload: Record<string, unknown>;
 }
 
+/**
+ * Server-authenticated identity used for command authorization and persistence.
+ *
+ * This is deliberately separate from CommandIntent: actor fields in the JSON
+ * body remain accepted for wire compatibility, but they are untrusted claims
+ * and never grant authority.
+ */
+export interface AuthenticatedCommandPrincipal {
+  actor_id: string;
+  actor_kind: ActorKind;
+  auth_mode: AuthMode;
+}
+
 /** What the Worker stores. */
 export interface CommandRun {
   id: string;

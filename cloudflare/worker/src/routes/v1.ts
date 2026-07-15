@@ -21,6 +21,7 @@
  */
 
 import type { Env } from "../lib/env";
+import type { AuthenticatedCommandPrincipal } from "../lib/commands/types";
 import { requireBearerAuth, requireInternalAuth } from "../lib/auth";
 import { jsonError, jsonNotImplemented, jsonOk } from "../lib/response";
 import { verifyAccessJwt } from "../lib/access";
@@ -150,6 +151,40 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
       env.TF_CREDENTIAL_ENVELOPE_KEY,
       "app",
     );
+  };
+
+  // Called only after requireAppOrInternalAuth succeeds. Actor claims from the
+  // request body never participate in this server-side authority mapping.
+  const resolveCommandPrincipal = (): AuthenticatedCommandPrincipal => {
+    if (plexusPrincipal) {
+      return {
+        actor_id: plexusPrincipal.identityId,
+        actor_kind: plexusPrincipal.role === "admin" ? "founder" : "employee",
+        auth_mode: "cf_access",
+      };
+    }
+
+    const providedInternal = request.headers.get("x-teamforge-internal-secret");
+    if (
+      providedInternal &&
+      env.TF_INTERNAL_SHARED_SECRET &&
+      providedInternal === env.TF_INTERNAL_SHARED_SECRET
+    ) {
+      return {
+        // The existing internal credential is the explicit Hermes/parity
+        // operator bridge. Preserve that delegated command tier, but derive it
+        // here rather than accepting a founder claim from JSON.
+        actor_id: "teamforge_internal_operator",
+        actor_kind: "founder",
+        auth_mode: "m2m",
+      };
+    }
+
+    return {
+      actor_id: "teamforge_app_service",
+      actor_kind: "multica_service",
+      auth_mode: "app_bearer",
+    };
   };
 
   // Agent feed (Paperclip bridge) — auth required, shared HMAC secret
@@ -519,7 +554,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   if (method === "POST" && pathname === "/v1/commands/intent") {
     const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
-    return handleCommandIntent(env, request);
+    return handleCommandIntent(env, request, resolveCommandPrincipal());
   }
   // Phase B: queue interface — the cambium-bridge teamforge-consumer polls this
   // every ~5s to pick up new runs (state=created, route=downstream_multica),

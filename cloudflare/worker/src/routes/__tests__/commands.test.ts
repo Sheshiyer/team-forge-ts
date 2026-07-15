@@ -1,7 +1,26 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { handleCommandIntent, handleGetCommandRun, handleListCommandRuns } from "../commands";
+import {
+  handleCommandIntent as handleCommandIntentRoute,
+  handleGetCommandRun,
+  handleListCommandRuns,
+} from "../commands";
 import { makeMockDb, type MockDbHandle } from "../../lib/test-utils/mock-d1";
 import type { Env } from "../../lib/env";
+import type { AuthenticatedCommandPrincipal } from "../../lib/commands/types";
+
+const FOUNDER_PRINCIPAL: AuthenticatedCommandPrincipal = {
+  actor_id: "pid_founder",
+  actor_kind: "founder",
+  auth_mode: "cf_access",
+};
+
+function handleCommandIntent(
+  env: Env,
+  request: Request,
+  principal: AuthenticatedCommandPrincipal = FOUNDER_PRINCIPAL,
+): Promise<Response> {
+  return handleCommandIntentRoute(env, request, principal);
+}
 
 function makeReq(body: unknown): Request {
   return new Request("https://x/v1/commands/intent", {
@@ -67,10 +86,67 @@ describe("commands routes", () => {
         correlation_id: "c-2",
         payload: {},
       }),
+      {
+        actor_id: "paperclip_service",
+        actor_kind: "paperclip_agent",
+        auth_mode: "paperclip_token",
+      },
     );
     expect(res.status).toBe(403);
     const body = (await res.json()) as { ok: boolean; error: { code: string } };
     expect(body.error.code).toBe("forbidden");
+  });
+
+  it("rejects an employee principal forging founder on a founder-only command", async () => {
+    const res = await handleCommandIntent(
+      env,
+      makeReq({
+        id: "ts-standup",
+        actor_id: "forged-founder",
+        actor_kind: "founder",
+        auth_mode: "cf_access",
+        correlation_id: "c-forged-employee",
+        payload: {},
+      }),
+      {
+        actor_id: "pid_employee",
+        actor_kind: "employee",
+        auth_mode: "cf_access",
+      },
+    );
+
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("forbidden");
+    expect(body.error.message).toContain("authenticated actor_kind employee");
+    expect(mock.runs.size).toBe(0);
+  });
+
+  it("persists authenticated principal attribution instead of body actor claims", async () => {
+    const res = await handleCommandIntent(
+      env,
+      makeReq({
+        id: "ts-trace-signal",
+        actor_id: "forged-founder",
+        actor_kind: "employee",
+        auth_mode: "app_bearer",
+        correlation_id: "c-derived-employee",
+        payload: {},
+      }),
+      {
+        actor_id: "pid_employee",
+        actor_kind: "employee",
+        auth_mode: "cf_access",
+      },
+    );
+
+    expect(res.status).toBe(201);
+    const [run] = [...mock.runs.values()];
+    expect(run.actor_id).toBe("pid_employee");
+    expect(run.actor_kind).toBe("employee");
+    expect(run.auth_mode).toBe("cf_access");
+    expect(mock.events.every((event) => event.actor_id === "pid_employee")).toBe(true);
+    expect(mock.events.every((event) => event.actor_kind === "employee")).toBe(true);
   });
 
   it("POST /v1/commands/intent with valid ts-standup returns 201 created (downstream route)", async () => {

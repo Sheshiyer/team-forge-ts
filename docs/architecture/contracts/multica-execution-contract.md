@@ -127,11 +127,10 @@ curl -X POST https://teamforge-api.sheshnarayan-iyer.workers.dev/v1/commands/run
   forever (idempotency makes this a no-op, but it still emits an audit
   event for `in_progress`). If this proves abusable, add a `timestamp` field
   to the envelope + reject if `|now - timestamp| > 5min`.
-- **actor_kind trust gap** (carried from Phase 1): `actor_kind` on
-  `/v1/commands/intent` is still client-asserted. Closing this requires
-  extending `PlexusPrincipal` with `actor_kind` and is a recommended but
-  non-blocking follow-up — Phase 2's runtime is safe today because all
-  registered commands share the founder/cofounder tier.
+- **Command identity is server-derived.** The body-level `actor_kind` remains
+  for wire compatibility, but it cannot grant authority. The Worker maps a
+  registered Access role or verified credential class to the persisted actor;
+  generic app Bearers are service principals and cannot forge founder access.
 - **Paperclip retirement (Phase A, 2026-06-15)** removed the
   `downstream_paperclip` route and the in-Worker `paperclip-client.ts` /
   `dispatch.ts` glue. All Phase 3 commands that previously took that path
