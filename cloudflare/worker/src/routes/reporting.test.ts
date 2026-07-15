@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { D1DatabaseLike, Env } from "../lib/env";
+import worker from "../index";
 import { handleGetWeeklyReportingContext } from "./reporting";
 
 interface ReportingRows {
@@ -79,6 +80,10 @@ async function body(response: Response): Promise<Record<string, any>> {
   return response.json() as Promise<Record<string, any>>;
 }
 
+function epoch(timestamp: string): number {
+  return Math.trunc(Date.parse(timestamp) / 1_000);
+}
+
 describe("GET /v1/reporting/weekly-context", () => {
   it("returns 401 for a missing dedicated bearer", async () => {
     const mock = makeReportingDb({});
@@ -100,6 +105,32 @@ describe("GET /v1/reporting/weekly-context", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect((await body(response)).error.code).toBe("invalid_authorization");
     expect(mock.queries).toHaveLength(0);
+  });
+
+  it("routes through the Worker and returns 503 when the dedicated secret is missing", async () => {
+    const mock = makeReportingDb({});
+    const req = request();
+    const response = await worker.fetch(
+      req,
+      env(mock.db, { TF_REPORTING_READ_TOKEN: undefined }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect((await body(response)).error.code).toBe("server_misconfigured");
+    expect(mock.queries).toHaveLength(0);
+  });
+
+  it("routes a valid dedicated bearer to the bounded reporting handler", async () => {
+    const mock = makeReportingDb({});
+    const req = request();
+    const response = await worker.fetch(req, env(mock.db));
+    const payload = await body(response);
+
+    expect(response.status).toBe(200);
+    expect(payload.data.schemaVersion).toBe("teamforge.weekly-context.v1");
+    expect(payload.data.freshness.status).toBe("no_signal");
+    expect(mock.queries).toHaveLength(4);
   });
 
   it("returns 503 when the server reporting workspace is missing", async () => {
@@ -136,25 +167,25 @@ describe("GET /v1/reporting/weekly-context", () => {
         active: 17,
         completed: 3,
         archived: 1,
-        latest_at: "2026-07-14T12:00:00.000Z",
+        latest_epoch: epoch("2026-07-14T12:00:00.000Z"),
         recent_count: 4,
       },
       client_profiles: {
         total: 9,
         active: 9,
-        latest_at: "2026-07-02T12:00:00.000Z",
+        latest_epoch: epoch("2026-07-02T12:00:00.000Z"),
         recent_count: 0,
       },
       employees: {
         total: 7,
         active: 6,
-        latest_at: "2026-07-13T12:00:00.000Z",
+        latest_epoch: epoch("2026-07-13T12:00:00.000Z"),
         recent_count: 1,
       },
       time_entries: {
         total: 1414,
         total_duration_seconds: 720000,
-        latest_at: "2026-07-05T12:00:00.000Z",
+        latest_epoch: epoch("2026-07-05T12:00:00.000Z"),
         recent_count: 0,
         recent_duration_seconds: 0,
       },
@@ -204,7 +235,7 @@ describe("GET /v1/reporting/weekly-context", () => {
           },
         },
         freshness: {
-          status: "fresh",
+          status: "mixed",
           latestHistoricalAt: "2026-07-14T12:00:00.000Z",
           signalsLast7Days: 5,
           sources: [
@@ -219,7 +250,124 @@ describe("GET /v1/reporting/weekly-context", () => {
 
     expect(mock.queries).toHaveLength(4);
     expect(mock.queries.every(({ values }) => values.at(-1) === "configured-workspace")).toBe(true);
+    expect(mock.queries.every(({ sql }) => sql.includes("unixepoch("))).toBe(true);
+    expect(mock.queries.every(({ sql }) => sql.includes("<= unixepoch(?)"))).toBe(true);
+    expect(mock.queries.every(({ values }) => values.includes("2026-07-08T12:00:00.000Z"))).toBe(true);
+    expect(mock.queries.every(({ values }) => values.includes("2026-07-15T12:00:00.000Z"))).toBe(true);
     expect(JSON.stringify(payload)).not.toMatch(/workspace|email|name|external|credential/i);
+  });
+
+  it("reports fresh only when every required source is fresh", async () => {
+    const fresh = {
+      total: 2,
+      active: 2,
+      completed: 0,
+      archived: 0,
+      total_duration_seconds: 600,
+      latest_epoch: epoch("2026-07-14T00:00:00.000Z"),
+      recent_count: 2,
+      recent_duration_seconds: 600,
+    };
+    const mock = makeReportingDb({
+      projects: fresh,
+      client_profiles: fresh,
+      employees: fresh,
+      time_entries: fresh,
+    });
+    const req = request();
+    const response = await handleGetWeeklyReportingContext(
+      req,
+      env(mock.db),
+      new URL(req.url),
+      new Date("2026-07-15T00:00:00.000Z"),
+    );
+    const payload = await body(response);
+
+    expect(payload.data.freshness.status).toBe("fresh");
+    expect(payload.data.freshness.sources.every(({ status }: { status: string }) => status === "fresh")).toBe(true);
+  });
+
+  it("reports mixed when a required source has no signal", async () => {
+    const fresh = {
+      total: 1,
+      active: 1,
+      completed: 0,
+      archived: 0,
+      total_duration_seconds: 60,
+      latest_epoch: epoch("2026-07-14T00:00:00.000Z"),
+      recent_count: 1,
+      recent_duration_seconds: 60,
+    };
+    const mock = makeReportingDb({
+      projects: fresh,
+      client_profiles: { ...fresh, total: 0, active: 0, latest_epoch: null, recent_count: 0 },
+      employees: fresh,
+      time_entries: fresh,
+    });
+    const req = request();
+    const response = await handleGetWeeklyReportingContext(
+      req,
+      env(mock.db),
+      new URL(req.url),
+      new Date("2026-07-15T00:00:00.000Z"),
+    );
+    const payload = await body(response);
+
+    expect(payload.data.freshness.status).toBe("mixed");
+    expect(payload.data.freshness.sources[1]).toEqual({
+      source: "clients",
+      status: "no_signal",
+      latestHistoricalAt: null,
+      signalsLast7Days: 0,
+    });
+  });
+
+  it("normalizes offsets and refuses future or invalid latest timestamps", async () => {
+    const mock = makeReportingDb({
+      projects: {
+        total: 1,
+        active: 1,
+        completed: 0,
+        archived: 0,
+        latest_epoch: epoch("2026-07-15T00:01:00.000Z"),
+        recent_count: 0,
+      },
+      client_profiles: {
+        total: 1,
+        active: 1,
+        latest_epoch: "invalid-epoch",
+        recent_count: 0,
+      },
+      employees: {
+        total: 1,
+        active: 1,
+        latest_epoch: epoch("2026-07-15T05:30:00+05:30"),
+        recent_count: 1,
+      },
+      time_entries: {
+        total: 1,
+        total_duration_seconds: 60,
+        latest_epoch: epoch("2026-06-01T00:00:00.000Z"),
+        recent_count: 0,
+        recent_duration_seconds: 0,
+      },
+    });
+    const req = request();
+    const response = await handleGetWeeklyReportingContext(
+      req,
+      env(mock.db),
+      new URL(req.url),
+      new Date("2026-07-15T00:00:00.000Z"),
+    );
+    const payload = await body(response);
+
+    expect(payload.data.freshness.status).toBe("mixed");
+    expect(payload.data.freshness.sources).toEqual([
+      { source: "projects", status: "no_signal", latestHistoricalAt: null, signalsLast7Days: 0 },
+      { source: "clients", status: "no_signal", latestHistoricalAt: null, signalsLast7Days: 0 },
+      { source: "employees", status: "fresh", latestHistoricalAt: "2026-07-15T00:00:00.000Z", signalsLast7Days: 1 },
+      { source: "time_entries", status: "stale", latestHistoricalAt: "2026-06-01T00:00:00.000Z", signalsLast7Days: 0 },
+    ]);
   });
 
   it("labels latest historical data as stale when the seven-day window is empty", async () => {
@@ -229,7 +377,7 @@ describe("GET /v1/reporting/weekly-context", () => {
       completed: 0,
       archived: 0,
       total_duration_seconds: 60,
-      latest_at: "2026-06-01T00:00:00.000Z",
+      latest_epoch: epoch("2026-06-01T00:00:00.000Z"),
       recent_count: 0,
       recent_duration_seconds: 0,
     };
