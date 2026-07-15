@@ -24,6 +24,9 @@
     "TF_GITHUB_APP_CALLBACK_URL": "https://plexus-api.thoughtseed.space/v1/github/callback",
     "TF_GITHUB_ALLOWED_INSTALLATION_ACCOUNTS": "Organization:thoughtseed-labs:65741640,User:Sheshiyer:7611727,User:psychon7:47470954",
     "TF_GITHUB_ALLOWED_ACTORS": "Sheshiyer:7611727,psychon7:47470954",
+    // Server-owned scope for GET /v1/reporting/weekly-context. The dedicated
+    // TF_REPORTING_READ_TOKEN must be configured with `wrangler secret put`.
+    // "TF_REPORTING_WORKSPACE_ID": "replace-with-workspace-id",
     "TF_INTEGRATION_CONFIG_JSON": "{\"github\":{\"repos\":[{\"repo\":\"Sheshiyer/parkarea-aleph\",\"displayName\":\"ParkArea Phase 2 - Germany Launch\",\"clientName\":\"ParkArea\",\"defaultMilestoneNumber\":1,\"enabled\":true}]},\"huly\":{\"mirrorMode\":\"read_only\",\"mirrorEnabled\":true},\"slack\":{},\"clockify\":{}}",
     // Temporary internal shared secret for m2m (parity, Hermes) bypassing CF Access service token issues on this Worker route.
     // Set a long random value. Callers send header X-TeamForge-Internal-Secret.

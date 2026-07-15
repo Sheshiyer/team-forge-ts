@@ -2,7 +2,7 @@
  * V1 API Router — Safety Audit Note (2026-06-10)
  *
  * Route classification (read-only vs mutation):
- *  READ  — GET  /bootstrap, /remote-config, /projects, /client-profiles, /onboarding-flows,
+ *  READ  — GET  /bootstrap, /remote-config, /reporting/weekly-context, /projects, /client-profiles, /onboarding-flows,
  *               /project-mappings, /project-mappings/issues, /project-mappings/:id/control-plane,
  *               /credentials, /connections, /sync/jobs/:id, /sync/runs, /ota/check,
  *               /team/snapshot, /huly/normalization/history, /handoffs, /handoffs/:id,
@@ -12,7 +12,8 @@
  *               /sync/jobs, /team/refresh, /huly/normalization/preview, /huly/normalization/apply,
  *               /ota/install-events, /handoffs, /handoffs/:id
  *
- * Auth: All app routes require Bearer (TF_CREDENTIAL_ENVELOPE_KEY) or internal secret.
+ * Auth: App routes require Bearer (TF_CREDENTIAL_ENVELOPE_KEY) or internal secret.
+ * /reporting/weekly-context accepts only the dedicated TF_REPORTING_READ_TOKEN.
  * GET /whoami is Access-JWT-only and fail-closed (401 without a verified identity) since WS5.
  * Internal routes (/agent-feed/*, /projects/scaffold, /closeout) use TF_WEBHOOK_HMAC_SECRET.
  * No destructive operations without authentication. No unscoped DELETE endpoints.
@@ -89,6 +90,7 @@ import {
   handleGithubRepoVerify,
   handleGithubWebhook,
 } from "./github";
+import { handleGetWeeklyReportingContext } from "./reporting";
 
 interface DatabaseStatus {
   available: boolean;
@@ -97,6 +99,13 @@ interface DatabaseStatus {
 
 export async function handleV1Request(request: Request, env: Env, url: URL): Promise<Response> {
   const { method, pathname } = { method: request.method, pathname: url.pathname };
+
+  // Dedicated machine-to-machine reporting boundary. Match before Access
+  // identity resolution so this route accepts only TF_REPORTING_READ_TOKEN and
+  // never falls through to the app/internal shared credential tiers.
+  if (method === "GET" && pathname === "/v1/reporting/weekly-context") {
+    return handleGetWeeklyReportingContext(request, env, url);
+  }
 
   // Exact third-party inbound paths. Cloudflare Access must bypass only these
   // two routes; callback state and webhook HMAC independently fail closed.

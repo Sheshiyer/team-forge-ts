@@ -14,7 +14,7 @@ function readBearerToken(request: Request): string | null {
 export function requireBearerAuth(
   request: Request,
   expectedToken: string | undefined,
-  context: "app" | "credentials" | "internal",
+  context: "app" | "credentials" | "internal" | "reporting",
 ): Response | null {
   if (!expectedToken) {
     return jsonError(

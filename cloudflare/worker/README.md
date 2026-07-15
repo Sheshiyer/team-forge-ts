@@ -27,6 +27,22 @@ a verified identity) — it is how Plexus resolves the signed-in employee's emai
 `TF_ACCESS_AUDIENCE` is unrelated to JWT verification: it is the
 `/v1/credentials` `?audience=` echo check for the desktop credential handout.
 
+### Weekly reporting context
+
+`GET /v1/reporting/weekly-context` is a separate, read-only machine boundary.
+It accepts only `Authorization: Bearer $TF_REPORTING_READ_TOKEN`; app, webhook,
+credential-envelope, and temporary internal-bridge secrets are not accepted.
+Configure `TF_REPORTING_WORKSPACE_ID` as a server-side Worker variable. Caller
+workspace query parameters are rejected, and the response contains only
+versioned aggregate counts and seven-day/latest-historical freshness metadata.
+Every response sets `Cache-Control: no-store`.
+
+Configure the bearer without printing or committing it:
+
+```bash
+pnpm exec wrangler secret put TF_REPORTING_READ_TOKEN
+```
+
 ## Scope
 
 Wave 1 provides:
