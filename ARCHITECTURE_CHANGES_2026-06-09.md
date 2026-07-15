@@ -37,14 +37,19 @@ The TeamForge API Worker is now behind Cloudflare Zero Trust Access.
 
 ### Service Token for API Calls
 ```bash
-CF_ACCESS_CLIENT_ID="5c2a491d82489737b0a98f35461140ca.access"
-CF_ACCESS_CLIENT_SECRET="f42c67ea72db8ee39ee5480a7e7c96e3a18f6eb26ab02730d85e61be2ab46604"
+CF_ACCESS_CLIENT_ID="<service-token-client-id>.access"
+CF_ACCESS_CLIENT_SECRET="<service-token-client-secret>"
 
 curl -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
      -H "Authorization: Bearer $TF_CREDENTIAL_ENVELOPE_KEY" \
      https://forge.thoughtseed.space/v1/projects
 ```
+
+Never commit Cloudflare Access client IDs or secrets. Inject them from the
+runtime secret store. Treat every value previously committed to Git as exposed:
+rotate it, update consumers, prove the replacement works, then revoke the old
+credential. Redacting this file does not remove values from repository history.
 
 ### Temporary Internal Shared-Secret Bridge (m2m)
 For machine-to-machine calls from IP-bypass-allowed machines when CF Access service tokens fail:

@@ -72,6 +72,12 @@ export interface Env {
   TF_CREDENTIAL_ENVELOPE_KEY?: string;
   TF_WEBHOOK_HMAC_SECRET?: string;
   TF_RELEASE_PUBLISH_TOKEN?: string;
+  // Dedicated, read-only weekly reporting boundary. This bearer is not shared
+  // with app, credential handout, webhook, or temporary bridge routes.
+  TF_REPORTING_READ_TOKEN?: string;
+  // Server-owned scope for the weekly reporting route. Callers cannot select
+  // or override a workspace.
+  TF_REPORTING_WORKSPACE_ID?: string;
   TEAMFORGE_DB?: D1DatabaseLike;
   TEAMFORGE_ARTIFACTS?: R2BucketLike;
   SYNC_QUEUE?: QueueLike<SyncJobMessage>;

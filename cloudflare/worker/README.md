@@ -27,6 +27,43 @@ a verified identity) — it is how Plexus resolves the signed-in employee's emai
 `TF_ACCESS_AUDIENCE` is unrelated to JWT verification: it is the
 `/v1/credentials` `?audience=` echo check for the desktop credential handout.
 
+### Weekly reporting context
+
+`GET /v1/reporting/weekly-context` is a separate, read-only machine boundary.
+The custom domain has two independent authentication layers:
+
+1. Cloudflare Access authenticates the machine at the edge using
+   `CF-Access-Client-Id` and `CF-Access-Client-Secret`.
+2. The Worker application authenticates the reporting consumer using
+   `Authorization: Bearer $TF_REPORTING_READ_TOKEN`.
+
+The reporting bearer is dedicated: app credential-envelope, webhook, and
+temporary internal-bridge secrets are not accepted. Configure
+`TF_REPORTING_WORKSPACE_ID` on the Worker; callers cannot select or override a
+workspace. The response contains only versioned aggregate counts and bounded
+seven-day/latest-historical freshness metadata. Overall freshness is `fresh`
+only when all four required sources are fresh; partial evidence is `mixed`.
+Every response sets `Cache-Control: no-store`.
+
+Configure both server-owned values without printing or committing them:
+
+```bash
+pnpm exec wrangler secret put TF_REPORTING_READ_TOKEN
+pnpm exec wrangler secret put TF_REPORTING_WORKSPACE_ID
+```
+
+Load the three caller credentials from an approved runtime secret store, then
+run a redacted metadata-only probe. Never inline their values in shell history:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  -H "CF-Access-Client-Id: ${CF_ACCESS_CLIENT_ID:?load from secret store}" \
+  -H "CF-Access-Client-Secret: ${CF_ACCESS_CLIENT_SECRET:?load from secret store}" \
+  -H "Authorization: Bearer ${TF_REPORTING_READ_TOKEN:?load from secret store}" \
+  "${TEAMFORGE_BASE_URL:?set base URL}/v1/reporting/weekly-context" \
+  | jq '{ok,schemaVersion:.data.schemaVersion,generatedAt:.data.generatedAt,window:.data.window,projects:.data.projects,clients:.data.clients,kpis:.data.kpis,freshness:.data.freshness}'
+```
+
 ## Scope
 
 Wave 1 provides:

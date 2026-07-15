@@ -99,14 +99,18 @@ The operating model is now explicitly four planes:
 Example authenticated call (both CF Access headers + app Bearer are required):
 
 ```bash
-CF_ACCESS_CLIENT_ID="21ad48de5aefe985ef5bddbe42a07b8e.access"
-CF_ACCESS_CLIENT_SECRET="e90d3c459f1e8565a44e5ac42ec03704500ae0faf842b3765e31c3e8759095ed"
+CF_ACCESS_CLIENT_ID="<service-token-client-id>.access"
+CF_ACCESS_CLIENT_SECRET="<service-token-client-secret>"
 
 curl -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
      -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
      -H "Authorization: Bearer $TF_CREDENTIAL_ENVELOPE_KEY" \
      https://forge.thoughtseed.space/v1/projects
 ```
+
+Never commit Cloudflare Access client IDs or secrets. Enter them through the
+runtime secret store. Any credential that has ever appeared in Git history must
+be rotated and revoked even after the current documentation is redacted.
 
 **Temporary internal shared-secret bridge (for m2m when service tokens have Worker compatibility issues):**
 
