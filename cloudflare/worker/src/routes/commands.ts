@@ -2,7 +2,13 @@ import type { Env, D1DatabaseLike } from "../lib/env";
 import { jsonError, jsonOk } from "../lib/response";
 import { COMMAND_REGISTRY, getCommandSpec, isAuthorized } from "../lib/commands/registry";
 import { createRun, getRunById, listRunsByState, recordAuditEvent, transitionRun } from "../lib/commands/runs";
-import type { ActorKind, AuthMode, CommandIntent, CommandRunState } from "../lib/commands/types";
+import type {
+  ActorKind,
+  AuthenticatedCommandPrincipal,
+  AuthMode,
+  CommandIntent,
+  CommandRunState,
+} from "../lib/commands/types";
 
 const ACTOR_KINDS = new Set<ActorKind>([
   "founder",
@@ -74,7 +80,11 @@ function requireDb(
   return { ok: true, db: env.TEAMFORGE_DB };
 }
 
-export async function handleCommandIntent(env: Env, request: Request): Promise<Response> {
+export async function handleCommandIntent(
+  env: Env,
+  request: Request,
+  principal: AuthenticatedCommandPrincipal,
+): Promise<Response> {
   let body: unknown;
   try {
     body = await request.json();
@@ -100,16 +110,23 @@ export async function handleCommandIntent(env: Env, request: Request): Promise<R
       400,
     );
   }
-  // TODO(hermes-actor-kind-trust): actor_kind is currently read from the request body, which is
-  // untrusted client input. When PlexusPrincipal gains an actor_kind field (Phase 2 likely),
-  // derive actor_kind from the authenticated principal here, NOT from intent.actor_kind. Today
-  // this is acceptable because all registered commands share the founder/cofounder tier, but
-  // it becomes exploitable once multica_service- or paperclip_agent-only commands ship.
-  if (!isAuthorized(intent.id, intent.actor_kind)) {
+  if (intent.actor_kind !== principal.actor_kind) {
     return jsonError(
       {
         code: "forbidden",
-        message: `actor_kind ${intent.actor_kind} not allowed for ${intent.id}`,
+        message: `claimed actor_kind ${intent.actor_kind} does not match authenticated actor_kind ${principal.actor_kind}`,
+        retryable: false,
+      },
+      403,
+    );
+  }
+  // Body actor fields remain part of the wire contract, but all authority and
+  // persisted attribution come from the server-authenticated principal.
+  if (!isAuthorized(intent.id, principal.actor_kind)) {
+    return jsonError(
+      {
+        code: "forbidden",
+        message: `authenticated actor_kind ${principal.actor_kind} not allowed for ${intent.id}`,
         retryable: false,
       },
       403,
@@ -120,15 +137,21 @@ export async function handleCommandIntent(env: Env, request: Request): Promise<R
   if (!dbCheck.ok) return dbCheck.response;
   const db = dbCheck.db;
   const now = Date.now();
+  const authenticatedIntent: CommandIntent = {
+    ...intent,
+    actor_id: principal.actor_id,
+    actor_kind: principal.actor_kind,
+    auth_mode: principal.auth_mode,
+  };
 
   try {
-    const run = await createRun(db, intent, now);
+    const run = await createRun(db, authenticatedIntent, now);
     await recordAuditEvent(
       db,
       run.id,
       "command_received",
-      intent.actor_id,
-      intent.actor_kind,
+      principal.actor_id,
+      principal.actor_kind,
       {
         command_id: intent.id,
         correlation_id: intent.correlation_id,
@@ -140,8 +163,8 @@ export async function handleCommandIntent(env: Env, request: Request): Promise<R
       db,
       run.id,
       "run_created",
-      intent.actor_id,
-      intent.actor_kind,
+      principal.actor_id,
+      principal.actor_kind,
       null,
       now,
     );

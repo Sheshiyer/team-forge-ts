@@ -83,7 +83,17 @@ downstream consumers (MultiCA enqueue, Paperclip envelope).
 
 Both routes are gated by `requireAppOrInternalAuth` (CF Access JWT, m2m shared
 secret, or app Bearer). Per-command authorization is performed by the registry's
-`isAuthorized(commandId, actorKind)` helper.
+`isAuthorized(commandId, actorKind)` helper using a server-derived principal:
+
+- registered Access `admin` → `founder`
+- registered Access `employee` → `employee`
+- valid internal Hermes/parity credential → delegated `founder`
+- generic app Bearer → `multica_service` (no founder-command authority)
+
+The body still requires `actor_id`, `actor_kind`, and `auth_mode` for wire
+compatibility. Those values are untrusted claims: `actor_kind` must match the
+authenticated principal, while the Worker replaces all three before
+authorization, persistence, and audit.
 
 ### Error taxonomy
 
@@ -92,20 +102,13 @@ secret, or app Bearer). Per-command authorization is performed by the registry's
 | `bad_json` | 400 | request body is not valid JSON |
 | `invalid_intent` | 400 | missing field, or `actor_kind` / `auth_mode` not in enum, or `payload` is not an object |
 | `unknown_command` | 400 | `command_id` not in registry |
-| `forbidden` | 403 | actor_kind not in `allowed_actor_kinds` for this command |
+| `forbidden` | 403 | authenticated principal kind not in `allowed_actor_kinds` for this command |
 | `not_found` | 404 | run_id has no matching row (GET only) |
 | `database_unavailable` | 503 | `TEAMFORGE_DB` binding missing |
 | `internal_error` | 500 | unexpected D1 failure during create/audit/transition (retryable) |
 
 ## Known Limitations
 
-- **Actor-kind trust gap:** `actor_kind` is currently read from the request
-  body, which is untrusted client input. When `PlexusPrincipal` gains an
-  `actor_kind` field (Phase 2 likely), the route handler must derive
-  `actor_kind` from the authenticated principal rather than from
-  `intent.actor_kind`. Today this is acceptable because all registered commands
-  share the founder/cofounder tier; it becomes exploitable once
-  `multica_service`- or `paperclip_agent`-only commands ship.
 - **No idempotency on `correlation_id`:** two POSTs with the same
   `correlation_id` produce two distinct runs. Dedup logic is deferred to Phase
   2 if needed.
