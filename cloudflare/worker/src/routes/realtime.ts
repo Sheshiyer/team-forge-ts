@@ -1,5 +1,5 @@
 import type { Env } from "../lib/env";
-import { execute, nanoid, now, queryAll, queryFirst } from "../lib/db";
+import { execute, executeChanges, nanoid, now, queryAll, queryFirst } from "../lib/db";
 import { jsonError, jsonOk } from "../lib/response";
 import type { PlexusPrincipal } from "../lib/plexus-session";
 
@@ -65,6 +65,7 @@ interface RealtimeParticipantRow {
   role: ParticipantRole;
   state: ParticipantState;
   client_instance_id: string;
+  presence_session_id: string | null;
   cloudflare_session_id: string | null;
   audio_enabled: number;
   video_enabled: number;
@@ -131,6 +132,7 @@ interface JsonReadResult<T> {
 
 interface JoinBody {
   clientInstanceId?: string;
+  presenceSessionId?: string;
   intent?: "presence_only" | "media";
   sessionDescription?: unknown;
   media?: {
@@ -164,6 +166,12 @@ interface CloseoutBody {
   sendToPaperclip?: boolean;
 }
 
+interface FreshPresenceLeaseRow {
+  client_instance_id: string;
+  presence_session_id: string;
+  expires_at: string;
+}
+
 const STUN_URLS = ["stun:stun.cloudflare.com:3478"];
 
 function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
@@ -190,6 +198,12 @@ function slugify(value: string): string {
 
 function stableRoomId(prefix: string, id: string): string {
   return `room_${prefix}_${id.replace(/[^a-zA-Z0-9_-]+/g, "_")}`;
+}
+
+function boundedRealtimeId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized && normalized.length <= 128 ? normalized : null;
 }
 
 function resolveWorkspaceId(principal: PlexusPrincipal | null | undefined, candidate?: string | null): string | null {
@@ -446,17 +460,61 @@ async function getActiveCall(env: Env, roomId: string): Promise<RealtimeCallRow 
   );
 }
 
-async function getPresence(env: Env, callId: string | null): Promise<{ participants: number; screenShares: number }> {
+async function getPresence(env: Env, callId: string | null, asOf: string): Promise<{ participants: number; screenShares: number }> {
   if (!callId) return { participants: 0, screenShares: 0 };
   const participants = await queryFirst<{ count: number }>(
     env.TEAMFORGE_DB!,
-    "SELECT COUNT(*) AS count FROM realtime_participants WHERE call_session_id = ? AND state = 'joined'",
+    `SELECT COUNT(*) AS count
+       FROM realtime_participants p
+       JOIN plexus_app_presence_leases l
+         ON l.workspace_id = p.workspace_id
+        AND l.identity_id = p.identity_id
+        AND l.client_instance_id = p.client_instance_id
+        AND l.presence_session_id = p.presence_session_id
+        AND l.room_id = p.room_id
+        AND l.call_session_id = p.call_session_id
+        AND l.participant_id = p.id
+       JOIN plexus_identities i
+         ON i.id = p.identity_id AND i.workspace_id = p.workspace_id AND i.is_active = 1
+       LEFT JOIN employees e
+         ON e.id = i.employee_id AND e.workspace_id = i.workspace_id
+      WHERE p.call_session_id = ?
+        AND p.state = 'joined'
+        AND l.expires_at > ?
+        AND (i.role = 'admin' OR (i.employee_id IS NOT NULL AND e.is_active = 1))`,
     callId,
+    asOf,
   );
   const screens = await queryFirst<{ count: number }>(
     env.TEAMFORGE_DB!,
-    "SELECT COUNT(*) AS count FROM realtime_media_tracks WHERE call_session_id = ? AND track_kind = 'screen' AND state = 'live'",
+    `SELECT COUNT(*) AS count
+       FROM realtime_media_tracks t
+       JOIN realtime_participants p
+         ON p.id = t.participant_id
+        AND p.workspace_id = t.workspace_id
+        AND p.room_id = t.room_id
+        AND p.call_session_id = t.call_session_id
+        AND p.identity_id = t.identity_id
+       JOIN plexus_app_presence_leases l
+         ON l.workspace_id = p.workspace_id
+        AND l.identity_id = p.identity_id
+        AND l.client_instance_id = p.client_instance_id
+        AND l.presence_session_id = p.presence_session_id
+        AND l.room_id = p.room_id
+        AND l.call_session_id = p.call_session_id
+        AND l.participant_id = p.id
+       JOIN plexus_identities i
+         ON i.id = p.identity_id AND i.workspace_id = p.workspace_id AND i.is_active = 1
+       LEFT JOIN employees e
+         ON e.id = i.employee_id AND e.workspace_id = i.workspace_id
+      WHERE t.call_session_id = ?
+        AND t.track_kind = 'screen'
+        AND t.state = 'live'
+        AND p.state = 'joined'
+        AND l.expires_at > ?
+        AND (i.role = 'admin' OR (i.employee_id IS NOT NULL AND e.is_active = 1))`,
     callId,
+    asOf,
   );
   return {
     participants: Number(participants?.count ?? 0),
@@ -464,11 +522,11 @@ async function getPresence(env: Env, callId: string | null): Promise<{ participa
   };
 }
 
-async function roomPayload(env: Env, row: RealtimeRoomRow) {
+async function roomPayload(env: Env, row: RealtimeRoomRow, asOf = now()) {
   const activeCall = row.active_call_id
     ? await getCall(env, row.workspace_id, row.active_call_id)
     : await getActiveCall(env, row.id);
-  const presence = await getPresence(env, activeCall?.id ?? null);
+  const presence = await getPresence(env, activeCall?.id ?? null, asOf);
   return mapRoom(row, presence, activeCall);
 }
 
@@ -489,6 +547,97 @@ async function listTracks(env: Env, callId: string): Promise<RealtimeTrackRow[]>
      WHERE call_session_id = ?
      ORDER BY state = 'live' DESC, started_at ASC`,
     callId,
+  );
+}
+
+async function listActiveParticipants(env: Env, callId: string, asOf: string): Promise<RealtimeParticipantRow[]> {
+  return queryAll<RealtimeParticipantRow>(
+    env.TEAMFORGE_DB!,
+    `SELECT p.*
+       FROM realtime_participants p
+       JOIN plexus_app_presence_leases l
+         ON l.workspace_id = p.workspace_id
+        AND l.identity_id = p.identity_id
+        AND l.client_instance_id = p.client_instance_id
+        AND l.presence_session_id = p.presence_session_id
+        AND l.room_id = p.room_id
+        AND l.call_session_id = p.call_session_id
+        AND l.participant_id = p.id
+       JOIN plexus_identities i
+         ON i.id = p.identity_id AND i.workspace_id = p.workspace_id AND i.is_active = 1
+       LEFT JOIN employees e
+         ON e.id = i.employee_id AND e.workspace_id = i.workspace_id
+      WHERE p.call_session_id = ?
+        AND p.state = 'joined'
+        AND l.expires_at > ?
+        AND (i.role = 'admin' OR (i.employee_id IS NOT NULL AND e.is_active = 1))
+      ORDER BY p.joined_at ASC`,
+    callId,
+    asOf,
+  );
+}
+
+async function listActiveTracks(env: Env, callId: string, asOf: string): Promise<RealtimeTrackRow[]> {
+  return queryAll<RealtimeTrackRow>(
+    env.TEAMFORGE_DB!,
+    `SELECT t.*
+       FROM realtime_media_tracks t
+       JOIN realtime_participants p
+         ON p.id = t.participant_id
+        AND p.workspace_id = t.workspace_id
+        AND p.room_id = t.room_id
+        AND p.call_session_id = t.call_session_id
+        AND p.identity_id = t.identity_id
+       JOIN plexus_app_presence_leases l
+         ON l.workspace_id = p.workspace_id
+        AND l.identity_id = p.identity_id
+        AND l.client_instance_id = p.client_instance_id
+        AND l.presence_session_id = p.presence_session_id
+        AND l.room_id = p.room_id
+        AND l.call_session_id = p.call_session_id
+        AND l.participant_id = p.id
+       JOIN plexus_identities i
+         ON i.id = p.identity_id AND i.workspace_id = p.workspace_id AND i.is_active = 1
+       LEFT JOIN employees e
+         ON e.id = i.employee_id AND e.workspace_id = i.workspace_id
+      WHERE t.call_session_id = ?
+        AND t.state = 'live'
+        AND p.state = 'joined'
+        AND l.expires_at > ?
+        AND (i.role = 'admin' OR (i.employee_id IS NOT NULL AND e.is_active = 1))
+      ORDER BY t.started_at ASC`,
+    callId,
+    asOf,
+  );
+}
+
+async function getFreshPresenceLease(
+  env: Env,
+  principal: PlexusPrincipal,
+  clientInstanceId: string,
+  presenceSessionId: string,
+  asOf: string,
+): Promise<FreshPresenceLeaseRow | null> {
+  return queryFirst<FreshPresenceLeaseRow>(
+    env.TEAMFORGE_DB!,
+    `SELECT client_instance_id, presence_session_id, expires_at
+       FROM plexus_app_presence_leases l
+       JOIN plexus_identities i
+         ON i.id = l.identity_id AND i.workspace_id = l.workspace_id AND i.is_active = 1
+       LEFT JOIN employees e
+         ON e.id = i.employee_id AND e.workspace_id = i.workspace_id
+      WHERE l.workspace_id = ?
+        AND l.identity_id = ?
+        AND l.client_instance_id = ?
+        AND l.presence_session_id = ?
+        AND l.expires_at > ?
+        AND (i.role = 'admin' OR (i.employee_id IS NOT NULL AND e.is_active = 1))
+      LIMIT 1`,
+    principal.workspaceId,
+    principal.identityId,
+    clientInstanceId,
+    presenceSessionId,
+    asOf,
   );
 }
 
@@ -650,10 +799,11 @@ export async function handleGetRealtimeRoom(
   }
 
   const activeCall = room.active_call_id ? await getCall(env, workspaceId, room.active_call_id) : await getActiveCall(env, room.id);
-  const participants = activeCall ? (await listParticipants(env, activeCall.id)).map(mapParticipant) : [];
-  const tracks = activeCall ? (await listTracks(env, activeCall.id)).map(mapTrack) : [];
+  const asOf = now();
+  const participants = activeCall ? (await listActiveParticipants(env, activeCall.id, asOf)).map(mapParticipant) : [];
+  const tracks = activeCall ? (await listActiveTracks(env, activeCall.id, asOf)).map(mapTrack) : [];
   return jsonOk({
-    room: await roomPayload(env, room),
+    room: await roomPayload(env, room, asOf),
     call: activeCall ? mapCall(activeCall) : null,
     participants,
     tracks,
@@ -684,7 +834,40 @@ export async function handleJoinRealtimeRoom(
   }
 
   const ts = now();
+  const clientInstanceId = boundedRealtimeId(body.clientInstanceId);
+  const presenceSessionId = boundedRealtimeId(body.presenceSessionId);
+  if (!clientInstanceId || !presenceSessionId) {
+    return jsonError({ code: "realtime_presence_required", message: "A current client and presence session are required.", retryable: false }, 400);
+  }
+  const presenceLease = await getFreshPresenceLease(env, principal!, clientInstanceId, presenceSessionId, ts);
+  if (!presenceLease) {
+    return jsonError({ code: "realtime_presence_stale", message: "Current fresh app presence is required before joining.", retryable: false }, 409);
+  }
+
+  let cloudflare: Record<string, unknown>;
+  try {
+    cloudflare = await createCloudflareSession(env, body.sessionDescription);
+  } catch (error) {
+    return jsonError(
+      { code: "realtime_provider_unavailable", message: error instanceof Error ? error.message : "Cloudflare Realtime unavailable.", retryable: true },
+      502,
+    );
+  }
+
+  const joinedAt = now();
+  const confirmedPresenceLease = await getFreshPresenceLease(
+    env,
+    principal!,
+    clientInstanceId,
+    presenceSessionId,
+    joinedAt,
+  );
+  if (!confirmedPresenceLease) {
+    return jsonError({ code: "realtime_presence_stale", message: "Presence expired or changed during realtime negotiation.", retryable: false }, 409);
+  }
+
   let call = await getActiveCall(env, room.id);
+  let createdCall = false;
   if (!call) {
     const callId = `call_${nanoid()}`;
     await execute(
@@ -698,36 +881,26 @@ export async function handleJoinRealtimeRoom(
       room.id,
       room.project_id,
       principal!.identityId,
-      ts,
-      ts,
-      ts,
+      joinedAt,
+      joinedAt,
+      joinedAt,
     );
     await execute(
       env.TEAMFORGE_DB!,
       "UPDATE realtime_rooms SET active_call_id = ?, last_activity_at = ?, updated_at = ? WHERE id = ?",
       callId,
-      ts,
-      ts,
+      joinedAt,
+      joinedAt,
       room.id,
     );
     await appendEvent(env, workspaceId, room.id, callId, principal!.identityId, "call_started", {});
     call = await getCall(env, workspaceId, callId);
+    createdCall = true;
   }
   if (!call) {
     return jsonError({ code: "realtime_join_denied", message: "Unable to create realtime call.", retryable: true }, 500);
   }
 
-  let cloudflare: Record<string, unknown>;
-  try {
-    cloudflare = await createCloudflareSession(env, body.sessionDescription);
-  } catch (error) {
-    return jsonError(
-      { code: "realtime_provider_unavailable", message: error instanceof Error ? error.message : "Cloudflare Realtime unavailable.", retryable: true },
-      502,
-    );
-  }
-
-  const clientInstanceId = body.clientInstanceId?.trim() || `client_${nanoid()}`;
   const existingParticipant = await queryFirst<RealtimeParticipantRow>(
     env.TEAMFORGE_DB!,
     `SELECT * FROM realtime_participants
@@ -745,15 +918,16 @@ export async function handleJoinRealtimeRoom(
     await execute(
       env.TEAMFORGE_DB!,
       `UPDATE realtime_participants
-       SET state = 'joined', left_at = NULL, cloudflare_session_id = ?,
+       SET state = 'joined', left_at = NULL, presence_session_id = ?, cloudflare_session_id = ?,
            audio_enabled = ?, video_enabled = ?, screen_share_enabled = ?,
            last_seen_at = ?, metadata_json = ?
        WHERE id = ?`,
+      presenceSessionId,
       cloudflareSessionId,
       media.audio ? 1 : existingParticipant.audio_enabled,
       media.video ? 1 : existingParticipant.video_enabled,
       media.screen ? 1 : existingParticipant.screen_share_enabled,
-      ts,
+      joinedAt,
       stringifyJson({ intent: body.intent ?? "media" }),
       participantId,
     );
@@ -762,9 +936,9 @@ export async function handleJoinRealtimeRoom(
       env.TEAMFORGE_DB!,
       `INSERT INTO realtime_participants
          (id, workspace_id, room_id, call_session_id, identity_id, employee_id, display_name, role, state,
-          client_instance_id, cloudflare_session_id, audio_enabled, video_enabled, screen_share_enabled,
+          client_instance_id, presence_session_id, cloudflare_session_id, audio_enabled, video_enabled, screen_share_enabled,
           joined_at, left_at, last_seen_at, metadata_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'joined', ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'joined', ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       participantId,
       workspaceId,
       room.id,
@@ -774,13 +948,116 @@ export async function handleJoinRealtimeRoom(
       principal!.displayName,
       role,
       clientInstanceId,
+      presenceSessionId,
       cloudflareSessionId,
       media.audio ? 1 : 0,
       media.video ? 1 : 0,
       media.screen ? 1 : 0,
-      ts,
-      ts,
+      joinedAt,
+      joinedAt,
       stringifyJson({ intent: body.intent ?? "media" }),
+    );
+  }
+
+  const roomContextUpdated = await executeChanges(
+    env.TEAMFORGE_DB!,
+    `UPDATE plexus_app_presence_leases
+        SET room_kind = ?,
+            room_id = ?,
+            call_session_id = ?,
+            participant_id = ?,
+            room_project_id = ?,
+            room_observed_at = ?,
+            updated_at = ?
+      WHERE workspace_id = ?
+        AND identity_id = ?
+        AND client_instance_id = ?
+        AND presence_session_id = ?
+        AND expires_at > ?`,
+    room.room_type,
+    room.id,
+    call.id,
+    participantId,
+    room.project_id,
+    joinedAt,
+    joinedAt,
+    workspaceId,
+    principal!.identityId,
+    clientInstanceId,
+    presenceSessionId,
+    joinedAt,
+  );
+  if (roomContextUpdated !== 1) {
+    if (existingParticipant) {
+      await execute(
+        env.TEAMFORGE_DB!,
+        `UPDATE realtime_participants
+            SET state = ?,
+                left_at = ?,
+                presence_session_id = ?,
+                cloudflare_session_id = ?,
+                audio_enabled = ?,
+                video_enabled = ?,
+                screen_share_enabled = ?,
+                last_seen_at = ?,
+                metadata_json = ?
+          WHERE id = ?`,
+        existingParticipant.state,
+        existingParticipant.left_at,
+        existingParticipant.presence_session_id,
+        existingParticipant.cloudflare_session_id,
+        existingParticipant.audio_enabled,
+        existingParticipant.video_enabled,
+        existingParticipant.screen_share_enabled,
+        existingParticipant.last_seen_at,
+        existingParticipant.metadata_json,
+        participantId,
+      );
+    } else {
+      await execute(
+        env.TEAMFORGE_DB!,
+        "DELETE FROM realtime_participants WHERE id = ? AND presence_session_id = ?",
+        participantId,
+        presenceSessionId,
+      );
+    }
+    if (createdCall) {
+      const joined = await queryFirst<{ count: number }>(
+        env.TEAMFORGE_DB!,
+        "SELECT COUNT(*) AS count FROM realtime_participants WHERE call_session_id = ? AND state = 'joined'",
+        call.id,
+      );
+      if (Number(joined?.count ?? 0) === 0) {
+        await execute(
+          env.TEAMFORGE_DB!,
+          "UPDATE realtime_call_sessions SET state = 'failed', ended_at = ?, updated_at = ? WHERE id = ? AND state = 'live'",
+          joinedAt,
+          joinedAt,
+          call.id,
+        );
+        await execute(
+          env.TEAMFORGE_DB!,
+          "UPDATE realtime_rooms SET active_call_id = NULL, last_activity_at = ?, updated_at = ? WHERE id = ? AND active_call_id = ?",
+          joinedAt,
+          joinedAt,
+          room.id,
+          call.id,
+        );
+      }
+    }
+    return jsonError({ code: "realtime_presence_stale", message: "Presence session changed while joining; rejoin with the current session.", retryable: false }, 409);
+  }
+
+  if (existingParticipant && existingParticipant.presence_session_id !== presenceSessionId) {
+    await execute(
+      env.TEAMFORGE_DB!,
+      `UPDATE realtime_media_tracks
+          SET state = 'closed', ended_at = ?, updated_at = ?
+        WHERE call_session_id = ? AND participant_id = ? AND state = 'live'`,
+      joinedAt,
+      joinedAt,
+      call.id,
+      participantId,
     );
   }
 
@@ -829,28 +1106,44 @@ export async function handlePostRealtimeTrack(
     return jsonError({ code: "realtime_track_forbidden", message: "trackKind must be audio, camera, or screen.", retryable: false }, 400);
   }
 
-  const participant = body.participantId
-    ? await queryFirst<RealtimeParticipantRow>(
-      env.TEAMFORGE_DB!,
-      "SELECT * FROM realtime_participants WHERE id = ? AND call_session_id = ? LIMIT 1",
-      body.participantId,
-      call.id,
-    )
-    : await queryFirst<RealtimeParticipantRow>(
-      env.TEAMFORGE_DB!,
-      `SELECT * FROM realtime_participants
-       WHERE call_session_id = ? AND identity_id = ? AND state = 'joined'
-       ORDER BY joined_at DESC LIMIT 1`,
-      call.id,
-      principal!.identityId,
-    );
+  const participantId = boundedRealtimeId(body.participantId);
+  if (!participantId) {
+    return jsonError({ code: "realtime_track_forbidden", message: "participantId is required for exact client attribution.", retryable: false }, 400);
+  }
+
+  const ts = now();
+  const participant = await queryFirst<RealtimeParticipantRow>(
+    env.TEAMFORGE_DB!,
+    `SELECT p.*
+         FROM realtime_participants p
+         JOIN plexus_app_presence_leases l
+           ON l.workspace_id = p.workspace_id
+          AND l.identity_id = p.identity_id
+          AND l.client_instance_id = p.client_instance_id
+          AND l.presence_session_id = p.presence_session_id
+          AND l.room_id = p.room_id
+          AND l.call_session_id = p.call_session_id
+          AND l.participant_id = p.id
+         JOIN plexus_identities i
+           ON i.id = p.identity_id AND i.workspace_id = p.workspace_id AND i.is_active = 1
+         LEFT JOIN employees e
+           ON e.id = i.employee_id AND e.workspace_id = i.workspace_id
+        WHERE p.id = ?
+          AND p.call_session_id = ?
+          AND p.state = 'joined'
+          AND l.expires_at > ?
+          AND (i.role = 'admin' OR (i.employee_id IS NOT NULL AND e.is_active = 1))
+        LIMIT 1`,
+    participantId,
+    call.id,
+    ts,
+  );
 
   if (!participant || participant.identity_id !== principal!.identityId || participant.state !== "joined") {
     return jsonError({ code: "realtime_track_forbidden", message: "Cannot publish tracks for this participant.", retryable: false }, 403);
   }
 
   const trackId = `trk_${nanoid()}`;
-  const ts = now();
   await execute(
     env.TEAMFORGE_DB!,
     `INSERT INTO realtime_media_tracks
@@ -1010,17 +1303,41 @@ export async function handleLeaveRealtimeCall(
     callId,
     participant.id,
   );
+  if (participant.presence_session_id) {
+    await execute(
+      env.TEAMFORGE_DB!,
+      `UPDATE plexus_app_presence_leases
+          SET room_kind = NULL,
+              room_id = NULL,
+              call_session_id = NULL,
+              participant_id = NULL,
+              room_project_id = NULL,
+              room_observed_at = NULL,
+              updated_at = ?
+        WHERE workspace_id = ?
+          AND identity_id = ?
+          AND client_instance_id = ?
+          AND presence_session_id = ?
+          AND room_id = ?
+          AND call_session_id = ?
+          AND participant_id = ?`,
+      ts,
+      workspaceId,
+      principal!.identityId,
+      participant.client_instance_id,
+      participant.presence_session_id,
+      participant.room_id,
+      participant.call_session_id,
+      participant.id,
+    );
+  }
   await appendEvent(env, workspaceId, call.room_id, call.id, principal!.identityId, "participant_left", {
     participantId: participant.id,
   });
 
-  const remaining = await queryFirst<{ count: number }>(
-    env.TEAMFORGE_DB!,
-    "SELECT COUNT(*) AS count FROM realtime_participants WHERE call_session_id = ? AND state = 'joined'",
-    callId,
-  );
+  const remaining = await getPresence(env, callId, ts);
   let ended = false;
-  if (Number(remaining?.count ?? 0) === 0) {
+  if (remaining.participants === 0) {
     ended = true;
     await execute(
       env.TEAMFORGE_DB!,
@@ -1061,6 +1378,36 @@ export async function handleEndRealtimeCall(
   }
 
   const ts = now();
+  await execute(
+    env.TEAMFORGE_DB!,
+    `UPDATE plexus_app_presence_leases AS l
+        SET room_kind = NULL,
+            room_id = NULL,
+            call_session_id = NULL,
+            participant_id = NULL,
+            room_project_id = NULL,
+            room_observed_at = NULL,
+            updated_at = ?
+      WHERE l.workspace_id = ?
+        AND l.room_id = ?
+        AND l.call_session_id = ?
+        AND EXISTS (
+          SELECT 1
+            FROM realtime_participants p
+           WHERE p.call_session_id = ?
+             AND p.workspace_id = l.workspace_id
+             AND p.identity_id = l.identity_id
+             AND p.client_instance_id = l.client_instance_id
+             AND p.presence_session_id = l.presence_session_id
+             AND p.room_id = l.room_id
+             AND p.id = l.participant_id
+        )`,
+    ts,
+    workspaceId,
+    call.room_id,
+    call.id,
+    call.id,
+  );
   await execute(env.TEAMFORGE_DB!, "UPDATE realtime_participants SET state = 'left', left_at = ?, last_seen_at = ? WHERE call_session_id = ? AND state = 'joined'", ts, ts, callId);
   await execute(env.TEAMFORGE_DB!, "UPDATE realtime_media_tracks SET state = 'closed', ended_at = ?, updated_at = ? WHERE call_session_id = ? AND state = 'live'", ts, ts, callId);
   await execute(env.TEAMFORGE_DB!, "UPDATE realtime_call_sessions SET state = 'ended', ended_at = ?, updated_at = ? WHERE id = ?", ts, ts, callId);
