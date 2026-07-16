@@ -2,6 +2,14 @@
 
 All notable changes to TeamForge are documented in this file.
 
+## v0.4.1 - 2026-07-16
+
+### Authenticated co-working presence
+
+- Added authenticated app presence leases with session-bound heartbeats and server-owned room context.
+- Added truthful desktop OTA check, download, install, and restart controls in Command Cortex.
+- Preserved the retired command-control-plane boundary while shipping the presence and OTA shell work.
+
 ## Unreleased
 
 ### Worker
