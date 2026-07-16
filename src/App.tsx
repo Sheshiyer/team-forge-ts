@@ -3,7 +3,15 @@ import { Routes, Route, NavLink, Navigate, useLocation, useNavigate } from "reac
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
-import { checkForUpdate, isUpdaterSupported } from "./lib/updater";
+import {
+  checkForUpdate,
+  formatDownloadProgress,
+  isUpdaterSupported,
+  relaunchForInstall,
+  reduceDownloadProgress,
+  type DownloadProgressState,
+  type TauriUpdateHandle,
+} from "./lib/updater";
 import Overview from "./pages/Overview";
 import Inbox from "./pages/Inbox";
 import Timesheet from "./pages/Timesheet";
@@ -122,6 +130,23 @@ const cortexRoutePrefixes = [
   "/live",
 ];
 
+type ShellUpdateState =
+  | "unsupported"
+  | "idle"
+  | "checking"
+  | "current"
+  | "available"
+  | "downloading"
+  | "installing"
+  | "restarting"
+  | "error";
+
+const UPDATE_PROGRESS_INITIAL: DownloadProgressState = {
+  downloadedBytes: 0,
+  contentLength: null,
+  finished: false,
+};
+
 function isCommandCortexPath(pathname: string): boolean {
   if (pathname === "/") return true;
   return cortexRoutePrefixes.some(
@@ -138,6 +163,10 @@ function getStardate(): string {
   return `STARDATE ${now.getFullYear()}.${String(dayOfYear).padStart(3, "0")}`;
 }
 
+function formatUpdateCheckTime(date: Date): string {
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 function App() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -147,7 +176,15 @@ function App() {
   const dateRange = useAppStore((s) => s.dateRange);
   const setDateRange = useAppStore((s) => s.setDateRange);
   const [syncActive, setSyncActive] = useState(false);
-  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<TauriUpdateHandle | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<ShellUpdateState>(() =>
+    isUpdaterSupported() ? "idle" : "unsupported",
+  );
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [updateCheckedAt, setUpdateCheckedAt] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgressState>(
+    UPDATE_PROGRESS_INITIAL,
+  );
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paperclipAlive, setPaperclipAlive] = useState<boolean | null>(null);
   const [paperclipUiUrl, setPaperclipUiUrl] = useState("http://127.0.0.1:3131");
@@ -158,6 +195,121 @@ function App() {
   const sidebarWidth = sidebarCollapsed ? 52 : sidebarExpandedWidth;
   const visiblePresence = teamPresence.slice(0, isCompactShell ? 6 : 8);
   const isCortexRoute = isCommandCortexPath(location.pathname);
+  const updaterSupported = isUpdaterSupported();
+  const updateBusy =
+    updateStatus === "checking" ||
+    updateStatus === "downloading" ||
+    updateStatus === "installing" ||
+    updateStatus === "restarting";
+
+  const updateTitle = availableUpdate
+    ? `v${availableUpdate.version} ready`
+    : updateStatus === "checking"
+      ? "Checking feed"
+      : updateStatus === "downloading"
+        ? "Downloading update"
+        : updateStatus === "installing"
+          ? "Installing update"
+          : updateStatus === "restarting"
+            ? "Restarting TeamForge"
+            : updateStatus === "current"
+              ? `v${appVersion} current`
+              : updateStatus === "error"
+                ? "Update check failed"
+                : updateStatus === "unsupported"
+                  ? "Packaged app only"
+                  : `v${appVersion}`;
+
+  const updateDetail =
+    updateStatus === "downloading"
+      ? formatDownloadProgress(downloadProgress)
+      : updateMessage ??
+        (updateCheckedAt
+          ? `Stable channel checked ${updateCheckedAt}`
+          : updaterSupported
+            ? "Stable signed release feed"
+            : "Open the signed desktop app to use OTA updates.");
+
+  const handleShellCheckForUpdates = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (!updaterSupported) {
+        setUpdateStatus("unsupported");
+        if (!options?.silent) {
+          setUpdateMessage("Open the signed desktop app to use OTA updates.");
+        }
+        return;
+      }
+
+      setUpdateStatus("checking");
+      setDownloadProgress(UPDATE_PROGRESS_INITIAL);
+      if (!options?.silent) {
+        setUpdateMessage("Checking the stable signed release feed...");
+      }
+
+      try {
+        const result = await checkForUpdate();
+        const checkedAt = formatUpdateCheckTime(new Date());
+        setUpdateCheckedAt(checkedAt);
+
+        if (result) {
+          setAvailableUpdate(result);
+          setUpdateStatus("available");
+          setUpdateMessage(`TeamForge ${result.version} is ready to install.`);
+          return;
+        }
+
+        setAvailableUpdate(null);
+        setUpdateStatus("current");
+        setUpdateMessage(
+          appVersion !== "--"
+            ? `TeamForge ${appVersion} is current.`
+            : "TeamForge is current.",
+        );
+      } catch (err) {
+        if (options?.silent) {
+          setUpdateStatus("idle");
+          setUpdateMessage(null);
+          return;
+        }
+
+        setUpdateStatus("error");
+        setUpdateMessage(err instanceof Error ? err.message : "Update check failed.");
+      }
+    },
+    [appVersion, updaterSupported],
+  );
+
+  const handleShellInstallUpdate = useCallback(async () => {
+    if (!availableUpdate) {
+      await handleShellCheckForUpdates();
+      return;
+    }
+
+    setUpdateStatus("downloading");
+    setUpdateMessage(`Downloading TeamForge ${availableUpdate.version}...`);
+    setDownloadProgress(UPDATE_PROGRESS_INITIAL);
+
+    try {
+      await availableUpdate.downloadAndInstall((event) => {
+        setDownloadProgress((current) => reduceDownloadProgress(current, event));
+        if (event.event === "Finished") {
+          setUpdateStatus("installing");
+          setUpdateMessage("Installing update. TeamForge will restart when ready.");
+        }
+      });
+
+      setUpdateStatus("restarting");
+      setUpdateMessage("Restarting TeamForge to finish installation.");
+      await relaunchForInstall();
+    } catch (err) {
+      setUpdateStatus("error");
+      setUpdateMessage(err instanceof Error ? err.message : "Update install failed.");
+    }
+  }, [availableUpdate, handleShellCheckForUpdates]);
+
+  const openUpdateSettings = useCallback(() => {
+    navigate("/classic/settings");
+  }, [navigate]);
 
   // Paperclip heartbeat polling every 15s
   useEffect(() => {
@@ -362,15 +514,40 @@ function App() {
       },
       {
         id: "action:check-update",
-        label: "Check for Updates",
+        label: "Check for OTA Update",
         section: "SYSTEM",
         icon: "↑",
-        action: () => navigate("/settings"),
+        action: () => { void handleShellCheckForUpdates(); },
+      },
+      ...(availableUpdate
+        ? [
+            {
+              id: "action:install-update",
+              label: `Install TeamForge ${availableUpdate.version}`,
+              section: "SYSTEM",
+              icon: "⇧",
+              action: () => { void handleShellInstallUpdate(); },
+            },
+          ]
+        : []),
+      {
+        id: "action:update-settings",
+        label: "Open Update Settings",
+        section: "SYSTEM",
+        icon: "→",
+        action: openUpdateSettings,
       },
     ];
 
     return [...nav, ...actions, ...secondary, ...classicFallbacks];
-  }, [navigate]);
+  }, [
+    availableUpdate,
+    handleShellCheckForUpdates,
+    handleShellInstallUpdate,
+    navigate,
+    openUpdateSettings,
+    paperclipUiUrl,
+  ]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -392,7 +569,7 @@ function App() {
         }
         const routes = [
           "/", "/agents", "/inbox", "/projects", "/clients",
-          "/issues", "/onboarding", "/activity", "/team", "/settings",
+          "/issues", "/onboarding", "/activity", "/team", "/classic/settings",
         ];
         const num = parseInt(e.key);
         if (num >= 1 && num <= 9) {
@@ -450,21 +627,76 @@ function App() {
 
   // Silent update check on mount
   useEffect(() => {
-    if (!isUpdaterSupported()) return;
+    if (!updaterSupported) {
+      setUpdateStatus("unsupported");
+      return;
+    }
+
     let cancelled = false;
     const check = async () => {
       try {
         const result = await checkForUpdate();
-        if (!cancelled && result) setUpdateAvailable(true);
+        if (cancelled) return;
+        setUpdateCheckedAt(formatUpdateCheckTime(new Date()));
+        if (result) {
+          setAvailableUpdate(result);
+          setUpdateStatus("available");
+          setUpdateMessage(`TeamForge ${result.version} is ready to install.`);
+        } else {
+          setUpdateStatus("current");
+        }
       } catch { /* silent */ }
     };
     check();
     return () => { cancelled = true; };
-  }, []);
+  }, [updaterSupported]);
 
   if (isCortexRoute) {
     return (
       <div className="cortex-app-frame">
+        <section className="cortex-release-console" data-state={updateStatus}>
+          <div className="cortex-release-console__header">
+            <span>OTA RELEASE</span>
+            <strong>{updateTitle}</strong>
+          </div>
+          <p>{updateDetail}</p>
+          {updateStatus === "downloading" && downloadProgress.contentLength ? (
+            <div className="cortex-release-console__meter" aria-hidden="true">
+              <span
+                style={{
+                  width: `${Math.min(
+                    100,
+                    Math.round(
+                      (downloadProgress.downloadedBytes / downloadProgress.contentLength) * 100,
+                    ),
+                  )}%`,
+                }}
+              />
+            </div>
+          ) : null}
+          <div className="cortex-release-console__actions">
+            <button
+              type="button"
+              onClick={() => { void handleShellCheckForUpdates(); }}
+              disabled={!updaterSupported || updateBusy}
+            >
+              {updateStatus === "checking" ? "Checking" : "Check"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (availableUpdate) {
+                  void handleShellInstallUpdate();
+                  return;
+                }
+                openUpdateSettings();
+              }}
+              disabled={updateBusy}
+            >
+              {availableUpdate ? "Install + Restart" : "Details"}
+            </button>
+          </div>
+        </section>
         <Routes>
           <Route path="/" element={<MissionCortexPage />} />
           <Route path="/mission-cortex" element={<MissionCortexPage />} />
@@ -485,7 +717,7 @@ function App() {
           <Route path="/routines" element={<MissionCortexPage />} />
           <Route path="/goals" element={<MissionCortexPage />} />
           <Route path="/knowledge" element={<MissionCortexPage />} />
-          <Route path="/settings" element={<MissionCortexPage />} />
+          <Route path="/settings" element={<Navigate to="/classic/settings" replace />} />
           <Route path="/devices" element={<Navigate to="/issues" replace />} />
           <Route path="/planner" element={<Navigate to="/team/capacity" replace />} />
           <Route path="/live" element={<Navigate to="/agents" replace />} />
@@ -739,15 +971,51 @@ function App() {
           {!sidebarCollapsed && (
             <>
               <span style={styles.bottomLabel}>v{appVersion}</span>
-              {updateAvailable && (
-                <span onClick={() => navigate("/settings")} style={styles.updatePill} title="Update available">
-                  ↑ UPDATE
-                </span>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  if (availableUpdate) {
+                    void handleShellInstallUpdate();
+                    return;
+                  }
+                  void handleShellCheckForUpdates();
+                }}
+                disabled={!updaterSupported || updateBusy}
+                style={{
+                  ...styles.updatePill,
+                  opacity: updaterSupported ? 1 : 0.5,
+                  animation: availableUpdate ? styles.updatePill.animation : "none",
+                  cursor: updaterSupported && !updateBusy ? "pointer" : "not-allowed",
+                }}
+                title={updateDetail}
+              >
+                {availableUpdate ? "↑ UPDATE" : updateStatus === "checking" ? "CHECKING" : "OTA"}
+              </button>
             </>
           )}
-          {sidebarCollapsed && updateAvailable && (
-            <span onClick={() => navigate("/settings")} style={{ ...styles.updatePill, fontSize: 7, padding: "1px 3px" }} title="Update available">↑</span>
+          {sidebarCollapsed && (
+            <button
+              type="button"
+              onClick={() => {
+                if (availableUpdate) {
+                  void handleShellInstallUpdate();
+                  return;
+                }
+                void handleShellCheckForUpdates();
+              }}
+              disabled={!updaterSupported || updateBusy}
+              style={{
+                ...styles.updatePill,
+                fontSize: 7,
+                padding: "1px 3px",
+                opacity: updaterSupported ? 1 : 0.5,
+                animation: availableUpdate ? styles.updatePill.animation : "none",
+                cursor: updaterSupported && !updateBusy ? "pointer" : "not-allowed",
+              }}
+              title={updateDetail}
+            >
+              ↑
+            </button>
           )}
         </div>
 
