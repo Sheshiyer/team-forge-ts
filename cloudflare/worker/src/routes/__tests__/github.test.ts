@@ -6,6 +6,16 @@ import { sha256Hex, signConnectState, verifyConnectState } from "../../lib/githu
 
 let privateKeyPem = "";
 
+const requiredInstallationPermissions = {
+  actions: "read",
+  checks: "read",
+  contents: "write",
+  issues: "read",
+  metadata: "read",
+  pull_requests: "write",
+} as const;
+const requiredInstallationPermissionsJson = JSON.stringify(requiredInstallationPermissions);
+
 beforeAll(async () => {
   const pair = await crypto.subtle.generateKey(
     { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
@@ -40,7 +50,7 @@ function activityDb(installationId = 42): D1DatabaseLike {
         async first<T>() {
           if (sql.includes("FROM projects WHERE id")) return ({ id: args[0] } as T);
           if (sql.includes("FROM github_workspace_installations b")) {
-            return ({ workspace_id: "ws_test", installation_id: installationId, connected_by_identity_id: "pid_admin", verified_github_user_id: 7, verified_github_login: "installer", state: "active", repository_selection: "selected", account_id: 8, account_login: "thoughtseed", account_type: "Organization" } as T);
+            return ({ workspace_id: "ws_test", installation_id: installationId, connected_by_identity_id: "pid_admin", verified_github_user_id: 7, verified_github_login: "installer", state: "active", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson, account_id: 8, account_login: "thoughtseed", account_type: "Organization" } as T);
           }
           if (sql.includes("FROM project_github_verifications v")) {
             return ({ project_id: "proj_test", workspace_id: "ws_test", installation_id: installationId, repository_id: 101, repo_owner: "thoughtseed", repo_name: "private-repo", default_branch: "main", verified_at: "2026-07-13T00:00:00.000Z", owner_login: "thoughtseed", name: "private-repo", full_name: "thoughtseed/private-repo", is_private: 1, state: "active" } as T);
@@ -49,7 +59,7 @@ function activityDb(installationId = 42): D1DatabaseLike {
         },
         async all<T>() {
           if (sql.includes("FROM github_workspace_installations b")) {
-            return { results: [{ workspace_id: "ws_test", installation_id: installationId, account_id: 8, account_login: "thoughtseed", account_type: "Organization", connected_by_identity_id: "pid_admin", verified_github_user_id: 7, verified_github_login: "installer", state: "active", repository_selection: "selected" }] as T[] };
+            return { results: [{ workspace_id: "ws_test", installation_id: installationId, account_id: 8, account_login: "thoughtseed", account_type: "Organization", connected_by_identity_id: "pid_admin", verified_github_user_id: 7, verified_github_login: "installer", state: "active", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson }] as T[] };
           }
           return { results: [] as T[] };
         },
@@ -105,7 +115,7 @@ function deliveryDb(initial?: { event: string; hash: string; result: string; pro
             if (delivery) delivery.result = "ping";
           }
           if (sql.includes("result = 'failed'")) {
-            const delivery = deliveries.get(String(args[0]));
+            const delivery = deliveries.get(String(args[1] ?? args[0]));
             if (delivery) delivery.result = "failed";
           }
           return { success: true, meta: { changes: 1 } };
@@ -159,14 +169,14 @@ function writeDb(existing: Record<string, unknown> | null = null, installationId
           if (sql.includes("FROM projects WHERE id")) return ({ id: args[0] } as T);
           if (sql.includes("FROM plexus_identities")) return ({ id: "pid_admin" } as T);
           if (sql.includes("FROM github_workspace_actors")) return ({ workspace_id: "ws_test", plexus_identity_id: "pid_admin", github_user_id: 77, github_login: "installer", verified_at: "2026-07-13T00:00:00.000Z", verification_source: "oauth" } as T);
-          if (sql.includes("FROM github_workspace_installations b")) return ({ workspace_id: "ws_test", installation_id: installationId, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", account_id: 8, account_login: "thoughtseed", account_type: "Organization" } as T);
+          if (sql.includes("FROM github_workspace_installations b")) return ({ workspace_id: "ws_test", installation_id: installationId, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson, account_id: 8, account_login: "thoughtseed", account_type: "Organization" } as T);
           if (sql.includes("FROM project_github_verifications v")) return ({ project_id: "proj_test", workspace_id: "ws_test", installation_id: installationId, repository_id: 101, repo_owner: "thoughtseed", repo_name: "private-repo", default_branch: "main", verified_at: "2026-07-13T00:00:00.000Z", owner_login: "thoughtseed", name: "private-repo", full_name: "thoughtseed/private-repo", is_private: 1, state: "active" } as T);
           if (sql.includes("FROM github_write_operations")) return (existing as T | null);
           return null;
         },
         async all<T>() {
           if (sql.includes("FROM github_workspace_installations b")) {
-            return { results: [{ workspace_id: "ws_test", installation_id: installationId, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", account_id: 8, account_login: "thoughtseed", account_type: "Organization" }] as T[] };
+            return { results: [{ workspace_id: "ws_test", installation_id: installationId, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson, account_id: 8, account_login: "thoughtseed", account_type: "Organization" }] as T[] };
           }
           return { results: [] as T[] };
         },
@@ -248,7 +258,7 @@ function reconciliationDb(
         async first<T>() {
           if (sql.includes("FROM github_connection_states")) return ({ ...state } as T);
           if (sql.includes("FROM plexus_identities")) return (actorActive ? ({ id: "pid_admin" } as T) : null);
-          if (sql.includes("FROM github_installation_facts")) return ({ installation_id: Number(args[0]), installer_sender_id: 77, account_id: organization.id, account_login: organization.login, account_type: organization.type, repository_selection: repositorySelection, state: "active" } as T);
+          if (sql.includes("FROM github_installation_facts")) return ({ installation_id: Number(args[0]), installer_sender_id: 77, account_id: organization.id, account_login: organization.login, account_type: organization.type, repository_selection: repositorySelection, permissions_json: requiredInstallationPermissionsJson, state: "active" } as T);
           if (sql.includes("FROM github_workspace_actors")) return null;
           if (sql.includes("FROM github_workspace_installations")) return null;
           return null;
@@ -263,6 +273,76 @@ function reconciliationDb(
     },
   };
   return { db, wasBound: () => bound };
+}
+
+function recoveryReconciliationDb(
+  facts: Array<{
+    installation_id: number;
+    installer_sender_id: number;
+    account_id: number;
+    account_login: string;
+    account_type: string;
+    repository_selection: string;
+    permissions_json: string;
+    state: string;
+  }>,
+  installationHint = 999,
+  hintRepairChanges = 1,
+) {
+  let boundInstallationId: number | null = null;
+  const state = {
+    nonce_hash: "nonce-recovery",
+    workspace_id: "ws_test",
+    plexus_actor_id: "pid_admin",
+    expires_at: Math.floor(Date.now() / 1000) + 600,
+    consumed_at: "now",
+    oauth_user_id: 77,
+    oauth_login: "installer",
+    oauth_verified_at: "now",
+    untrusted_installation_id: installationHint,
+    target_account_id: 8,
+    target_account_login: "thoughtseed",
+    target_account_type: "Organization",
+    status: "oauth_verified",
+  };
+  const db: D1DatabaseLike = {
+    prepare(sql: string) {
+      let args: unknown[] = [];
+      const statement = {
+        bind(...values: unknown[]) { args = values; return statement; },
+        async first<T>() {
+          if (sql.includes("FROM github_connection_states")) return ({ ...state } as T);
+          if (sql.includes("FROM plexus_identities")) return ({ id: "pid_admin" } as T);
+          if (sql.includes("FROM github_installation_facts") && sql.includes("installation_id = ?")) {
+            return ((facts.find((fact) => fact.installation_id === Number(args[0])) ?? null) as T | null);
+          }
+          if (sql.includes("FROM github_workspace_actors")) return null;
+          if (sql.includes("FROM github_workspace_installations")) return null;
+          return null;
+        },
+        async all<T>() {
+          if (sql.includes("FROM github_installation_facts") && sql.includes("account_id = ?")) {
+            return {
+              results: facts.filter((fact) => fact.account_id === Number(args[0]) &&
+                fact.account_login.toLowerCase() === String(args[1]).toLowerCase() &&
+                fact.account_type === args[2] && fact.installer_sender_id === Number(args[3]) &&
+                fact.repository_selection === "selected" && fact.state !== "deleted") as T[],
+            };
+          }
+          return { results: [] as T[] };
+        },
+        async run() {
+          if (sql.includes("SET untrusted_installation_id") && sql.includes("status = 'oauth_verified'")) {
+            return { success: true, meta: { changes: hintRepairChanges } };
+          }
+          if (sql.includes("INSERT INTO github_workspace_installations")) boundInstallationId = Number(args[1]);
+          return { success: true, meta: { changes: 1 } };
+        },
+      };
+      return statement;
+    },
+  };
+  return { db, boundInstallationId: () => boundInstallationId };
 }
 
 function connectionFlowDb(nonceHash: string) {
@@ -298,8 +378,10 @@ function connectionFlowDb(nonceHash: string) {
           return null;
         },
         async all<T>() {
-          if (sql.includes("FROM github_connection_states") && sql.includes("untrusted_installation_id")) {
-            const matches = state.untrusted_installation_id === args[0] && state.oauth_user_id === args[1] && state.status === "oauth_verified";
+          if (sql.includes("FROM github_connection_states") && sql.includes("target_account_id")) {
+            const matches = state.oauth_user_id === args[0] && state.target_account_id === args[1] &&
+              String(state.target_account_login).toLowerCase() === String(args[2]).toLowerCase() &&
+              state.target_account_type === args[3] && state.status === "oauth_verified";
             return { results: (matches ? [{ nonce_hash: state.nonce_hash }] : []) as T[] };
           }
           return { results: [] as T[] };
@@ -309,6 +391,13 @@ function connectionFlowDb(nonceHash: string) {
             const id = String(args[0]);
             if (deliveries.has(id)) return { success: true, meta: { changes: 0 } };
             deliveries.set(id, { event_name: args[1], payload_sha256: args[2], result: "processing", processing_started_at: args[4] });
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.includes("SET action = ?") && sql.includes("github_webhook_deliveries")) {
+            const delivery = deliveries.get(String(args[5]));
+            if (delivery) Object.assign(delivery, {
+              action: args[0], installation_id: args[1], account_id: args[2], account_login: args[3], account_type: args[4],
+            });
             return { success: true, meta: { changes: 1 } };
           }
           if (sql.includes("SET untrusted_installation_id")) {
@@ -330,11 +419,19 @@ function connectionFlowDb(nonceHash: string) {
             return { success: true, meta: { changes: 1 } };
           }
           if (sql.includes("INSERT INTO github_installation_facts")) {
-            fact = { installation_id: args[0], account_id: args[1], account_login: args[2], account_type: args[3], installer_sender_id: args[4], installer_sender_login: args[5], last_actor_id: args[6], last_actor_login: args[7], repository_selection: args[8], state: "active" };
+            fact = {
+              installation_id: args[0], account_id: args[1], account_login: args[2], account_type: args[3],
+              installer_sender_id: args[4], installer_sender_login: args[5], last_actor_id: args[6], last_actor_login: args[7],
+              repository_selection: args[8], permissions_json: args[9], state: sql.includes("'active'") ? "active" : args[10],
+              last_delivery_id: sql.includes("'active'") ? args[10] : args[11],
+            };
             return { success: true, meta: { changes: 1 } };
           }
           if (sql.includes("UPDATE github_installation_facts SET")) {
-            fact = { ...fact, account_id: args[0], account_login: args[1], account_type: args[2], repository_selection: args[5], state: args[6] };
+            fact = {
+              ...fact, account_id: args[0], account_login: args[1], account_type: args[2], repository_selection: args[5],
+              permissions_json: args[6] ?? fact?.permissions_json, state: args[7], last_delivery_id: args[8],
+            };
             return { success: true, meta: { changes: 1 } };
           }
           if (sql.includes("INSERT INTO github_workspace_installations")) {
@@ -343,12 +440,12 @@ function connectionFlowDb(nonceHash: string) {
           }
           if (sql.includes("UPDATE github_connection_states SET status = 'bound'")) state.status = "bound";
           if (sql.includes("result = 'processed'")) {
-            const delivery = deliveries.get(String(args[1]));
-            if (delivery) delivery.result = "processed";
+            const delivery = deliveries.get(String(args[2]));
+            if (delivery) { delivery.result = "processed"; delivery.result_reason = args[1]; }
           }
           if (sql.includes("result = 'failed'")) {
-            const delivery = deliveries.get(String(args[0]));
-            if (delivery) delivery.result = "failed";
+            const delivery = deliveries.get(String(args[1]));
+            if (delivery) { delivery.result = "failed"; delivery.result_reason = args[0]; }
           }
           return { success: true, meta: { changes: 1 } };
         },
@@ -375,7 +472,7 @@ function actorEnrollmentDb(
         async first<T>() {
           if (sql.includes("FROM plexus_identities")) return ({ id: "pid_admin" } as T);
           if (sql.includes("FROM github_workspace_installations b")) {
-            return ({ workspace_id: "ws_test", installation_id: installationIds[0], connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", account_id: 8, account_login: "thoughtseed", account_type: "Organization" } as T);
+            return ({ workspace_id: "ws_test", installation_id: installationIds[0], connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson, account_id: 8, account_login: "thoughtseed", account_type: "Organization" } as T);
           }
           if (sql.includes("FROM github_actor_connection_states")) {
             if (!actorState) return null;
@@ -392,7 +489,7 @@ function actorEnrollmentDb(
         },
         async all<T>() {
           if (sql.includes("FROM github_workspace_installations b")) {
-            return { results: installationIds.map((installationId) => ({ workspace_id: "ws_test", installation_id: installationId, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", account_id: 8, account_login: "thoughtseed", account_type: "Organization" })) as T[] };
+            return { results: installationIds.map((installationId) => ({ workspace_id: "ws_test", installation_id: installationId, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson, account_id: 8, account_login: "thoughtseed", account_type: "Organization" })) as T[] };
           }
           return { results: [] as T[] };
         },
@@ -495,7 +592,7 @@ async function runInstallationConnectionFlow(
     );
     const payload = JSON.stringify({
       action: "created",
-      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected" },
+      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected", permissions: requiredInstallationPermissions },
       sender: { id: 77, login: "installer" },
       repositories: [],
     });
@@ -561,8 +658,8 @@ describe("GitHub App routes", () => {
 
   it("returns all workspace installations and exact allowed targets", async () => {
     const bindings = [
-      { workspace_id: "ws_test", installation_id: 42, account_id: 8, account_login: "thoughtseed", account_type: "Organization", connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected" },
-      { workspace_id: "ws_test", installation_id: 84, account_id: 7611727, account_login: "Sheshiyer", account_type: "User", connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "suspended", repository_selection: "selected" },
+      { workspace_id: "ws_test", installation_id: 42, account_id: 8, account_login: "thoughtseed", account_type: "Organization", connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson },
+      { workspace_id: "ws_test", installation_id: 84, account_id: 7611727, account_login: "Sheshiyer", account_type: "User", connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "suspended", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson },
     ];
     const db: D1DatabaseLike = {
       prepare(sql: string) {
@@ -589,6 +686,80 @@ describe("GitHub App routes", () => {
           { id: 7611727, login: "Sheshiyer", type: "User" },
           { id: 47470954, login: "psychon7", type: "User" },
         ],
+        targets: [
+          { account: { id: 8, login: "thoughtseed", type: "Organization" }, installationId: 42, status: "connected", reason: "connected" },
+          { account: { id: 7611727, login: "Sheshiyer", type: "User" }, installationId: 84, status: "suspended", reason: "installation_suspended" },
+          { account: { id: 47470954, login: "psychon7", type: "User" }, status: "unconfigured", reason: "not_connected" },
+        ],
+      },
+    });
+  });
+
+  it("reports recovery reasons for every exact target without treating an OAuth hint as authority", async () => {
+    const pendingStates = [
+      { target_account_id: 8, target_account_login: "thoughtseed", target_account_type: "Organization", status: "oauth_verified", untrusted_installation_id: 999 },
+      { target_account_id: 7611727, target_account_login: "Sheshiyer", target_account_type: "User", status: "pending_oauth", untrusted_installation_id: null },
+      { target_account_id: 47470954, target_account_login: "psychon7", target_account_type: "User", status: "oauth_verified", untrusted_installation_id: 126 },
+    ];
+    const signedFacts = [
+      { installation_id: 42, account_id: 8, account_login: "thoughtseed", account_type: "Organization", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson, state: "active" },
+    ];
+    const db: D1DatabaseLike = {
+      prepare(sql: string) {
+        const statement = {
+          bind() { return statement; },
+          async first<T>() { return null as T | null; },
+          async all<T>() {
+            if (sql.includes("FROM github_workspace_installations b")) return { results: [] as T[] };
+            if (sql.includes("FROM github_connection_states")) return { results: pendingStates as T[] };
+            if (sql.includes("FROM github_installation_facts")) return { results: signedFacts as T[] };
+            return { results: [] as T[] };
+          },
+          async run() { return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    };
+
+    const response = await handleGithubConnection(env(db), principal("admin"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        status: "pending",
+        targets: [
+          { account: { id: 8 }, installationId: 42, status: "forbidden", reason: "installation_hint_mismatch" },
+          { account: { id: 7611727 }, status: "pending", reason: "oauth_pending" },
+          { account: { id: 47470954 }, status: "pending", reason: "trust_anchor_missing" },
+        ],
+      },
+    });
+  });
+
+  it("keeps an exact selected installation closed until all required GitHub permissions are signed", async () => {
+    const bindings = [
+      { workspace_id: "ws_test", installation_id: 42, account_id: 8, account_login: "thoughtseed", account_type: "Organization", connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", permissions_json: "{}" },
+    ];
+    const db: D1DatabaseLike = {
+      prepare(sql: string) {
+        const statement = {
+          bind() { return statement; },
+          async first<T>() { return null as T | null; },
+          async all<T>() { return { results: (sql.includes("FROM github_workspace_installations b") ? bindings : []) as T[] }; },
+          async run() { return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    };
+
+    const response = await handleGithubConnection(env(db), principal("admin"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        status: "forbidden",
+        installations: [{ installationId: 42, status: "forbidden", reason: "permissions_incomplete" }],
+        targets: expect.arrayContaining([{ account: { id: 8, login: "thoughtseed", type: "Organization" }, installationId: 42, status: "forbidden", reason: "permissions_incomplete" }]),
       },
     });
   });
@@ -605,8 +776,8 @@ describe("GitHub App routes", () => {
 
   it("aggregates repositories across active installations with installation and account metadata", async () => {
     const bindings = [
-      { workspace_id: "ws_test", installation_id: 42, account_id: 8, account_login: "thoughtseed", account_type: "Organization", state: "active", repository_selection: "selected" },
-      { workspace_id: "ws_test", installation_id: 84, account_id: 7611727, account_login: "Sheshiyer", account_type: "User", state: "active", repository_selection: "selected" },
+      { workspace_id: "ws_test", installation_id: 42, account_id: 8, account_login: "thoughtseed", account_type: "Organization", state: "active", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson },
+      { workspace_id: "ws_test", installation_id: 84, account_id: 7611727, account_login: "Sheshiyer", account_type: "User", state: "active", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson },
     ];
     const db: D1DatabaseLike = {
       prepare(sql: string) {
@@ -643,7 +814,7 @@ describe("GitHub App routes", () => {
 
   it("skips active bindings with forbidden repository selection or removed allowlist authority when a valid binding remains", async () => {
     const bindings = [
-      { workspace_id: "ws_test", installation_id: 42, account_id: 8, account_login: "thoughtseed", account_type: "Organization", state: "active", repository_selection: "selected" },
+      { workspace_id: "ws_test", installation_id: 42, account_id: 8, account_login: "thoughtseed", account_type: "Organization", state: "active", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson },
       { workspace_id: "ws_test", installation_id: 84, account_id: 7611727, account_login: "Sheshiyer", account_type: "User", state: "active", repository_selection: "all" },
       { workspace_id: "ws_test", installation_id: 126, account_id: 999, account_login: "former-owner", account_type: "User", state: "active", repository_selection: "selected" },
     ];
@@ -1082,7 +1253,7 @@ describe("GitHub App routes", () => {
     const webhookEnv = { ...env(fixture.db), TF_GITHUB_APP_WEBHOOK_SECRET: secret };
     const created = JSON.stringify({
       action: "created",
-      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected" },
+      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected", permissions: { ...requiredInstallationPermissions, members: "read" } },
       sender: { id: 77, login: "installer" },
       repositories: [],
     });
@@ -1095,7 +1266,7 @@ describe("GitHub App routes", () => {
 
     const deleted = JSON.stringify({
       action: "deleted",
-      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected" },
+      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected", permissions: { ...requiredInstallationPermissions, members: "read" } },
       sender: { id: 77, login: "installer" },
       repositories: [{ id: 101 }],
     });
@@ -1130,6 +1301,130 @@ describe("GitHub App routes", () => {
     await expect(response.json()).resolves.toMatchObject({ data: { status: "accepted" } });
     expect(fixture.fact()).toMatchObject({ installation_id: 42, account_id: 7611727, repository_selection: "selected", state: "active" });
     expect(fixture.delivery("delivery-compact-created")).toMatchObject({ result: "processed" });
+  });
+
+  it("bootstraps an exact selected trust fact from a signed non-deletion lifecycle event and stays duplicate-idempotent", async () => {
+    const nonceHash = await sha256Hex("nonce-lifecycle-bootstrap");
+    const fixture = connectionFlowDb(nonceHash);
+    const secret = "webhook-test-secret";
+    const webhookEnv = { ...env(fixture.db), TF_GITHUB_APP_WEBHOOK_SECRET: secret };
+    const payload = JSON.stringify({
+      action: "new_permissions_accepted",
+      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected", permissions: { ...requiredInstallationPermissions, members: "read" } },
+      sender: { id: 77, login: "installer" },
+      repositories: [],
+    });
+    const request = async () => handleGithubWebhook(webhookEnv, new Request("https://worker.test/v1/github/webhook", {
+      method: "POST",
+      headers: { "x-hub-signature-256": await webhookSignature(payload, secret), "x-github-delivery": "delivery-lifecycle-bootstrap", "x-github-event": "installation" },
+      body: payload,
+    }));
+
+    const first = await request();
+    expect(first.status).toBe(200);
+    expect(fixture.fact()).toMatchObject({
+      installation_id: 42,
+      account_id: 8,
+      repository_selection: "selected",
+      permissions_json: '{"actions":"read","checks":"read","contents":"write","issues":"read","members":"read","metadata":"read","pull_requests":"write"}',
+      state: "active",
+    });
+    expect(fixture.delivery("delivery-lifecycle-bootstrap")).toMatchObject({
+      action: "new_permissions_accepted",
+      installation_id: 42,
+      account_id: 8,
+      account_login: "thoughtseed",
+      account_type: "Organization",
+      result: "processed",
+      result_reason: "lifecycle_bootstrap",
+    });
+
+    const duplicate = await request();
+    expect(duplicate.status).toBe(200);
+    await expect(duplicate.json()).resolves.toMatchObject({ data: { status: "duplicate" } });
+    expect(fixture.fact()).toMatchObject({ installation_id: 42, last_delivery_id: "delivery-lifecycle-bootstrap" });
+  });
+
+  it("persists but never connects a selected lifecycle bootstrap with missing signed permissions", async () => {
+    const nonceHash = await sha256Hex("nonce-permissions-missing");
+    const fixture = connectionFlowDb(nonceHash);
+    const secret = "webhook-test-secret";
+    const payload = JSON.stringify({
+      action: "new_permissions_accepted",
+      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected" },
+      sender: { id: 77, login: "installer" },
+      repositories: [],
+    });
+    const response = await handleGithubWebhook({ ...env(fixture.db), TF_GITHUB_APP_WEBHOOK_SECRET: secret }, new Request("https://worker.test/v1/github/webhook", {
+      method: "POST",
+      headers: { "x-hub-signature-256": await webhookSignature(payload, secret), "x-github-delivery": "delivery-permissions-missing", "x-github-event": "installation" },
+      body: payload,
+    }));
+    expect(response.status).toBe(200);
+    expect(fixture.fact()).toMatchObject({ permissions_json: "{}", state: "active" });
+
+    Object.assign(fixture.state, {
+      consumed_at: "now",
+      oauth_user_id: 77,
+      oauth_login: "installer",
+      oauth_verified_at: "now",
+      untrusted_installation_id: 42,
+      status: "oauth_verified",
+    });
+    await expect(reconcileBinding(env(fixture.db), nonceHash)).rejects.toMatchObject({ code: "github_installation_permissions_incomplete" });
+    expect(fixture.binding()).toBeNull();
+  });
+
+  it("preserves the last signed permission snapshot when a repository lifecycle event omits permissions", async () => {
+    const nonceHash = await sha256Hex("nonce-repository-permissions");
+    const fixture = connectionFlowDb(nonceHash);
+    const secret = "webhook-test-secret";
+    const webhookEnv = { ...env(fixture.db), TF_GITHUB_APP_WEBHOOK_SECRET: secret };
+    const send = async (deliveryId: string, eventName: string, body: Record<string, unknown>) => {
+      const payload = JSON.stringify(body);
+      return handleGithubWebhook(webhookEnv, new Request("https://worker.test/v1/github/webhook", {
+        method: "POST",
+        headers: { "x-hub-signature-256": await webhookSignature(payload, secret), "x-github-delivery": deliveryId, "x-github-event": eventName },
+        body: payload,
+      }));
+    };
+    expect((await send("delivery-permissions-created", "installation", {
+      action: "created",
+      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected", permissions: requiredInstallationPermissions },
+      sender: { id: 77, login: "installer" },
+      repositories: [],
+    })).status).toBe(200);
+    expect((await send("delivery-permissions-repos", "installation_repositories", {
+      action: "added",
+      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: "selected" },
+      sender: { id: 77, login: "installer" },
+      repositories_added: [],
+      repositories_removed: [],
+    })).status).toBe(200);
+    expect(fixture.fact()).toMatchObject({ permissions_json: requiredInstallationPermissionsJson, state: "active" });
+  });
+
+  it.each([
+    ["deleted", "selected"],
+    ["new_permissions_accepted", "all"],
+  ])("does not bootstrap a missing trust fact for %s lifecycle with %s repository scope", async (action, repositorySelection) => {
+    const nonceHash = await sha256Hex(`nonce-closed-bootstrap-${action}-${repositorySelection}`);
+    const fixture = connectionFlowDb(nonceHash);
+    const secret = "webhook-test-secret";
+    const payload = JSON.stringify({
+      action,
+      installation: { id: 42, account: { id: 8, login: "thoughtseed", type: "Organization" }, repository_selection: repositorySelection },
+      sender: { id: 77, login: "installer" },
+      repositories: [],
+    });
+    const response = await handleGithubWebhook({ ...env(fixture.db), TF_GITHUB_APP_WEBHOOK_SECRET: secret }, new Request("https://worker.test/v1/github/webhook", {
+      method: "POST",
+      headers: { "x-hub-signature-256": await webhookSignature(payload, secret), "x-github-delivery": `delivery-closed-${action.replaceAll("_", "-")}-${repositorySelection}`, "x-github-event": "installation" },
+      body: payload,
+    }));
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "github_installation_untrusted" } });
+    expect(fixture.fact()).toBeNull();
   });
 
   it("rejects compact repository facts outside the signed installation account", async () => {
@@ -1252,7 +1547,7 @@ describe("GitHub App routes", () => {
           bind(...values: unknown[]) { args = values; return statement; },
           async first<T>() {
             if (sql.includes("FROM github_connection_states")) return ({ ...state } as T);
-            if (sql.includes("FROM github_installation_facts")) return ({ installation_id: Number(args[0]), installer_sender_id: 77, account_id: 8, account_login: "thoughtseed", account_type: "Organization", repository_selection: "selected", state: "active" } as T);
+            if (sql.includes("FROM github_installation_facts")) return ({ installation_id: Number(args[0]), installer_sender_id: 77, account_id: 8, account_login: "thoughtseed", account_type: "Organization", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson, state: "active" } as T);
             if (sql.includes("FROM github_workspace_actors")) return null;
             if (sql.includes("FROM plexus_identities")) return ({ id: "pid_admin" } as T);
             if (sql.includes("FROM github_workspace_installations")) return null;
@@ -1269,6 +1564,37 @@ describe("GitHub App routes", () => {
     };
     await expect(reconcileBinding(env(db), "nonce-hash")).resolves.toBe(true);
     expect(bound).toEqual([42]);
+  });
+
+  it("recovers a stale installation hint only from one exact selected signed fact", async () => {
+    const fixture = recoveryReconciliationDb([
+      { installation_id: 42, installer_sender_id: 77, account_id: 8, account_login: "thoughtseed", account_type: "Organization", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson, state: "active" },
+    ]);
+
+    await expect(reconcileBinding(env(fixture.db), "nonce-recovery")).resolves.toBe(true);
+    expect(fixture.boundInstallationId()).toBe(42);
+  });
+
+  it("fails closed when stale-hint recovery has zero or multiple exact signed facts", async () => {
+    const missing = recoveryReconciliationDb([]);
+    await expect(reconcileBinding(env(missing.db), "nonce-recovery")).resolves.toBe(false);
+    expect(missing.boundInstallationId()).toBeNull();
+
+    const ambiguous = recoveryReconciliationDb([
+      { installation_id: 42, installer_sender_id: 77, account_id: 8, account_login: "thoughtseed", account_type: "Organization", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson, state: "active" },
+      { installation_id: 84, installer_sender_id: 77, account_id: 8, account_login: "thoughtseed", account_type: "Organization", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson, state: "active" },
+    ]);
+    await expect(reconcileBinding(env(ambiguous.db), "nonce-recovery")).rejects.toMatchObject({ code: "github_connection_ambiguous" });
+    expect(ambiguous.boundInstallationId()).toBeNull();
+  });
+
+  it("does not bind after a concurrent connection-state transition wins the stale-hint repair", async () => {
+    const raced = recoveryReconciliationDb([
+      { installation_id: 42, installer_sender_id: 77, account_id: 8, account_login: "thoughtseed", account_type: "Organization", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson, state: "active" },
+    ], 999, 0);
+
+    await expect(reconcileBinding(env(raced.db), "nonce-recovery")).resolves.toBe(false);
+    expect(raced.boundInstallationId()).toBeNull();
   });
 
   it("rejects all-repositories installations and inactive initiating admins", async () => {
@@ -1317,7 +1643,7 @@ describe("GitHub App routes", () => {
           bind(...values: unknown[]) { args = values; return statement; },
           async first<T>() {
             if (sql.includes("FROM projects WHERE id")) return ({ id: args[0] } as T);
-            if (sql.includes("FROM github_workspace_installations b")) return ({ workspace_id: "ws_test", installation_id: 42, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", account_id: 8, account_login: "thoughtseed", account_type: "Organization" } as T);
+            if (sql.includes("FROM github_workspace_installations b")) return ({ workspace_id: "ws_test", installation_id: 42, connected_by_identity_id: "pid_admin", verified_github_user_id: 77, verified_github_login: "installer", state: "active", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson, account_id: 8, account_login: "thoughtseed", account_type: "Organization" } as T);
             if (sql.includes("FROM github_installation_repositories r")) return ({ installation_id: 42, repository_id: 101, owner_login: "thoughtseed", name: "private-repo", full_name: "thoughtseed/private-repo", is_private: 1, default_branch: "main", state: "active" } as T);
             return null;
           },
