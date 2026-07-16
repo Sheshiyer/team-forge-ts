@@ -2,13 +2,19 @@
 
 **Backfill checklist** for updating `team-forge-ts/` to match the current live architecture.
 
+> **Historical deployment record.** This checklist describes the June 9
+> topology and is not the current execution contract. MultiCA was retired from
+> the active architecture; see
+> `docs/plans/2026-06-20-teamforge-function-retirement-map.md` and
+> `docs/architecture/contracts/hermes-cambium-command-contract.md`.
+
 ---
 
 ## 1. Cloudflare Access Protection (REQUIRED)
 
 The TeamForge API Worker is now behind Cloudflare Zero Trust Access.
 
-### Current State
+### Former state
 - **Access App:** `TeamForge API` (ID: `6c2fc2fb-2e3d-4be4-b828-083a1292947b`)
 - **Domain:** `forge.thoughtseed.space`
 - **Audience:** `d3892b5d2a62027029b09b2fd015a9e8074d5efb38c443099f803517cb3feb51`
@@ -70,19 +76,20 @@ The Worker checks `X-TeamForge-Internal-Secret` header as an alternative to the 
 
 ---
 
-## 2. MultiCA Integration (REQUIRED)
+## 2. MultiCA integration (RETIRED HISTORICAL TOPOLOGY)
 
-MultiCA is now the canonical AI gateway for all agents.
+The following inventory records the former topology. It must not be used to
+provision, restore, or route new execution work.
 
 ### Current State
 - **API Base:** `http://a2d8a7ed58f172583.awsglobalaccelerator.com`
 - **App URL:** `https://multica.thoughtseed.space`
 - **Workspace:** `Thoughtseedlabs` (ID: `e0ffc9e2-7848-447f-933f-cc743deedfd0`)
 
-### What to backfill in TeamForge repo
-- [ ] Add `multica_api_url` and `multica_app_url` to TeamForge settings schema
-- [ ] Add MultiCA workspace ID to project/client mapping if agents need to reference it
-- [ ] Document the Global Accelerator static IPs for firewall allowlisting:
+### Cancelled backfill requests — do not execute
+- [x] Cancelled: retired endpoint URLs are not TeamForge settings.
+- [x] Cancelled: retired workspace identity is not project/client metadata.
+- [x] Historical only: former Global Accelerator static IPs were:
   - `166.117.29.182`
   - `76.223.32.238`
 
@@ -210,10 +217,10 @@ New DNS and cert configuration.
 
 | File | Change |
 |------|--------|
-| `README.md` | Add CF Access, MultiCA, Telegram sections |
+| `README.md` | Historical: CF Access and Telegram documentation; retired plane removed |
 | `cloudflare/worker/src/routes/v1.ts` | Add handoff endpoints |
 | `cloudflare/worker/src/lib/project-registry.ts` | Add `activation_status`, `sync_status` fields |
-| `cloudflare/worker/src/lib/env.ts` | Add MultiCA URL vars |
+| `cloudflare/worker/src/lib/env.ts` | Historical request cancelled; retired URL variables removed |
 | `cloudflare/worker/wrangler.jsonc` | Document `TF_ACCESS_AUDIENCE` purpose |
 | `scripts/teamforge-vault-parity.mjs` | Update vault root path, add handoff/standup sync |
 | `docs/architecture/` | Add new architecture docs |

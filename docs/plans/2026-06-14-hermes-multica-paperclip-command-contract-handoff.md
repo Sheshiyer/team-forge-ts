@@ -1,5 +1,7 @@
 # Handoff: Hermes / MultiCA / Paperclip Command Contract
 
+> Historical record — superseded by the Hermes/Cambium retirement contract. Do not execute this handoff.
+
 Date: 2026-06-14
 Owner repo: `team-forge-ts`
 Related repo: `/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-paperclip`

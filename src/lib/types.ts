@@ -1142,8 +1142,8 @@ export interface HermesDispatchResult {
 export interface FounderCommandIntent {
   id: string;
   actorId: string;
-  actorKind: "founder" | "cofounder" | "employee" | "multica_service" | "paperclip_agent";
-  authMode: "cf_access" | "m2m" | "app_bearer" | "aws_task_role" | "paperclip_token";
+  actorKind: "founder" | "cofounder" | "employee" | "paperclip_agent";
+  authMode: "cf_access" | "m2m" | "app_bearer" | "paperclip_token";
   targetKind?: string;
   targetId?: string;
   correlationId: string;

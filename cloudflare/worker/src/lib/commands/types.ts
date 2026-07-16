@@ -3,7 +3,6 @@ export type ActorKind =
   | "founder"
   | "cofounder"
   | "employee"
-  | "multica_service"
   | "paperclip_agent";
 
 /** Auth modes by which an actor is verified at intake time. */
@@ -11,7 +10,6 @@ export type AuthMode =
   | "cf_access"        // Cloudflare Access JWT (verified upstream)
   | "m2m"              // TF_INTERNAL_SHARED_SECRET
   | "app_bearer"       // TF_CREDENTIAL_ENVELOPE_KEY (user app)
-  | "aws_task_role"    // MultiCA ECS task role calling back
   | "paperclip_token"; // Paperclip dedicated-agent token
 
 /** State machine for command runs. */
@@ -37,14 +35,14 @@ export type AuditEventKind =
   | "cancelled";
 
 /** Where a command's execution physically happens. */
-export type CommandRoute =
-  | "downstream_multica"   // cambium-bridge teamforge-consumer dispatches via `multica issue assign`
-  | "local_worker";         // Worker handles synchronously
+export type CommandRoute = "local_worker";
+
+/** Surviving system accountable for the command vocabulary. */
+export type CommandOwner = "hermes" | "cambium";
 
 /** Which subsystem owns canonical state for a command's result. */
 export type CommandStateOwner =
   | "teamforge"  // command_runs.result_json is canonical
-  | "multica"    // MultiCA artifact / S3 is canonical
   | "paperclip"; // Paperclip Huly/repo state is canonical
 
 /** What the caller sends to /v1/commands/intent. */

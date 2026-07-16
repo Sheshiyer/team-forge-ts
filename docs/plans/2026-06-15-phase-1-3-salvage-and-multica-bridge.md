@@ -1,5 +1,7 @@
 # Phase 1-3 Salvage + TeamForge → Cambium-Bridge Wiring
 
+> Historical record — superseded by the Hermes/Cambium retirement contract. Do not execute this proposal.
+
 **Date:** 2026-06-15 (revised after cambium-bridge re-read)
 **Status:** draft proposal
 **Context:** Phase 1-3 Hermes work in `team-forge-ts` assumes Paperclip-listener dispatch and an AWS-task callback that doesn't exist. The actual dispatcher already exists in `thoughtseed-paperclip/cambium-bridge/` — wake-loop, router, parseTelegramToMove, and multica-bridge upstream/downstream are all wired. The salvage is to **point the Worker's intent surface at the existing cambium-bridge wake-loop**, not to build new infra.

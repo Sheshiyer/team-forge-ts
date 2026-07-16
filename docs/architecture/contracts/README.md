@@ -6,6 +6,11 @@ These documents freeze the design assumptions that must remain stable before Pha
 
 ## Files
 
+- [hermes-cambium-command-contract.md](hermes-cambium-command-contract.md)
+  - current command ownership and fail-closed TeamForge retirement boundary
+- [multica-execution-contract.2026-06-15.md](_archived/multica-execution-contract.2026-06-15.md)
+  - archived historical callback/queue contract; not executable authority
+
 - [phase1-baseline.md](/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/team-forge-ts/docs/architecture/contracts/phase1-baseline.md)
   - system boundary
   - environment model

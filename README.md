@@ -85,16 +85,25 @@ Leave tracking and yearly holidays now live on a dedicated Calendar route, keepi
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 
-## Architecture Updates — 2026-06-09 (Four Planes + CF Access + MultiCA + Handoffs)
+## Current command architecture
 
-The operating model is now explicitly four planes:
+The active operating model has three top-level surfaces:
 
 - **Obsidian Vault** (`thoughtseed-labs/`) — durable human-readable documents, handoffs/, standups/.
-- **Paperclip** — 6-agent orchestration plane (CEO, Scientist, Engineer, Designer, Synthesist, Hermes).
-- **TeamForge** (this repo + Cloudflare Worker at `forge.thoughtseed.space`) — canonical project/client slug registry and control plane.
-- **Co-founders via Hermes** — Telegram-first command surface (`/ts-*` commands) and external delivery.
+- **Hermes** — Telegram command interpretation, communication, and founder-safe delivery.
+- **Cambium** — operator state, quests, gates, memory, execution, and results.
 
-**Security note (CF Access):** The TeamForge Worker is protected by Cloudflare Zero Trust Access. Service token `teamforge-multica-bridge-v2` is the authenticated bridge for MultiCA and automated callers.
+TeamForge is an extraction source and retained read/control-plane bridge, not an
+agent execution plane. The former MultiCA plane is retired. TeamForge rejects
+commands that moved to Hermes or Cambium before creating a run, and its former
+external result callback is a non-mutating `410 Gone` tombstone.
+
+See the [function retirement map](docs/plans/2026-06-20-teamforge-function-retirement-map.md)
+and [Hermes/Cambium command contract](docs/architecture/contracts/hermes-cambium-command-contract.md).
+
+**Security note (CF Access):** The TeamForge Worker remains protected by
+Cloudflare Zero Trust Access. Automated callers use narrowly scoped current
+credentials; retired service credentials are not an execution authority.
 
 Example authenticated call (both CF Access headers + app Bearer are required):
 
@@ -125,16 +134,9 @@ TF_INTERNAL_SHARED_SECRET="your-long-random-secret-here" \
 node scripts/teamforge-vault-parity.mjs --apply ...
 ```
 
-This is a temporary workaround (see debugging notes for service token 302 issues on Worker routes). Prefer service tokens or IP when possible. For MultiCA/AWS callers, service token or future non-Access path recommended.
-
-**MultiCA (AI gateway + agent backend):** Runs on AWS ECS Fargate behind Global Accelerator.
-
-- Static IPs: `166.117.29.182`, `76.223.32.238`
-- GA endpoint (HTTP for agents): `http://a2d8a7ed58f172583.awsglobalaccelerator.com`
-- App: `https://multica.thoughtseed.space`
-- Workspace: `Thoughtseedlabs` (`e0ffc9e2-7848-447f-933f-cc743deedfd0`)
-
-See `cloudflare/worker/src/lib/env.ts` for `MULTICA_*` settings.
+This is a temporary workaround for authenticated Hermes/parity calls while the
+Cloudflare service-token compatibility issue remains. It does not authorize a
+separate execution plane.
 
 **Handoff Protocol:** Agent stage-to-stage transitions live in `thoughtseed-labs/handoffs/` (HO-NNN.md). TeamForge now owns the status machine and registry surface so Hermes `/ts-handoffs`, `/ts-approve`, `/ts-reject` can act on them.
 
@@ -142,7 +144,8 @@ See `cloudflare/worker/src/lib/env.ts` for `MULTICA_*` settings.
 
 Group: `-1003698657291`. Co-founders (equal authority): `1371522080`, `926168615`.
 
-See the full backfill checklist in `ARCHITECTURE_CHANGES_2026-06-09.md`.
+`ARCHITECTURE_CHANGES_2026-06-09.md` is retained only as a historical deployment
+record and is superseded by the retirement map above.
 
 <img src="https://capsule-render.vercel.app/api?type=rect&color=gradient&customColorList=0,1,2&height=1" width="100%" />
 

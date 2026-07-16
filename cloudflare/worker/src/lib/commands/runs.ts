@@ -79,27 +79,9 @@ export async function transitionRun(
 }
 
 /**
- * Look up the most recently created run for a correlation_id. Used by the
- * Phase 2 callback route to short-circuit idempotent retries.
- */
-export async function getRunByCorrelationId(
-  db: D1DatabaseLike,
-  correlationId: string,
-): Promise<CommandRun | null> {
-  const row = await db
-    .prepare(`SELECT * FROM command_runs WHERE correlation_id = ? ORDER BY requested_at DESC LIMIT 1`)
-    .bind(correlationId)
-    .first<CommandRun>();
-  return row ?? null;
-}
-
-/**
  * List runs filtered by state, optionally by route (via command_id IN the routed set).
  * The route filter is resolved by the route handler using the registry; this helper
  * accepts a list of allowed command_ids.
- *
- * Used by the Phase B `GET /v1/commands/runs?state=&route=&limit=` queue endpoint,
- * which the cambium-bridge teamforge-consumer polls every ~5s.
  */
 export async function listRunsByState(
   db: D1DatabaseLike,
