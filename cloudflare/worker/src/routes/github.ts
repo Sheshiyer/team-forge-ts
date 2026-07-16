@@ -72,7 +72,27 @@ interface InstallationBindingRow {
   account_login: string;
   account_type: "Organization" | "User";
   repository_selection: string;
+  permissions_json: string;
 }
+
+interface InstallationFactRow {
+  installation_id: number;
+  installer_sender_id: number;
+  account_id: number;
+  account_login: string;
+  account_type: "Organization" | "User";
+  repository_selection: string;
+  permissions_json: string;
+  state: "active" | "suspended" | "deleted";
+}
+
+type InstallationStatus = "connected" | "suspended" | "forbidden";
+type InstallationReason =
+  | "connected"
+  | "repository_scope_all"
+  | "permissions_incomplete"
+  | "installation_suspended"
+  | "installation_revoked";
 
 interface RepositoryAuthorityRow {
   installation_id: number;
@@ -134,6 +154,15 @@ interface GithubCiEvidence {
 }
 
 const PLEXUS_GITHUB_ACTOR_RETURN_URL = "plexus://github/setup/v1";
+const requiredGithubInstallationPermissions = {
+  actions: "read",
+  checks: "read",
+  contents: "write",
+  issues: "read",
+  metadata: "read",
+  pull_requests: "write",
+} as const;
+const githubPermissionRank: Record<string, number> = { read: 1, write: 2, admin: 3 };
 
 function acceptsHtml(request: Request): boolean {
   return (request.headers.get("accept") ?? "")
@@ -290,6 +319,42 @@ function isAllowedInstallationTarget(policy: GithubInstallationPolicy, value: Pi
   return Boolean(expected && expected.type === value.account_type && expected.login.toLowerCase() === value.account_login.toLowerCase());
 }
 
+function normalizeInstallationPermissions(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "{}";
+  const normalized: Record<string, string> = {};
+  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    const level = (value as Record<string, unknown>)[key];
+    if (/^[a-z][a-z0-9_]*$/.test(key) && typeof level === "string" && githubPermissionRank[level]) normalized[key] = level;
+  }
+  return JSON.stringify(normalized);
+}
+
+function hasRequiredInstallationPermissions(permissionsJson: string): boolean {
+  try {
+    const permissions = JSON.parse(permissionsJson) as Record<string, unknown>;
+    return Object.entries(requiredGithubInstallationPermissions).every(([name, required]) => {
+      const actual = permissions[name];
+      return typeof actual === "string" && (githubPermissionRank[actual] ?? 0) >= githubPermissionRank[required];
+    });
+  } catch {
+    return false;
+  }
+}
+
+function installationDisposition(
+  policy: GithubInstallationPolicy,
+  binding: InstallationBindingRow,
+): { status: InstallationStatus; reason: InstallationReason } {
+  if (!isAllowedInstallationTarget(policy, binding) || binding.state === "revoked") {
+    return { status: "forbidden", reason: "installation_revoked" };
+  }
+  if (binding.repository_selection !== "selected") return { status: "forbidden", reason: "repository_scope_all" };
+  if (binding.state === "suspended") return { status: "suspended", reason: "installation_suspended" };
+  if (!hasRequiredInstallationPermissions(binding.permissions_json)) return { status: "forbidden", reason: "permissions_incomplete" };
+  return { status: "connected", reason: "connected" };
+}
+
 function assertAllowedInstallationTarget(policy: GithubInstallationPolicy, value: Pick<InstallationBindingRow, "account_id" | "account_login" | "account_type">): void {
   if (!isAllowedInstallationTarget(policy, value)) {
     throw new GithubControlPlaneError("github_installation_account_forbidden", "GitHub App installation account is not allowlisted.", 403);
@@ -326,7 +391,7 @@ async function parseJsonObject(request: Request): Promise<Record<string, unknown
 async function getBindings(env: Env, workspaceId: string): Promise<InstallationBindingRow[]> {
   return queryAll<InstallationBindingRow>(
     database(env),
-    `SELECT b.*, f.account_login, f.account_type, f.repository_selection
+    `SELECT b.*, f.account_login, f.account_type, f.repository_selection, f.permissions_json
        FROM github_workspace_installations b
        JOIN github_installation_facts f ON f.installation_id = b.installation_id
       WHERE b.workspace_id = ?
@@ -338,7 +403,7 @@ async function getBindings(env: Env, workspaceId: string): Promise<InstallationB
 async function getBinding(env: Env, workspaceId: string, installationId: number): Promise<InstallationBindingRow | null> {
   return queryFirst<InstallationBindingRow>(
     database(env),
-    `SELECT b.*, f.account_login, f.account_type, f.repository_selection
+    `SELECT b.*, f.account_login, f.account_type, f.repository_selection, f.permissions_json
        FROM github_workspace_installations b
        JOIN github_installation_facts f ON f.installation_id = b.installation_id
       WHERE b.workspace_id = ? AND b.installation_id = ? LIMIT 1`,
@@ -352,6 +417,7 @@ function assertBindingIsActive(env: Env, binding: InstallationBindingRow): Insta
   if (binding.repository_selection !== "selected") throw new GithubControlPlaneError("github_repository_selection_forbidden", "GitHub App access to all repositories is forbidden.", 403);
   if (binding.state === "suspended") throw new GithubControlPlaneError("github_suspended", "The workspace GitHub App installation is suspended.", 409);
   if (binding.state !== "active") throw new GithubControlPlaneError("github_forbidden", "The workspace GitHub App installation is revoked.", 403);
+  if (!hasRequiredInstallationPermissions(binding.permissions_json)) throw new GithubControlPlaneError("github_installation_permissions_incomplete", "GitHub App installation permissions are incomplete.", 403);
   assertAllowedInstallationTarget(githubInstallationPolicy(env), binding);
   return binding;
 }
@@ -366,7 +432,8 @@ async function assertActiveBindings(env: Env, workspaceId: string): Promise<Inst
   const activeBindings = (await getBindings(env, workspaceId)).filter((binding) => binding.state === "active");
   if (activeBindings.length === 0) throw new GithubControlPlaneError("github_unconfigured", "No active GitHub App installation is connected to this workspace.", 409);
   const policy = githubInstallationPolicy(env);
-  const bindings = activeBindings.filter((binding) => binding.repository_selection === "selected" && isAllowedInstallationTarget(policy, binding));
+  const bindings = activeBindings.filter((binding) => binding.repository_selection === "selected" &&
+    hasRequiredInstallationPermissions(binding.permissions_json) && isAllowedInstallationTarget(policy, binding));
   if (bindings.length === 0) throw new GithubControlPlaneError("github_unconfigured", "No active GitHub App installation is connected to this workspace.", 409);
   return bindings;
 }
@@ -453,23 +520,47 @@ export async function reconcileBinding(env: Env, nonceHash: string): Promise<boo
   if (!state?.oauth_user_id || !state.oauth_login || !state.untrusted_installation_id || !state.target_account_id ||
     !state.target_account_login || !state.target_account_type || state.status === "rejected" || state.status === "expired") return false;
   await ensureCallbackActorStillAdmin(env, { workspace: state.workspace_id, actor: state.plexus_actor_id });
-  const fact = await queryFirst<{
-    installation_id: number;
-    installer_sender_id: number;
-    account_id: number;
-    account_login: string;
-    account_type: string;
-    repository_selection: string;
-    state: string;
-  }>(
+  let fact = await queryFirst<InstallationFactRow>(
     db,
-    "SELECT installation_id, installer_sender_id, account_id, account_login, account_type, repository_selection, state FROM github_installation_facts WHERE installation_id = ? LIMIT 1",
+    "SELECT installation_id, installer_sender_id, account_id, account_login, account_type, repository_selection, permissions_json, state FROM github_installation_facts WHERE installation_id = ? LIMIT 1",
     state.untrusted_installation_id,
   );
-  if (!fact || fact.state === "deleted") return false;
+  if (!fact || fact.state === "deleted") {
+    const candidates = await queryAll<InstallationFactRow>(
+      db,
+      `SELECT installation_id, installer_sender_id, account_id, account_login, account_type,
+              repository_selection, permissions_json, state
+         FROM github_installation_facts
+        WHERE account_id = ? AND LOWER(account_login) = LOWER(?) AND account_type = ?
+          AND installer_sender_id = ? AND repository_selection = 'selected' AND state <> 'deleted'
+        ORDER BY observed_at DESC, installation_id DESC
+        LIMIT 2`,
+      state.target_account_id,
+      state.target_account_login,
+      state.target_account_type,
+      state.oauth_user_id,
+    );
+    if (candidates.length === 0) return false;
+    if (candidates.length > 1) throw new GithubControlPlaneError("github_connection_ambiguous", "Multiple signed installations match this connection target.", 409);
+    fact = candidates[0];
+    const repairedAt = now();
+    const repaired = await executeChanges(
+      db,
+      "UPDATE github_connection_states SET untrusted_installation_id = ?, installation_hint_at = ?, updated_at = ? WHERE nonce_hash = ? AND status = 'oauth_verified'",
+      fact.installation_id,
+      repairedAt,
+      repairedAt,
+      nonceHash,
+    );
+    if (repaired !== 1) return false;
+  }
   if (fact.repository_selection !== "selected") {
     await execute(db, "UPDATE github_connection_states SET status = 'rejected', updated_at = ? WHERE nonce_hash = ?", now(), nonceHash);
     throw new GithubControlPlaneError("github_repository_selection_forbidden", "GitHub App must be installed with only selected repositories.", 403);
+  }
+  if (!hasRequiredInstallationPermissions(fact.permissions_json)) {
+    await execute(db, "UPDATE github_connection_states SET status = 'rejected', updated_at = ? WHERE nonce_hash = ?", now(), nonceHash);
+    throw new GithubControlPlaneError("github_installation_permissions_incomplete", "GitHub App installation permissions are incomplete.", 403);
   }
   if (fact.installer_sender_id !== state.oauth_user_id) {
     await execute(db, "UPDATE github_connection_states SET status = 'rejected', updated_at = ? WHERE nonce_hash = ?", now(), nonceHash);
@@ -550,24 +641,61 @@ export async function handleGithubConnection(env: Env, principal: PlexusPrincipa
     const installationPolicy = githubInstallationPolicy(env);
     const bindings = await getBindings(env, principal!.workspaceId);
     const installations = bindings.map((binding) => {
-      const allowed = isAllowedInstallationTarget(installationPolicy, binding) && binding.repository_selection === "selected";
-      const status = !allowed ? "forbidden" as const
-        : binding.state === "active" ? "connected" as const
-          : binding.state === "suspended" ? "suspended" as const : "forbidden" as const;
-      return { installationId: binding.installation_id, status, account: installationTargetOf(binding) };
+      const disposition = installationDisposition(installationPolicy, binding);
+      return { installationId: binding.installation_id, ...disposition, account: installationTargetOf(binding) };
     });
-    if (installations.length > 0) {
-      const status = installations.some((installation) => installation.status === "connected") ? "connected" as const
-        : installations.some((installation) => installation.status === "suspended") ? "suspended" as const : "forbidden" as const;
-      return jsonOk({ status, installations, allowedTargets: installationPolicy.allowedTargets });
-    }
-    const pending = await queryFirst<{ expires_at: number }>(
+    const pendingStates = await queryAll<Pick<ConnectionStateRow,
+      "target_account_id" | "target_account_login" | "target_account_type" | "status" | "untrusted_installation_id">>(
       database(env),
-      "SELECT expires_at FROM github_connection_states WHERE workspace_id = ? AND status IN ('pending_oauth', 'oauth_verified') AND expires_at > ? ORDER BY created_at DESC LIMIT 1",
+      `SELECT target_account_id, target_account_login, target_account_type, status, untrusted_installation_id
+         FROM github_connection_states
+        WHERE workspace_id = ? AND status IN ('pending_oauth', 'oauth_verified') AND expires_at > ?
+        ORDER BY created_at DESC`,
       principal!.workspaceId,
       Math.floor(Date.now() / 1000),
     );
-    return jsonOk({ status: pending ? "pending" as const : "unconfigured" as const, installations, allowedTargets: installationPolicy.allowedTargets });
+    const facts = await queryAll<InstallationFactRow>(
+      database(env),
+      `SELECT installation_id, installer_sender_id, account_id, account_login, account_type,
+              repository_selection, permissions_json, state
+         FROM github_installation_facts
+        WHERE state <> 'deleted'
+        ORDER BY observed_at DESC, installation_id DESC`,
+    );
+    const targets = installationPolicy.allowedTargets.map((account) => {
+      const binding = bindings.find((candidate) => candidate.account_id === account.id && candidate.account_type === account.type &&
+        candidate.account_login.toLowerCase() === account.login.toLowerCase());
+      if (binding) return { account, installationId: binding.installation_id, ...installationDisposition(installationPolicy, binding) };
+
+      const pending = pendingStates.find((candidate) => candidate.target_account_id === account.id &&
+        candidate.target_account_type === account.type && candidate.target_account_login?.toLowerCase() === account.login.toLowerCase());
+      if (!pending) return { account, status: "unconfigured" as const, reason: "not_connected" as const };
+      if (pending.status === "pending_oauth") return { account, status: "pending" as const, reason: "oauth_pending" as const };
+
+      const exactFacts = facts.filter((fact) => fact.account_id === account.id && fact.account_type === account.type &&
+        fact.account_login.toLowerCase() === account.login.toLowerCase());
+      const selectedFacts = exactFacts.filter((fact) => fact.repository_selection === "selected");
+      if (selectedFacts.length > 1) return { account, status: "forbidden" as const, reason: "ambiguous_installation" as const };
+      if (selectedFacts.length === 0) {
+        const allScope = exactFacts[0];
+        if (allScope) return { account, installationId: allScope.installation_id, status: "forbidden" as const, reason: "repository_scope_all" as const };
+        return { account, status: "pending" as const, reason: "trust_anchor_missing" as const };
+      }
+      const fact = selectedFacts[0];
+      if (pending.untrusted_installation_id !== fact.installation_id) {
+        return { account, installationId: fact.installation_id, status: "forbidden" as const, reason: "installation_hint_mismatch" as const };
+      }
+      if (fact.state === "suspended") return { account, installationId: fact.installation_id, status: "suspended" as const, reason: "installation_suspended" as const };
+      if (!hasRequiredInstallationPermissions(fact.permissions_json)) {
+        return { account, installationId: fact.installation_id, status: "forbidden" as const, reason: "permissions_incomplete" as const };
+      }
+      return { account, installationId: fact.installation_id, status: "pending" as const, reason: "oauth_pending" as const };
+    });
+    const status = targets.some((target) => target.status === "connected") ? "connected" as const
+      : targets.some((target) => target.status === "suspended") ? "suspended" as const
+        : targets.some((target) => target.status === "pending") ? "pending" as const
+          : targets.some((target) => target.status === "forbidden") ? "forbidden" as const : "unconfigured" as const;
+    return jsonOk({ status, installations, allowedTargets: installationPolicy.allowedTargets, targets });
   } catch (error) {
     return controlPlaneError(error);
   }
@@ -984,12 +1112,31 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
     } catch {
       throw new GithubControlPlaneError("github_webhook_payload_invalid", "GitHub webhook payload is invalid JSON.", 400);
     }
+    const action = typeof payload.action === "string" ? payload.action : null;
+    const diagnosticInstallation = payload.installation && typeof payload.installation === "object" && !Array.isArray(payload.installation)
+      ? payload.installation as Record<string, unknown> : null;
+    const diagnosticAccount = diagnosticInstallation?.account && typeof diagnosticInstallation.account === "object" && !Array.isArray(diagnosticInstallation.account)
+      ? diagnosticInstallation.account as Record<string, unknown> : null;
+    const diagnosticInstallationId = Number(diagnosticInstallation?.id);
+    const diagnosticAccountId = Number(diagnosticAccount?.id);
+    await execute(
+      db,
+      `UPDATE github_webhook_deliveries
+          SET action = ?, installation_id = ?, account_id = ?, account_login = ?, account_type = ?
+        WHERE delivery_id = ?`,
+      action,
+      Number.isSafeInteger(diagnosticInstallationId) && diagnosticInstallationId > 0 ? diagnosticInstallationId : null,
+      Number.isSafeInteger(diagnosticAccountId) && diagnosticAccountId > 0 ? diagnosticAccountId : null,
+      typeof diagnosticAccount?.login === "string" ? diagnosticAccount.login : null,
+      diagnosticAccount?.type === "Organization" || diagnosticAccount?.type === "User" ? diagnosticAccount.type : null,
+      deliveryId,
+    );
     if (eventName === "ping") {
-      await execute(db, "UPDATE github_webhook_deliveries SET processed_at = ?, result = 'ping' WHERE delivery_id = ?", now(), deliveryId);
+      await execute(db, "UPDATE github_webhook_deliveries SET processed_at = ?, result = 'ping', result_reason = 'ping' WHERE delivery_id = ?", now(), deliveryId);
       return jsonOk({ status: "accepted" as const });
     }
     if (eventName !== "installation" && eventName !== "installation_repositories") {
-      await execute(db, "UPDATE github_webhook_deliveries SET processed_at = ?, result = 'ignored' WHERE delivery_id = ?", now(), deliveryId);
+      await execute(db, "UPDATE github_webhook_deliveries SET processed_at = ?, result = 'ignored', result_reason = 'event_not_supported' WHERE delivery_id = ?", now(), deliveryId);
       return jsonOk({ status: "ignored" as const });
     }
     const installation = payload.installation as Record<string, unknown> | undefined;
@@ -1000,6 +1147,7 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
     const accountId = Number(account?.id);
     const accountType = account?.type;
     const repositorySelection = installation?.repository_selection;
+    const permissionsJson = normalizeInstallationPermissions(installation?.permissions);
     if (!Number.isSafeInteger(installationId) || installationId <= 0 || !Number.isSafeInteger(senderId) || senderId <= 0 ||
       !Number.isSafeInteger(accountId) || accountId <= 0 || !account?.login || !sender?.login ||
       (accountType !== "Organization" && accountType !== "User") ||
@@ -1012,49 +1160,70 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
       account_login: accountTarget.login,
       account_type: accountTarget.type,
     })) {
-      await execute(db, "UPDATE github_webhook_deliveries SET processed_at = ?, result = 'ignored' WHERE delivery_id = ?", now(), deliveryId);
+      await execute(db, "UPDATE github_webhook_deliveries SET processed_at = ?, result = 'ignored', result_reason = 'account_not_allowed' WHERE delivery_id = ?", now(), deliveryId);
       return jsonOk({ status: "ignored" as const });
     }
-    const action = String(payload.action ?? "");
+    const lifecycleAction = action ?? "";
     const allowedActions = eventName === "installation"
       ? new Set(["created", "deleted", "suspend", "unsuspend", "new_permissions_accepted"])
       : new Set(["added", "removed"]);
-    if (!allowedActions.has(action)) {
-      await execute(db, "UPDATE github_webhook_deliveries SET processed_at = ?, result = 'ignored' WHERE delivery_id = ?", now(), deliveryId);
+    if (!allowedActions.has(lifecycleAction)) {
+      await execute(db, "UPDATE github_webhook_deliveries SET processed_at = ?, result = 'ignored', result_reason = 'action_not_supported' WHERE delivery_id = ?", now(), deliveryId);
       return jsonOk({ status: "ignored" as const });
     }
     const observedAt = now();
-    if (eventName === "installation" && action === "created") {
+    let resultReason = "fact_updated";
+    if (eventName === "installation" && lifecycleAction === "created") {
       await execute(
         db,
         `INSERT INTO github_installation_facts
          (installation_id, account_id, account_login, account_type, installer_sender_id, installer_sender_login,
-          last_actor_id, last_actor_login, repository_selection, state, last_delivery_id, observed_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+          last_actor_id, last_actor_login, repository_selection, permissions_json, state, last_delivery_id, observed_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
          ON CONFLICT(installation_id) DO UPDATE SET
            account_id = excluded.account_id, account_login = excluded.account_login, account_type = excluded.account_type,
            last_actor_id = excluded.last_actor_id, last_actor_login = excluded.last_actor_login,
-           repository_selection = excluded.repository_selection, last_delivery_id = excluded.last_delivery_id,
+           repository_selection = excluded.repository_selection, permissions_json = excluded.permissions_json,
+           last_delivery_id = excluded.last_delivery_id,
            observed_at = excluded.observed_at, updated_at = excluded.updated_at`,
         installationId, accountId, String(account.login), accountType,
         senderId, String(sender.login), senderId, String(sender.login),
-        repositorySelection, deliveryId, observedAt, observedAt,
+        repositorySelection, permissionsJson ?? "{}", deliveryId, observedAt, observedAt,
       );
+      resultReason = "fact_created";
     } else {
       const existingFact = await queryFirst<{ installation_id: number; state: "active" | "suspended" | "deleted" }>(db, "SELECT installation_id, state FROM github_installation_facts WHERE installation_id = ? LIMIT 1", installationId);
-      if (!existingFact) throw new GithubControlPlaneError("github_installation_untrusted", "Installation lifecycle event arrived before a signed installation.created trust anchor.", 409, true);
-      const factState = nextInstallationState(existingFact.state, eventName, action);
-      await execute(
-        db,
-        `UPDATE github_installation_facts SET
-           account_id = ?, account_login = ?, account_type = ?, last_actor_id = ?, last_actor_login = ?,
-           repository_selection = ?, state = ?, last_delivery_id = ?, observed_at = ?, updated_at = ?
-         WHERE installation_id = ?`,
-        accountId, String(account.login), accountType, senderId, String(sender.login),
-        repositorySelection, factState, deliveryId, observedAt, observedAt, installationId,
-      );
+      if (!existingFact) {
+        if (lifecycleAction === "deleted" || repositorySelection !== "selected") {
+          throw new GithubControlPlaneError("github_installation_untrusted", "Installation lifecycle event cannot bootstrap a selected non-deleted trust fact.", 409, true);
+        }
+        const initialState = lifecycleAction === "suspend" ? "suspended" : "active";
+        await execute(
+          db,
+          `INSERT INTO github_installation_facts
+           (installation_id, account_id, account_login, account_type, installer_sender_id, installer_sender_login,
+            last_actor_id, last_actor_login, repository_selection, permissions_json, state, last_delivery_id, observed_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          installationId, accountId, String(account.login), accountType,
+          senderId, String(sender.login), senderId, String(sender.login),
+          repositorySelection, permissionsJson ?? "{}", initialState, deliveryId, observedAt, observedAt,
+        );
+        resultReason = "lifecycle_bootstrap";
+      } else {
+        const factState = nextInstallationState(existingFact.state, eventName, lifecycleAction);
+        await execute(
+          db,
+          `UPDATE github_installation_facts SET
+             account_id = ?, account_login = ?, account_type = ?, last_actor_id = ?, last_actor_login = ?,
+             repository_selection = ?, permissions_json = COALESCE(?, permissions_json), state = ?,
+             last_delivery_id = ?, observed_at = ?, updated_at = ?
+           WHERE installation_id = ?`,
+          accountId, String(account.login), accountType, senderId, String(sender.login),
+          repositorySelection, permissionsJson, factState, deliveryId, observedAt, observedAt, installationId,
+        );
+      }
     }
-    const installationDeleted = eventName === "installation" && action === "deleted";
+    const installationDeleted = eventName === "installation" && lifecycleAction === "deleted";
     if (installationDeleted) {
       await execute(db, "UPDATE github_installation_repositories SET state = 'removed', updated_at = ? WHERE installation_id = ?", observedAt, installationId);
     } else {
@@ -1098,18 +1267,22 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
     const candidates = await queryAll<{ nonce_hash: string }>(
       db,
       `SELECT nonce_hash FROM github_connection_states
-        WHERE untrusted_installation_id = ? AND oauth_user_id = ? AND status = 'oauth_verified' AND expires_at > ?`,
-      installationId,
+        WHERE oauth_user_id = ? AND target_account_id = ? AND LOWER(target_account_login) = LOWER(?)
+          AND target_account_type = ? AND status = 'oauth_verified' AND expires_at > ?`,
       storedFact.installer_sender_id,
+      accountId,
+      String(account.login),
+      accountType,
       Math.floor(Date.now() / 1000),
     );
     if (candidates.length > 1) throw new GithubControlPlaneError("github_connection_ambiguous", "Multiple connection states match this installation.", 409);
     if (candidates[0]) await reconcileBinding(env, candidates[0].nonce_hash);
-    await execute(db, "UPDATE github_webhook_deliveries SET processed_at = ?, result = 'processed' WHERE delivery_id = ?", now(), deliveryId);
+    await execute(db, "UPDATE github_webhook_deliveries SET processed_at = ?, result = 'processed', result_reason = ? WHERE delivery_id = ?", now(), resultReason, deliveryId);
     return jsonOk({ status: "accepted" as const });
   } catch (error) {
     if (ownedDelivery) {
-      await execute(ownedDelivery.db, "UPDATE github_webhook_deliveries SET result = 'failed' WHERE delivery_id = ? AND result = 'processing'", ownedDelivery.id);
+      const reason = error instanceof GithubControlPlaneError ? error.code : "github_control_plane_failed";
+      await execute(ownedDelivery.db, "UPDATE github_webhook_deliveries SET result = 'failed', result_reason = ? WHERE delivery_id = ? AND result = 'processing'", reason, ownedDelivery.id);
     }
     return controlPlaneError(error);
   }

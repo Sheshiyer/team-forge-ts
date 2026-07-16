@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
 describe("GitHub multi-installation migration", () => {
-  it("preserves a 0012 binding through 0013 and 0014 while enforcing multi-account authority", () => {
+  it("preserves a 0012 binding through 0015 while enforcing authority and adding webhook diagnostics", () => {
     const db = new DatabaseSync(":memory:");
     try {
       db.exec(`
@@ -54,6 +54,7 @@ describe("GitHub multi-installation migration", () => {
 
       db.exec(readFileSync(new URL("../../../migrations/0013_github_workspace_actors.sql", import.meta.url), "utf8"));
       db.exec(readFileSync(new URL("../../../migrations/0014_github_multi_owner_installations.sql", import.meta.url), "utf8"));
+      db.exec(readFileSync(new URL("../../../migrations/0015_github_webhook_diagnostics.sql", import.meta.url), "utf8"));
 
       expect(db.prepare(`
         SELECT workspace_id, installation_id, account_id
@@ -70,6 +71,19 @@ describe("GitHub multi-installation migration", () => {
         .map((column) => String(column.name))
         .filter((name) => name.startsWith("target_account_"));
       expect(targetColumns).toEqual(["target_account_id", "target_account_login", "target_account_type"]);
+      const deliveryColumns = db.prepare("PRAGMA table_info(github_webhook_deliveries)").all()
+        .map((column) => String(column.name));
+      expect(deliveryColumns).toEqual(expect.arrayContaining([
+        "action",
+        "installation_id",
+        "account_id",
+        "account_login",
+        "account_type",
+        "result_reason",
+      ]));
+      const factColumns = db.prepare("PRAGMA table_info(github_installation_facts)").all()
+        .map((column) => String(column.name));
+      expect(factColumns).toContain("permissions_json");
 
       db.exec(`
         INSERT INTO github_connection_states (
