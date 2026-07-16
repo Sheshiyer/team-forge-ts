@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createRun, getRunById, getRunByCorrelationId, listRunsByState, recordAuditEvent, transitionRun } from "./runs";
+import { createRun, getRunById, listRunsByState, recordAuditEvent, transitionRun } from "./runs";
 import type { CommandIntent } from "./types";
 import { makeMockDb, type MockDbHandle } from "../test-utils/mock-d1";
 
@@ -50,28 +50,6 @@ describe("command runs", () => {
     expect(mock.events[0].kind).toBe("command_received");
     expect(mock.events[0].run_id).toBe(run.id);
     expect(JSON.parse(mock.events[0].payload_json as string)).toEqual({ hello: "world" });
-  });
-});
-
-describe("getRunByCorrelationId", () => {
-  it("returns the most recent run for a correlation_id", async () => {
-    const { db } = makeMockDb();
-    const r1 = await createRun(db, {
-      id: "ts-standup", actor_id: "f", actor_kind: "founder", auth_mode: "cf_access",
-      correlation_id: "corr-shared", payload: {},
-    }, 1000);
-    const r2 = await createRun(db, {
-      id: "ts-standup", actor_id: "f", actor_kind: "founder", auth_mode: "cf_access",
-      correlation_id: "corr-shared", payload: {},
-    }, 2000);
-    const found = await getRunByCorrelationId(db, "corr-shared");
-    expect(found?.id).toBe(r2.id);
-  });
-
-  it("returns null for an unknown correlation_id", async () => {
-    const { db } = makeMockDb();
-    const found = await getRunByCorrelationId(db, "missing");
-    expect(found).toBeNull();
   });
 });
 

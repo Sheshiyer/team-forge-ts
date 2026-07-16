@@ -35,8 +35,12 @@ import {
   updateOnboardingStep,
 } from "../lib/plexus-session";
 import { handleGetTimeEntries, handlePostTimeEntries } from "./time-entries";
-import { handleCommandIntent, handleGetCommandRun, handleListCommandRuns } from "./commands";
-import { handleCommandsCallback } from "./commands-callback";
+import {
+  handleCommandIntent,
+  handleGetCommandRun,
+  handleListCommandRuns,
+  retiredCommandResponse,
+} from "./commands";
 import { handleBackfillClockify } from "./clockify-backfill";
 import { handleAgentFeedExport, handleProjectCloseout, handleProjectScaffold } from "./agent-feed";
 import { handleGetConnections, handleTestConnection } from "./connections";
@@ -117,6 +121,35 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
     return handleGithubWebhook(env, request);
   }
 
+  // The retired result callback is also a credential-free tombstone. Match it
+  // before Access principal resolution so even a valid employee JWT cannot
+  // trigger identity auto-provisioning or any other D1 access.
+  if (method === "POST" && /^\/v1\/commands\/runs\/[^/]+\/result$/.test(pathname)) {
+    return jsonError(
+      {
+        code: "callback_retired",
+        message: "External command-result callbacks are retired; Hermes and Cambium own result acknowledgement.",
+        retryable: false,
+      },
+      410,
+    );
+  }
+
+  // Retired command IDs are credential-free tombstones. Match them before
+  // Access principal resolution, which may auto-provision an employee identity
+  // in D1. This guarantees a retired command cannot cause any database access.
+  if (method === "POST" && pathname === "/v1/commands/intent") {
+    try {
+      const preview = (await request.clone().json()) as { id?: unknown };
+      if (typeof preview?.id === "string") {
+        const retiredResponse = retiredCommandResponse(preview.id);
+        if (retiredResponse) return retiredResponse;
+      }
+    } catch {
+      // Preserve the authenticated route's existing bad_json response.
+    }
+  }
+
   // Per-employee identity (Cloudflare Access). Live since WS5: TF_ACCESS_TEAM_DOMAIN +
   // TF_ACCESS_AUD are set, so a valid Cf-Access-Jwt-Assertion resolves to the caller's email.
   // Returns null for m2m callers (workers.dev path, no JWT) — they use internal/Bearer below.
@@ -155,7 +188,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Called only after requireAppOrInternalAuth succeeds. Actor claims from the
   // request body never participate in this server-side authority mapping.
-  const resolveCommandPrincipal = (): AuthenticatedCommandPrincipal => {
+  const resolveCommandPrincipal = (): AuthenticatedCommandPrincipal | null => {
     if (plexusPrincipal) {
       return {
         actor_id: plexusPrincipal.identityId,
@@ -180,11 +213,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
       };
     }
 
-    return {
-      actor_id: "teamforge_app_service",
-      actor_kind: "multica_service",
-      auth_mode: "app_bearer",
-    };
+    return null;
   };
 
   // Agent feed (Paperclip bridge) — auth required, shared HMAC secret
@@ -502,7 +531,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   }
 
   // Handoffs — 2026-06-09 (Hermes Telegram command surface + vault handoffs/ protocol)
-  // Auth: app-level Bearer (after CF Access edge protection for MultiCA/Hermes callers)
+  // Auth: app-level Bearer after Cloudflare Access edge protection.
   const DEFAULT_WORKSPACE_ID = "thoughtseed-primary";
 
   if (method === "GET" && pathname === "/v1/handoffs") {
@@ -546,32 +575,30 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
     return jsonOk(created);
   }
 
-  // ── Hermes Phase 1: Command intake (POST intent + GET run) ──────
-  // Single intake endpoint for the founder command vocabulary. Persists a
-  // command_run + audit trail in D1; downstream execution (MultiCA/Paperclip)
-  // happens in Phase 2/3 via callbacks. local_worker commands flip to
-  // "accepted" immediately; downstream routes stay in "created" until callback.
+  // ── Retained Worker command intake (POST intent + GET run) ─────
+  // Only commands executed locally by this Worker remain registered. Founder
+  // commands now owned by Hermes or Cambium fail closed before persistence.
   if (method === "POST" && pathname === "/v1/commands/intent") {
     const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
-    return handleCommandIntent(env, request, resolveCommandPrincipal());
+    const principal = resolveCommandPrincipal();
+    if (!principal) {
+      return jsonError(
+        {
+          code: "command_identity_required",
+          message: "Founder commands require a registered Access identity or the internal Hermes operator credential.",
+          retryable: false,
+        },
+        403,
+      );
+    }
+    return handleCommandIntent(env, request, principal);
   }
-  // Phase B: queue interface — the cambium-bridge teamforge-consumer polls this
-  // every ~5s to pick up new runs (state=created, route=downstream_multica),
-  // then dispatches via `multica issue assign` and posts back via the Phase 2
-  // callback route. Must be matched BEFORE the regex below so the literal
-  // /v1/commands/runs path doesn't fall through unmatched.
+  // Read retained command runs. This endpoint is not an execution queue.
   if (method === "GET" && pathname === "/v1/commands/runs") {
     const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleListCommandRuns(env, url);
-  }
-  // Phase 2: MultiCA result callback. Auth is the HMAC verifier inside the handler
-  // (NOT requireAppOrInternalAuth) because MultiCA's ECS task role has no CF
-  // Access JWT and no app Bearer — the shared secret signs each request.
-  const commandRunResultMatch = pathname.match(/^\/v1\/commands\/runs\/([^/]+)\/result$/);
-  if (method === "POST" && commandRunResultMatch) {
-    return handleCommandsCallback(env, request, commandRunResultMatch[1]);
   }
   const commandRunIdMatch = pathname.match(/^\/v1\/commands\/runs\/([^/]+)$/);
   if (method === "GET" && commandRunIdMatch) {
@@ -581,9 +608,8 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   }
 
   // ── Phase 7: Member Provisioning ────────────────────────────────
-  // Returns a scoped member bundle (id, name, Paperclip repo root, MultiCA
-  // config) so the Plexus client can run setup-member.sh without storing
-  // device secrets. Requires a verified Cloudflare Access identity.
+  // Returns member identity and retained Paperclip setup. Requires a verified
+  // Cloudflare Access identity and never returns retired execution credentials.
   if (method === "GET" && pathname === "/v1/member/provision") {
     if (!plexusPrincipal) {
       return jsonError(
@@ -596,11 +622,6 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
       memberName: plexusPrincipal.displayName,
       workspaceId: plexusPrincipal.workspaceId,
       paperclipRepoRoot: env.TF_PAPERCLIP_REPO_ROOT || undefined,
-      multica: {
-        apiUrl: env.MULTICA_API_URL || undefined,
-        appUrl: env.MULTICA_APP_URL || undefined,
-        workspaceId: env.MULTICA_WORKSPACE_ID || undefined,
-      },
       features: {
         agentFabricEnabled: true,
         standupEnabled: true,

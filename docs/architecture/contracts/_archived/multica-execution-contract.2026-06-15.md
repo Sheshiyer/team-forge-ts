@@ -1,5 +1,10 @@
 # MultiCA Execution Contract
 
+> **Archived 2026-07-16 — not executable authority.** Superseded by
+> `hermes-cambium-command-contract.md`. The Worker route, verifier, credential
+> fields, and active registry values described below have been removed. This
+> file remains only to explain historical records and migrations.
+
 > System of record: Cloudflare Worker, `cloudflare/worker/src/routes/commands-callback.ts`.
 
 ## Scope

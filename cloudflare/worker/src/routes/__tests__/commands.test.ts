@@ -5,8 +5,9 @@ import {
   handleListCommandRuns,
 } from "../commands";
 import { makeMockDb, type MockDbHandle } from "../../lib/test-utils/mock-d1";
+import { createRun } from "../../lib/commands/runs";
 import type { Env } from "../../lib/env";
-import type { AuthenticatedCommandPrincipal } from "../../lib/commands/types";
+import type { AuthenticatedCommandPrincipal, CommandIntent } from "../../lib/commands/types";
 
 const FOUNDER_PRINCIPAL: AuthenticatedCommandPrincipal = {
   actor_id: "pid_founder",
@@ -79,7 +80,7 @@ describe("commands routes", () => {
     const res = await handleCommandIntent(
       env,
       makeReq({
-        id: "ts-standup",
+        id: "ts-trace-signal",
         actor_id: "p",
         actor_kind: "paperclip_agent",
         auth_mode: "paperclip_token",
@@ -97,11 +98,11 @@ describe("commands routes", () => {
     expect(body.error.code).toBe("forbidden");
   });
 
-  it("rejects an employee principal forging founder on a founder-only command", async () => {
+  it("rejects an employee principal forging a founder body claim", async () => {
     const res = await handleCommandIntent(
       env,
       makeReq({
-        id: "ts-standup",
+        id: "ts-trace-signal",
         actor_id: "forged-founder",
         actor_kind: "founder",
         auth_mode: "cf_access",
@@ -149,7 +150,7 @@ describe("commands routes", () => {
     expect(mock.events.every((event) => event.actor_kind === "employee")).toBe(true);
   });
 
-  it("POST /v1/commands/intent with valid ts-standup returns 201 created (downstream route)", async () => {
+  it("POST /v1/commands/intent with retired ts-standup returns 410 without persistence", async () => {
     const res = await handleCommandIntent(
       env,
       makeReq({
@@ -161,18 +162,16 @@ describe("commands routes", () => {
         payload: {},
       }),
     );
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(410);
     const body = (await res.json()) as {
       ok: boolean;
-      data: { run_id: string; state: string };
+      error: { code: string; message: string };
     };
-    expect(body.ok).toBe(true);
-    expect(body.data.run_id.startsWith("run_")).toBe(true);
-    expect(body.data.state).toBe("created");
-    expect(mock.runs.size).toBe(1);
-    expect(mock.events.length).toBeGreaterThanOrEqual(2);
-    expect(mock.events.map((e) => e.kind)).toContain("command_received");
-    expect(mock.events.map((e) => e.kind)).toContain("run_created");
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe("command_retired");
+    expect(body.error.message).toContain("Hermes /ts-standup");
+    expect(mock.runs.size).toBe(0);
+    expect(mock.events).toHaveLength(0);
   });
 
   it("POST /v1/commands/intent with valid ts-trace-signal returns 201 accepted (local_worker route)", async () => {
@@ -206,7 +205,7 @@ describe("commands routes", () => {
     const created = await handleCommandIntent(
       env,
       makeReq({
-        id: "ts-standup",
+        id: "ts-trace-signal",
         actor_id: "f3",
         actor_kind: "founder",
         auth_mode: "cf_access",
@@ -226,14 +225,14 @@ describe("commands routes", () => {
       data: { id: string; state: string };
     };
     expect(body.data.id).toBe(runId);
-    expect(body.data.state).toBe("created");
+    expect(body.data.state).toBe("accepted");
   });
 
   it("POST /v1/commands/intent with invalid actor_kind returns 400 invalid_intent", async () => {
     const res = await handleCommandIntent(
       env,
       makeReq({
-        id: "ts-standup",
+        id: "ts-trace-signal",
         actor_id: "f",
         actor_kind: "not_a_role",
         auth_mode: "cf_access",
@@ -250,7 +249,7 @@ describe("commands routes", () => {
     const res = await handleCommandIntent(
       env,
       makeReq({
-        id: "ts-standup",
+        id: "ts-trace-signal",
         actor_id: "f",
         actor_kind: "founder",
         auth_mode: "fake_token",
@@ -267,7 +266,7 @@ describe("commands routes", () => {
     const res = await handleCommandIntent(
       env,
       makeReq({
-        id: "ts-standup",
+        id: "ts-trace-signal",
         actor_id: "f",
         actor_kind: "founder",
         auth_mode: "cf_access",
@@ -284,7 +283,7 @@ describe("commands routes", () => {
     await handleCommandIntent(
       env,
       makeReq({
-        id: "ts-standup",
+        id: "ts-trace-signal",
         actor_id: "f",
         actor_kind: "founder",
         auth_mode: "cf_access",
@@ -303,7 +302,7 @@ describe("commands routes", () => {
     const res = await handleCommandIntent(
       envNoDb,
       makeReq({
-        id: "ts-standup",
+        id: "ts-trace-signal",
         actor_id: "f",
         actor_kind: "founder",
         auth_mode: "cf_access",
@@ -370,12 +369,33 @@ describe("GET /v1/commands/runs", () => {
     expect(body.data.count).toBe(0);
   });
 
-  it("after creating 2 ts-standup runs, state=created returns both", async () => {
+  it("keeps a retired historical row readable by ID but outside the active run feed", async () => {
+    const legacyIntent: CommandIntent = {
+      id: "ts-standup",
+      actor_id: "historical-founder",
+      actor_kind: "founder",
+      auth_mode: "cf_access",
+      correlation_id: "historical-correlation",
+      payload: {},
+    };
+    const legacyRun = await createRun(mock.db, legacyIntent, 1_000);
+
+    const direct = await handleGetCommandRun(env, legacyRun.id);
+    expect(direct.status).toBe(200);
+
+    const listed = await handleListCommandRuns(env, listUrl("?state=created"));
+    expect(listed.status).toBe(200);
+    const body = (await listed.json()) as { data: { runs: unknown[]; count: number } };
+    expect(body.data.runs).toEqual([]);
+    expect(body.data.count).toBe(0);
+  });
+
+  it("after creating two local runs, state=accepted returns both", async () => {
     await handleCommandIntent(env, new Request("https://x/v1/commands/intent", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        id: "ts-standup", actor_id: "f1", actor_kind: "founder", auth_mode: "cf_access",
+        id: "ts-trace-signal", actor_id: "f1", actor_kind: "founder", auth_mode: "cf_access",
         correlation_id: "list-c1", payload: {},
       }),
     }));
@@ -383,101 +403,43 @@ describe("GET /v1/commands/runs", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        id: "ts-standup", actor_id: "f2", actor_kind: "founder", auth_mode: "cf_access",
+        id: "ts-trace-signal", actor_id: "f2", actor_kind: "founder", auth_mode: "cf_access",
         correlation_id: "list-c2", payload: {},
       }),
     }));
-    const res = await handleListCommandRuns(env, listUrl("?state=created"));
+    const res = await handleListCommandRuns(env, listUrl("?state=accepted"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       data: { runs: Array<{ command_id: string; state: string }>; count: number };
     };
     expect(body.data.count).toBe(2);
-    expect(body.data.runs.every((r) => r.command_id === "ts-standup")).toBe(true);
-    expect(body.data.runs.every((r) => r.state === "created")).toBe(true);
+    expect(body.data.runs.every((r) => r.command_id === "ts-trace-signal")).toBe(true);
+    expect(body.data.runs.every((r) => r.state === "accepted")).toBe(true);
   });
 
-  it("state=created&route=downstream_multica filters by route correctly", async () => {
-    // ts-standup is downstream_multica
-    await handleCommandIntent(env, new Request("https://x/v1/commands/intent", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        id: "ts-standup", actor_id: "f1", actor_kind: "founder", auth_mode: "cf_access",
-        correlation_id: "rt-c1", payload: {},
-      }),
-    }));
-    // ts-generate-brief is downstream_multica
-    await handleCommandIntent(env, new Request("https://x/v1/commands/intent", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        id: "ts-generate-brief", actor_id: "f1", actor_kind: "founder", auth_mode: "cf_access",
-        correlation_id: "rt-c2", payload: {},
-      }),
-    }));
-    // ts-trace-signal is local_worker — should be excluded from downstream_multica results
+  it("rejects retired owner routes from the run reader", async () => {
+    const res = await handleListCommandRuns(env, listUrl("?state=created&route=hermes_bridge"));
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("invalid_route");
+  });
+
+  it("state=accepted&route=local_worker returns the retained run", async () => {
     await handleCommandIntent(env, new Request("https://x/v1/commands/intent", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         id: "ts-trace-signal", actor_id: "f1", actor_kind: "founder", auth_mode: "cf_access",
-        correlation_id: "rt-c3", payload: {},
-      }),
-    }));
-
-    const res = await handleListCommandRuns(env, listUrl("?state=created&route=downstream_multica"));
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      data: { runs: Array<{ command_id: string }>; count: number };
-    };
-    const cmdIds = body.data.runs.map((r) => r.command_id);
-    expect(cmdIds).toContain("ts-standup");
-    expect(cmdIds).toContain("ts-generate-brief");
-    expect(cmdIds).not.toContain("ts-trace-signal");
-  });
-
-  it("state=created&route=local_worker excludes downstream_multica runs", async () => {
-    // ts-standup (downstream_multica) — stays in "created"
-    await handleCommandIntent(env, new Request("https://x/v1/commands/intent", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        id: "ts-standup", actor_id: "f1", actor_kind: "founder", auth_mode: "cf_access",
         correlation_id: "lw-c1", payload: {},
       }),
     }));
-    // ts-trace-signal (local_worker) flips to "accepted" immediately,
-    // so it will NOT appear in state=created results either. To exercise
-    // the route filter while having a row in 'created' that matches
-    // local_worker, we use a state that the local_worker route uses
-    // post-intake: "accepted". The route filter still applies.
-    await handleCommandIntent(env, new Request("https://x/v1/commands/intent", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        id: "ts-trace-signal", actor_id: "f1", actor_kind: "founder", auth_mode: "cf_access",
-        correlation_id: "lw-c2", payload: {},
-      }),
-    }));
 
-    // state=created&route=local_worker — should be empty because the only
-    // local_worker run is already 'accepted'.
-    const createdLocal = await handleListCommandRuns(env, listUrl("?state=created&route=local_worker"));
-    expect(createdLocal.status).toBe(200);
-    const bodyCreated = (await createdLocal.json()) as {
-      data: { runs: Array<{ command_id: string }>; count: number };
-    };
-    expect(bodyCreated.data.runs.map((r) => r.command_id)).not.toContain("ts-standup");
-    expect(bodyCreated.data.count).toBe(0);
-
-    // state=accepted&route=local_worker — should surface the ts-trace-signal row
     const acceptedLocal = await handleListCommandRuns(env, listUrl("?state=accepted&route=local_worker"));
     expect(acceptedLocal.status).toBe(200);
     const bodyAccepted = (await acceptedLocal.json()) as {
       data: { runs: Array<{ command_id: string }>; count: number };
     };
     expect(bodyAccepted.data.runs.map((r) => r.command_id)).toContain("ts-trace-signal");
-    expect(bodyAccepted.data.runs.map((r) => r.command_id)).not.toContain("ts-standup");
+    expect(bodyAccepted.data.count).toBe(1);
   });
 });

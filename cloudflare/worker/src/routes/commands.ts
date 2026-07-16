@@ -1,6 +1,11 @@
 import type { Env, D1DatabaseLike } from "../lib/env";
 import { jsonError, jsonOk } from "../lib/response";
-import { COMMAND_REGISTRY, getCommandSpec, isAuthorized } from "../lib/commands/registry";
+import {
+  COMMAND_REGISTRY,
+  getCommandSpec,
+  getRetiredCommandSpec,
+  isAuthorized,
+} from "../lib/commands/registry";
 import { createRun, getRunById, listRunsByState, recordAuditEvent, transitionRun } from "../lib/commands/runs";
 import type {
   ActorKind,
@@ -14,14 +19,12 @@ const ACTOR_KINDS = new Set<ActorKind>([
   "founder",
   "cofounder",
   "employee",
-  "multica_service",
   "paperclip_agent",
 ]);
 const AUTH_MODES = new Set<AuthMode>([
   "cf_access",
   "m2m",
   "app_bearer",
-  "aws_task_role",
   "paperclip_token",
 ]);
 
@@ -103,6 +106,9 @@ export async function handleCommandIntent(
   }
   const intent = v.value;
 
+  const retiredResponse = retiredCommandResponse(intent.id);
+  if (retiredResponse) return retiredResponse;
+
   const spec = getCommandSpec(intent.id);
   if (!spec) {
     return jsonError(
@@ -169,10 +175,8 @@ export async function handleCommandIntent(
       now,
     );
 
-    // local_worker commands transition to accepted immediately.
-    // downstream_multica commands stay in "created" until the cambium-bridge
-    // teamforge-consumer picks them up, dispatches via `multica issue assign`,
-    // and posts back via the Phase 2 callback route (POST /v1/commands/runs/:id/result).
+    // The registry contains only Worker-owned commands. Commands whose
+    // execution moved to Hermes or Cambium are rejected before persistence.
     if (spec.route === "local_worker") {
       await transitionRun(db, run.id, "accepted", now);
     }
@@ -186,6 +190,20 @@ export async function handleCommandIntent(
       500,
     );
   }
+}
+
+/** Return the credential-free tombstone for a retired command ID, if any. */
+export function retiredCommandResponse(commandId: string): Response | null {
+  const retiredSpec = getRetiredCommandSpec(commandId);
+  if (!retiredSpec) return null;
+  return jsonError(
+    {
+      code: "command_retired",
+      message: `${retiredSpec.id} is retired in TeamForge. Use ${retiredSpec.replacement_surface}; ${retiredSpec.replacement_owner} owns this command.`,
+      retryable: false,
+    },
+    410,
+  );
 }
 
 export async function handleGetCommandRun(env: Env, runId: string): Promise<Response> {
@@ -219,15 +237,10 @@ const VALID_RUN_STATES: readonly CommandRunState[] = [
   "cancelled",
 ];
 
-const VALID_ROUTES = ["downstream_multica", "local_worker"] as const;
+const VALID_ROUTES = ["local_worker"] as const;
 
 /**
- * Phase B queue interface: GET /v1/commands/runs?state=&route=&limit=
- *
- * The cambium-bridge teamforge-consumer polls this every ~5s to pick up new
- * runs and dispatch them via `multica issue assign`. Auth is via the same
- * `requireAppOrInternalAuth` helper used by other commands routes (m2m secret
- * or Bearer token or CF Access principal).
+ * Read existing command runs by state and optional active Worker route.
  */
 export async function handleListCommandRuns(env: Env, url: URL): Promise<Response> {
   const dbCheck = requireDb(env);
@@ -254,7 +267,7 @@ export async function handleListCommandRuns(env: Env, url: URL): Promise<Respons
   const state = stateParam as CommandRunState;
 
   const routeParam = url.searchParams.get("route");
-  let commandIds: string[] | null = null;
+  let commandIds = COMMAND_REGISTRY.map((spec) => spec.id);
   if (routeParam) {
     if (!(VALID_ROUTES as readonly string[]).includes(routeParam)) {
       return jsonError(

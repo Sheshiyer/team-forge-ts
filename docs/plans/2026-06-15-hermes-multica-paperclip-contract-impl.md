@@ -1,5 +1,7 @@
 # Hermes / MultiCA / Paperclip Command Contract — Implementation Plan
 
+> Historical record — superseded by the Hermes/Cambium retirement contract. Do not execute this plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the three-layer contract from `docs/plans/2026-06-14-hermes-multica-paperclip-command-contract-handoff.md`: TeamForge command registry + run records, MultiCA execution callback contract, Paperclip dedicated-agent coordination envelope. First connected prototype = read-heavy standup aggregation.
