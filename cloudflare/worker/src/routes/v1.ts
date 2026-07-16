@@ -60,6 +60,12 @@ import {
   handleRealtimeCloseout,
 } from "./realtime";
 import {
+  handleCreatePresenceSession,
+  handleDeletePresenceSession,
+  handleGetPresence,
+  handlePresenceHeartbeat,
+} from "./presence";
+import {
   handleGetClientProfile,
   handleGetClientProfiles,
   handleGetOnboardingFlows,
@@ -466,6 +472,26 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
       return jsonError(
         { code: "access_identity_required", message: "Registered Cloudflare Access identity required for realtime workspace.", retryable: false },
         401,
+        pathname.startsWith("/v1/realtime/presence") ? { headers: { "cache-control": "no-store" } } : undefined,
+      );
+    }
+
+    if (method === "POST" && pathname === "/v1/realtime/presence/session") {
+      return handleCreatePresenceSession(env, request, plexusPrincipal);
+    }
+    if (method === "POST" && pathname === "/v1/realtime/presence/heartbeat") {
+      return handlePresenceHeartbeat(env, request, plexusPrincipal);
+    }
+    if (method === "GET" && pathname === "/v1/realtime/presence") {
+      return handleGetPresence(env, plexusPrincipal);
+    }
+    const deletePresenceMatch = pathname.match(/^\/v1\/realtime\/presence\/([^/]+)\/([^/]+)$/);
+    if (method === "DELETE" && deletePresenceMatch) {
+      return handleDeletePresenceSession(
+        env,
+        decodeURIComponent(deletePresenceMatch[1]),
+        decodeURIComponent(deletePresenceMatch[2]),
+        plexusPrincipal,
       );
     }
 
