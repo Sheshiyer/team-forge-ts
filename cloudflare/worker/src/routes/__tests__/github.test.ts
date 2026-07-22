@@ -829,6 +829,40 @@ describe("GitHub App routes", () => {
     vi.unstubAllGlobals();
   });
 
+  it("does not end pagination early when duplicate IDs fill a page", async () => {
+    const binding = { workspace_id: "ws_test", installation_id: 84, account_id: 7611727, account_login: "Sheshiyer", account_type: "User", state: "active", repository_selection: "all", permissions_json: requiredInstallationPermissionsJson };
+    const db: D1DatabaseLike = {
+      prepare(sql: string) {
+        const statement = {
+          bind() { return statement; },
+          async first<T>() { return null as T | null; },
+          async all<T>() { return { results: (sql.includes("FROM github_workspace_installations b") ? [binding] : []) as T[] }; },
+          async run() { return { success: true, meta: { changes: 1 } }; },
+        };
+        return statement;
+      },
+    };
+    const pageOne = [
+      { id: 500, name: "repo-500", full_name: "Sheshiyer/repo-500", private: true, default_branch: "main", owner: { id: 7611727, login: "Sheshiyer" } },
+      ...Array.from({ length: 98 }, (_, index) => ({ id: 501 + index, name: `repo-${501 + index}`, full_name: `Sheshiyer/repo-${501 + index}`, private: true, default_branch: "main", owner: { id: 7611727, login: "Sheshiyer" } })),
+      { id: 500, name: "repo-500", full_name: "Sheshiyer/repo-500", private: true, default_branch: "main", owner: { id: 7611727, login: "Sheshiyer" } },
+    ];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/access_tokens")) return new Response(JSON.stringify({ token: "all-token", expires_at: new Date(Date.now() + 30 * 60_000).toISOString() }), { status: 201 });
+      if (url.endsWith("&page=1")) return new Response(JSON.stringify({ total_count: 100, repositories: pageOne }));
+      if (url.endsWith("&page=2")) return new Response(JSON.stringify({ total_count: 100, repositories: [{ id: 599, name: "repo-599", full_name: "Sheshiyer/repo-599", private: true, default_branch: "main", owner: { id: 7611727, login: "Sheshiyer" } }] }));
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+
+    const response = await handleGithubRepositories(env(db), principal("admin"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ data: { repositories: expect.arrayContaining([expect.objectContaining({ id: 599 })]) } });
+    expect((fetch as ReturnType<typeof vi.fn>).mock.calls.filter(([input]) => String(input).includes("/installation/repositories")).length).toBe(2);
+    vi.unstubAllGlobals();
+  });
+
   it("returns no options and retires stale facts when a selected installation grants zero repositories", async () => {
     const binding = { workspace_id: "ws_test", installation_id: 42, account_id: 8, account_login: "thoughtseed", account_type: "Organization", state: "active", repository_selection: "selected", permissions_json: requiredInstallationPermissionsJson };
     const runs: Array<{ sql: string; args: unknown[] }> = [];
@@ -861,6 +895,7 @@ describe("GitHub App routes", () => {
     await expect(response.json()).resolves.toMatchObject({ data: { repositories: [] } });
     expect(runs).toEqual(expect.arrayContaining([
       expect.objectContaining({ sql: expect.stringContaining("SET state = 'removed'"), args: expect.arrayContaining([42, 101]) }),
+      expect.objectContaining({ sql: expect.stringContaining("DELETE FROM project_github_verifications"), args: [42, 101] }),
     ]));
     vi.unstubAllGlobals();
   });
@@ -1011,7 +1046,7 @@ describe("GitHub App routes", () => {
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toMatchObject({ error: { code: "github_repository_snapshot_failed" } });
-    expect(batches).toEqual([2]);
+    expect(batches).toEqual([3]);
     vi.unstubAllGlobals();
   });
 

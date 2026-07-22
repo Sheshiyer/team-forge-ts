@@ -1198,6 +1198,10 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
     const observedAt = now();
     let resultReason = "fact_updated";
     if (eventName === "installation" && lifecycleAction === "created") {
+      const existingCreatedFact = await queryFirst<{ state: "active" | "suspended" | "deleted" }>(db, "SELECT state FROM github_installation_facts WHERE installation_id = ? LIMIT 1", installationId);
+      if (existingCreatedFact?.state === "deleted") {
+        throw new GithubControlPlaneError("github_installation_revoked", "A deleted GitHub installation cannot be resurrected by a later lifecycle event.", 409, true);
+      }
       await execute(
         db,
         `INSERT INTO github_installation_facts
@@ -1250,6 +1254,7 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
     const installationDeleted = eventName === "installation" && lifecycleAction === "deleted";
     if (installationDeleted) {
       await execute(db, "UPDATE github_installation_repositories SET state = 'removed', updated_at = ? WHERE installation_id = ?", observedAt, installationId);
+      await execute(db, "DELETE FROM project_github_verifications WHERE installation_id = ?", installationId);
     } else {
       const repositoryFactState = await queryFirst<{ state: string }>(db, "SELECT state FROM github_installation_facts WHERE installation_id = ? LIMIT 1", installationId);
       const repositoryState = repositoryFactState?.state === "active" ? "active" : "removed";
@@ -1282,6 +1287,7 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
         const repo = webhookRepository(value, accountTarget);
         if (!repo) throw new GithubControlPlaneError("github_webhook_repository_invalid", "Signed webhook contains an invalid removed repository fact.", 400);
         await execute(db, "UPDATE github_installation_repositories SET state = 'removed', updated_at = ? WHERE installation_id = ? AND repository_id = ?", observedAt, installationId, repo.id);
+        await execute(db, "DELETE FROM project_github_verifications WHERE installation_id = ? AND repository_id = ?", installationId, repo.id);
       }
     }
     const storedFact = await queryFirst<{ installer_sender_id: number; state: string }>(db, "SELECT installer_sender_id, state FROM github_installation_facts WHERE installation_id = ? LIMIT 1", installationId);
@@ -1357,18 +1363,41 @@ async function discoverRepositories(env: Env, binding: InstallationBindingRow): 
   const client = new GithubAppClient(env);
   const token = await client.createInstallationToken(binding.installation_id, null, "discovery");
   const repositories: GithubRepository[] = [];
+  const discoveredIds = new Set<number>();
+  let expectedTotalCount: number | null = null;
   let complete = false;
   for (let page = 1; page <= GITHUB_REPOSITORY_PAGE_LIMIT; page += 1) {
     const response = await client.request<{ repositories: GithubRepository[]; total_count?: number }>(
       token.token,
       `/installation/repositories?per_page=${GITHUB_REPOSITORY_PAGE_SIZE}&page=${page}`,
     );
-    repositories.push(...response.repositories);
+    if (!response || !Array.isArray(response.repositories)) {
+      throw new GithubControlPlaneError("github_repository_discovery_payload_invalid", "GitHub returned an invalid repository discovery payload.", 502, true);
+    }
     const totalCount = response.total_count;
     const totalCountKnown = typeof totalCount === "number" && Number.isSafeInteger(totalCount) && totalCount >= 0;
-    if ((totalCountKnown && repositories.length >= totalCount) || response.repositories.length < GITHUB_REPOSITORY_PAGE_SIZE) {
+    if (response.total_count !== undefined && !totalCountKnown) {
+      throw new GithubControlPlaneError("github_repository_discovery_payload_invalid", "GitHub returned an invalid repository total count.", 502, true);
+    }
+    if (totalCountKnown) {
+      if (expectedTotalCount !== null && expectedTotalCount !== totalCount) {
+        throw new GithubControlPlaneError("github_repository_discovery_inconsistent", "GitHub repository pagination returned inconsistent totals.", 502, true);
+      }
+      expectedTotalCount = totalCount;
+    }
+    repositories.push(...response.repositories);
+    for (const repository of response.repositories) {
+      if (Number.isSafeInteger(repository?.id) && repository.id > 0) discoveredIds.add(repository.id);
+    }
+    if (totalCountKnown && discoveredIds.size > totalCount) {
+      throw new GithubControlPlaneError("github_repository_discovery_inconsistent", "GitHub repository pagination returned more unique repositories than its total count.", 502, true);
+    }
+    if ((totalCountKnown && discoveredIds.size >= totalCount) || (!totalCountKnown && response.repositories.length < GITHUB_REPOSITORY_PAGE_SIZE)) {
       complete = true;
       break;
+    }
+    if (response.repositories.length < GITHUB_REPOSITORY_PAGE_SIZE) {
+      throw new GithubControlPlaneError("github_repository_discovery_incomplete", "GitHub repository pagination ended before the advertised complete inventory was received.", 502, true);
     }
   }
   if (!complete) {
@@ -1381,9 +1410,15 @@ async function discoverRepositories(env: Env, binding: InstallationBindingRow): 
   }
   const repositoriesById = new Map<number, GithubRepository>();
   for (const repo of repositories) {
-    if (!Number.isSafeInteger(repo.id) || repo.id <= 0 || !Number.isSafeInteger(repo.owner?.id) || repo.owner.id <= 0 ||
+    if (!repo || !Number.isSafeInteger(repo.id) || repo.id <= 0 || !Number.isSafeInteger(repo.owner?.id) || repo.owner.id <= 0 ||
       !repo.owner.login || !repo.name || !repo.full_name || !repo.default_branch) {
       throw new GithubControlPlaneError("github_repository_identity_invalid", "GitHub returned an invalid numeric repository identity.", 502, true);
+    }
+    const fullNameParts = repo.full_name.split("/");
+    if (repo.owner.id !== binding.account_id || repo.owner.login.toLowerCase() !== binding.account_login.toLowerCase() ||
+      fullNameParts.length !== 2 || fullNameParts[0].toLowerCase() !== repo.owner.login.toLowerCase() ||
+      fullNameParts[1].toLowerCase() !== repo.name.toLowerCase()) {
+      throw new GithubControlPlaneError("github_repository_account_mismatch", "GitHub returned a repository outside the installation account authority.", 502, true);
     }
     const previous = repositoriesById.get(repo.id);
     if (previous && (previous.full_name !== repo.full_name || previous.owner.id !== repo.owner.id || previous.owner.login.toLowerCase() !== repo.owner.login.toLowerCase())) {
@@ -1403,8 +1438,12 @@ async function discoverRepositories(env: Env, binding: InstallationBindingRow): 
   for (const row of known) {
     if (!liveIds.has(row.repository_id)) {
       statements.push({
-        sql: "UPDATE github_installation_repositories SET state = 'removed', updated_at = ? WHERE installation_id = ? AND repository_id = ?",
-        params: [timestamp, binding.installation_id, row.repository_id],
+        sql: "UPDATE github_installation_repositories SET state = 'removed', updated_at = ? WHERE installation_id = ? AND repository_id = ? AND updated_at <= ?",
+        params: [timestamp, binding.installation_id, row.repository_id, timestamp],
+      });
+      statements.push({
+        sql: "DELETE FROM project_github_verifications WHERE installation_id = ? AND repository_id = ?",
+        params: [binding.installation_id, row.repository_id],
       });
     }
   }
@@ -1416,7 +1455,8 @@ async function discoverRepositories(env: Env, binding: InstallationBindingRow): 
        ON CONFLICT(installation_id, repository_id) DO UPDATE SET
          owner_login = excluded.owner_login, name = excluded.name, full_name = excluded.full_name,
          is_private = excluded.is_private, default_branch = excluded.default_branch, state = 'active',
-         observed_at = excluded.observed_at, updated_at = excluded.updated_at`,
+         observed_at = excluded.observed_at, updated_at = excluded.updated_at
+       WHERE excluded.observed_at >= github_installation_repositories.observed_at`,
       params: [
         binding.installation_id,
         repo.id,
@@ -1513,6 +1553,10 @@ export async function handleGithubRepoVerify(env: Env, request: Request, project
     const token = await client.createInstallationToken(binding.installation_id, [repositoryId], "metadata");
     const repo = await client.request<GithubRepository>(token.token, `/repos/${encodeURIComponent(authority.owner_login)}/${encodeURIComponent(authority.name)}`);
     if (repo.id !== repositoryId) throw new GithubControlPlaneError("github_repository_identity_mismatch", "GitHub repository identity did not match the requested numeric ID.", 409);
+    if (repo.owner.id !== binding.account_id || repo.owner.login.toLowerCase() !== binding.account_login.toLowerCase() ||
+      repo.name.toLowerCase() !== authority.name.toLowerCase() || repo.full_name.toLowerCase() !== authority.full_name.toLowerCase()) {
+      throw new GithubControlPlaneError("github_repository_metadata_mismatch", "GitHub repository metadata did not match the authorized repository binding.", 409);
+    }
     const verifiedAt = now();
     await execute(
       database(env),
@@ -1563,7 +1607,9 @@ async function getVerifiedRepository(env: Env, projectId: string, workspaceId: s
        FROM project_github_verifications v
        JOIN github_installation_repositories r
          ON r.installation_id = v.installation_id AND r.repository_id = v.repository_id
-      WHERE v.project_id = ? AND v.workspace_id = ? AND r.state = 'active' LIMIT 1`,
+      WHERE v.project_id = ? AND v.workspace_id = ? AND r.state = 'active'
+        AND v.repo_owner = r.owner_login AND v.repo_name = r.name AND v.default_branch = r.default_branch
+      LIMIT 1`,
     projectId,
     workspaceId,
   );
