@@ -61,6 +61,11 @@ interface GithubInstallationPolicy {
   allowedTargetById: Map<number, GithubInstallationAccountTarget>;
 }
 
+type GithubRepositorySelection = "selected" | "all";
+
+const GITHUB_REPOSITORY_PAGE_SIZE = 100;
+const GITHUB_REPOSITORY_PAGE_LIMIT = 100;
+
 interface InstallationBindingRow {
   workspace_id: string;
   installation_id: number;
@@ -89,7 +94,7 @@ interface InstallationFactRow {
 type InstallationStatus = "connected" | "suspended" | "forbidden";
 type InstallationReason =
   | "connected"
-  | "repository_scope_all"
+  | "repository_selection_invalid"
   | "permissions_incomplete"
   | "installation_suspended"
   | "installation_revoked";
@@ -342,6 +347,10 @@ function hasRequiredInstallationPermissions(permissionsJson: string): boolean {
   }
 }
 
+function githubRepositorySelection(value: unknown): GithubRepositorySelection | null {
+  return value === "selected" || value === "all" ? value : null;
+}
+
 function installationDisposition(
   policy: GithubInstallationPolicy,
   binding: InstallationBindingRow,
@@ -349,7 +358,7 @@ function installationDisposition(
   if (!isAllowedInstallationTarget(policy, binding) || binding.state === "revoked") {
     return { status: "forbidden", reason: "installation_revoked" };
   }
-  if (binding.repository_selection !== "selected") return { status: "forbidden", reason: "repository_scope_all" };
+  if (!githubRepositorySelection(binding.repository_selection)) return { status: "forbidden", reason: "repository_selection_invalid" };
   if (binding.state === "suspended") return { status: "suspended", reason: "installation_suspended" };
   if (!hasRequiredInstallationPermissions(binding.permissions_json)) return { status: "forbidden", reason: "permissions_incomplete" };
   return { status: "connected", reason: "connected" };
@@ -414,7 +423,7 @@ async function getBinding(env: Env, workspaceId: string, installationId: number)
 
 function assertBindingIsActive(env: Env, binding: InstallationBindingRow): InstallationBindingRow {
   if (!binding) throw new GithubControlPlaneError("github_unconfigured", "No GitHub App installation is connected to this workspace.", 409);
-  if (binding.repository_selection !== "selected") throw new GithubControlPlaneError("github_repository_selection_forbidden", "GitHub App access to all repositories is forbidden.", 403);
+  if (!githubRepositorySelection(binding.repository_selection)) throw new GithubControlPlaneError("github_repository_selection_forbidden", "GitHub App repository selection is unsupported.", 403);
   if (binding.state === "suspended") throw new GithubControlPlaneError("github_suspended", "The workspace GitHub App installation is suspended.", 409);
   if (binding.state !== "active") throw new GithubControlPlaneError("github_forbidden", "The workspace GitHub App installation is revoked.", 403);
   if (!hasRequiredInstallationPermissions(binding.permissions_json)) throw new GithubControlPlaneError("github_installation_permissions_incomplete", "GitHub App installation permissions are incomplete.", 403);
@@ -432,7 +441,7 @@ async function assertActiveBindings(env: Env, workspaceId: string): Promise<Inst
   const activeBindings = (await getBindings(env, workspaceId)).filter((binding) => binding.state === "active");
   if (activeBindings.length === 0) throw new GithubControlPlaneError("github_unconfigured", "No active GitHub App installation is connected to this workspace.", 409);
   const policy = githubInstallationPolicy(env);
-  const bindings = activeBindings.filter((binding) => binding.repository_selection === "selected" &&
+  const bindings = activeBindings.filter((binding) => githubRepositorySelection(binding.repository_selection) !== null &&
     hasRequiredInstallationPermissions(binding.permissions_json) && isAllowedInstallationTarget(policy, binding));
   if (bindings.length === 0) throw new GithubControlPlaneError("github_unconfigured", "No active GitHub App installation is connected to this workspace.", 409);
   return bindings;
@@ -532,7 +541,7 @@ export async function reconcileBinding(env: Env, nonceHash: string): Promise<boo
               repository_selection, permissions_json, state
          FROM github_installation_facts
         WHERE account_id = ? AND LOWER(account_login) = LOWER(?) AND account_type = ?
-          AND installer_sender_id = ? AND repository_selection = 'selected' AND state <> 'deleted'
+          AND installer_sender_id = ? AND repository_selection IN ('selected', 'all') AND state <> 'deleted'
         ORDER BY observed_at DESC, installation_id DESC
         LIMIT 2`,
       state.target_account_id,
@@ -554,9 +563,9 @@ export async function reconcileBinding(env: Env, nonceHash: string): Promise<boo
     );
     if (repaired !== 1) return false;
   }
-  if (fact.repository_selection !== "selected") {
+  if (!githubRepositorySelection(fact.repository_selection)) {
     await execute(db, "UPDATE github_connection_states SET status = 'rejected', updated_at = ? WHERE nonce_hash = ?", now(), nonceHash);
-    throw new GithubControlPlaneError("github_repository_selection_forbidden", "GitHub App must be installed with only selected repositories.", 403);
+    throw new GithubControlPlaneError("github_repository_selection_forbidden", "GitHub App repository selection is unsupported.", 403);
   }
   if (!hasRequiredInstallationPermissions(fact.permissions_json)) {
     await execute(db, "UPDATE github_connection_states SET status = 'rejected', updated_at = ? WHERE nonce_hash = ?", now(), nonceHash);
@@ -642,7 +651,13 @@ export async function handleGithubConnection(env: Env, principal: PlexusPrincipa
     const bindings = await getBindings(env, principal!.workspaceId);
     const installations = bindings.map((binding) => {
       const disposition = installationDisposition(installationPolicy, binding);
-      return { installationId: binding.installation_id, ...disposition, account: installationTargetOf(binding) };
+      const repositorySelection = githubRepositorySelection(binding.repository_selection);
+      return {
+        installationId: binding.installation_id,
+        ...(repositorySelection ? { repositorySelection } : {}),
+        ...disposition,
+        account: installationTargetOf(binding),
+      };
     });
     const pendingStates = await queryAll<Pick<ConnectionStateRow,
       "target_account_id" | "target_account_login" | "target_account_type" | "status" | "untrusted_installation_id">>(
@@ -665,7 +680,15 @@ export async function handleGithubConnection(env: Env, principal: PlexusPrincipa
     const targets = installationPolicy.allowedTargets.map((account) => {
       const binding = bindings.find((candidate) => candidate.account_id === account.id && candidate.account_type === account.type &&
         candidate.account_login.toLowerCase() === account.login.toLowerCase());
-      if (binding) return { account, installationId: binding.installation_id, ...installationDisposition(installationPolicy, binding) };
+      if (binding) {
+        const repositorySelection = githubRepositorySelection(binding.repository_selection);
+        return {
+          account,
+          installationId: binding.installation_id,
+          ...(repositorySelection ? { repositorySelection } : {}),
+          ...installationDisposition(installationPolicy, binding),
+        };
+      }
 
       const pending = pendingStates.find((candidate) => candidate.target_account_id === account.id &&
         candidate.target_account_type === account.type && candidate.target_account_login?.toLowerCase() === account.login.toLowerCase());
@@ -674,22 +697,23 @@ export async function handleGithubConnection(env: Env, principal: PlexusPrincipa
 
       const exactFacts = facts.filter((fact) => fact.account_id === account.id && fact.account_type === account.type &&
         fact.account_login.toLowerCase() === account.login.toLowerCase());
-      const selectedFacts = exactFacts.filter((fact) => fact.repository_selection === "selected");
-      if (selectedFacts.length > 1) return { account, status: "forbidden" as const, reason: "ambiguous_installation" as const };
-      if (selectedFacts.length === 0) {
-        const allScope = exactFacts[0];
-        if (allScope) return { account, installationId: allScope.installation_id, status: "forbidden" as const, reason: "repository_scope_all" as const };
+      const supportedFacts = exactFacts.filter((fact) => githubRepositorySelection(fact.repository_selection));
+      if (supportedFacts.length > 1) return { account, status: "forbidden" as const, reason: "ambiguous_installation" as const };
+      if (supportedFacts.length === 0) {
+        const invalidScope = exactFacts[0];
+        if (invalidScope) return { account, installationId: invalidScope.installation_id, status: "forbidden" as const, reason: "repository_selection_invalid" as const };
         return { account, status: "pending" as const, reason: "trust_anchor_missing" as const };
       }
-      const fact = selectedFacts[0];
+      const fact = supportedFacts[0];
+      const repositorySelection = githubRepositorySelection(fact.repository_selection)!;
       if (pending.untrusted_installation_id !== fact.installation_id) {
-        return { account, installationId: fact.installation_id, status: "forbidden" as const, reason: "installation_hint_mismatch" as const };
+        return { account, installationId: fact.installation_id, repositorySelection, status: "forbidden" as const, reason: "installation_hint_mismatch" as const };
       }
-      if (fact.state === "suspended") return { account, installationId: fact.installation_id, status: "suspended" as const, reason: "installation_suspended" as const };
+      if (fact.state === "suspended") return { account, installationId: fact.installation_id, repositorySelection, status: "suspended" as const, reason: "installation_suspended" as const };
       if (!hasRequiredInstallationPermissions(fact.permissions_json)) {
-        return { account, installationId: fact.installation_id, status: "forbidden" as const, reason: "permissions_incomplete" as const };
+        return { account, installationId: fact.installation_id, repositorySelection, status: "forbidden" as const, reason: "permissions_incomplete" as const };
       }
-      return { account, installationId: fact.installation_id, status: "pending" as const, reason: "oauth_pending" as const };
+      return { account, installationId: fact.installation_id, repositorySelection, status: "pending" as const, reason: "oauth_pending" as const };
     });
     const status = targets.some((target) => target.status === "connected") ? "connected" as const
       : targets.some((target) => target.status === "suspended") ? "suspended" as const
@@ -761,7 +785,7 @@ export async function handleGithubActor(env: Env, principal: PlexusPrincipal | n
     const policyPayload = actorPolicyPayload(policy);
     const bindings = await getBindings(env, principal!.workspaceId);
     if (bindings.length === 0) return jsonOk({ status: "unconfigured" as const, ...policyPayload });
-    const activeBindings = bindings.filter((binding) => binding.state === "active" && binding.repository_selection === "selected" &&
+    const activeBindings = bindings.filter((binding) => binding.state === "active" && githubRepositorySelection(binding.repository_selection) !== null &&
       isAllowedInstallationTarget(githubInstallationPolicy(env), binding));
     if (activeBindings.length === 0) {
       return jsonOk({ status: "forbidden" as const, ...policyPayload });
@@ -1194,8 +1218,8 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
     } else {
       const existingFact = await queryFirst<{ installation_id: number; state: "active" | "suspended" | "deleted" }>(db, "SELECT installation_id, state FROM github_installation_facts WHERE installation_id = ? LIMIT 1", installationId);
       if (!existingFact) {
-        if (lifecycleAction === "deleted" || repositorySelection !== "selected") {
-          throw new GithubControlPlaneError("github_installation_untrusted", "Installation lifecycle event cannot bootstrap a selected non-deleted trust fact.", 409, true);
+        if (lifecycleAction === "deleted") {
+          throw new GithubControlPlaneError("github_installation_untrusted", "Installation lifecycle event cannot bootstrap a deleted trust fact.", 409, true);
         }
         const initialState = lifecycleAction === "suspend" ? "suspended" : "active";
         await execute(
@@ -1288,60 +1312,137 @@ export async function handleGithubWebhook(env: Env, request: Request): Promise<R
   }
 }
 
+interface GithubBatchDatabase extends ReturnType<typeof database> {
+  batch?(statements: Array<{ run(): Promise<unknown> }>): Promise<unknown[]>;
+}
+
+function prepareGithubMutation(
+  db: ReturnType<typeof database>,
+  sql: string,
+  params: unknown[],
+): { run(): Promise<unknown> } {
+  const statement = db.prepare(sql);
+  return (params.length ? statement.bind(...params) : statement) as unknown as { run(): Promise<unknown> };
+}
+
+async function executeAtomicStatements(
+  db: ReturnType<typeof database>,
+  statements: Array<{ sql: string; params: unknown[] }>,
+): Promise<void> {
+  const batchDb = db as GithubBatchDatabase;
+  if (typeof batchDb.batch === "function") {
+    await batchDb.batch(statements.map(({ sql, params }) => prepareGithubMutation(db, sql, params)));
+    return;
+  }
+  let transactionStarted = false;
+  try {
+    await execute(db, "BEGIN IMMEDIATE TRANSACTION");
+    transactionStarted = true;
+    for (const { sql, params } of statements) await execute(db, sql, ...params);
+    await execute(db, "COMMIT");
+    transactionStarted = false;
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        await execute(db, "ROLLBACK");
+      } catch {
+        // Best-effort rollback only.
+      }
+    }
+    throw error;
+  }
+}
+
 async function discoverRepositories(env: Env, binding: InstallationBindingRow): Promise<GithubRepository[]> {
   const client = new GithubAppClient(env);
   const token = await client.createInstallationToken(binding.installation_id, null, "discovery");
   const repositories: GithubRepository[] = [];
   let complete = false;
-  for (let page = 1; page <= 100; page += 1) {
-    const response = await client.request<{ repositories: GithubRepository[] }>(token.token, `/installation/repositories?per_page=100&page=${page}`);
+  for (let page = 1; page <= GITHUB_REPOSITORY_PAGE_LIMIT; page += 1) {
+    const response = await client.request<{ repositories: GithubRepository[]; total_count?: number }>(
+      token.token,
+      `/installation/repositories?per_page=${GITHUB_REPOSITORY_PAGE_SIZE}&page=${page}`,
+    );
     repositories.push(...response.repositories);
-    if (response.repositories.length < 100) {
+    const totalCount = response.total_count;
+    const totalCountKnown = typeof totalCount === "number" && Number.isSafeInteger(totalCount) && totalCount >= 0;
+    if ((totalCountKnown && repositories.length >= totalCount) || response.repositories.length < GITHUB_REPOSITORY_PAGE_SIZE) {
       complete = true;
       break;
     }
   }
-  const timestamp = now();
+  if (!complete) {
+    throw new GithubControlPlaneError(
+      "github_repository_discovery_incomplete",
+      "GitHub repository discovery exceeded the safe pagination limit; no partial snapshot was persisted.",
+      502,
+      true,
+    );
+  }
+  const repositoriesById = new Map<number, GithubRepository>();
   for (const repo of repositories) {
     if (!Number.isSafeInteger(repo.id) || repo.id <= 0 || !Number.isSafeInteger(repo.owner?.id) || repo.owner.id <= 0 ||
       !repo.owner.login || !repo.name || !repo.full_name || !repo.default_branch) {
       throw new GithubControlPlaneError("github_repository_identity_invalid", "GitHub returned an invalid numeric repository identity.", 502, true);
     }
+    const previous = repositoriesById.get(repo.id);
+    if (previous && (previous.full_name !== repo.full_name || previous.owner.id !== repo.owner.id || previous.owner.login.toLowerCase() !== repo.owner.login.toLowerCase())) {
+      throw new GithubControlPlaneError("github_repository_identity_conflict", "GitHub returned contradictory metadata for one repository ID.", 502, true);
+    }
+    repositoriesById.set(repo.id, repo);
   }
-  const liveIds = new Set(repositories.filter((repo) => Number.isSafeInteger(repo.id) && repo.id > 0).map((repo) => repo.id));
+  const normalizedRepositories = [...repositoriesById.values()].sort((left, right) => left.id - right.id);
+  const timestamp = now();
+  const liveIds = new Set(normalizedRepositories.map((repo) => repo.id));
   const known = await queryAll<{ repository_id: number }>(
     database(env),
     "SELECT repository_id FROM github_installation_repositories WHERE installation_id = ? AND state = 'active'",
     binding.installation_id,
   );
-  for (const row of complete ? known : []) {
+  const statements: Array<{ sql: string; params: unknown[] }> = [];
+  for (const row of known) {
     if (!liveIds.has(row.repository_id)) {
-      await execute(database(env), "UPDATE github_installation_repositories SET state = 'removed', updated_at = ? WHERE installation_id = ? AND repository_id = ?", timestamp, binding.installation_id, row.repository_id);
+      statements.push({
+        sql: "UPDATE github_installation_repositories SET state = 'removed', updated_at = ? WHERE installation_id = ? AND repository_id = ?",
+        params: [timestamp, binding.installation_id, row.repository_id],
+      });
     }
   }
-  for (const repo of repositories) {
-    if (!Number.isSafeInteger(repo.id) || !repo.owner?.login || !repo.name) continue;
-    await execute(
-      database(env),
-      `INSERT INTO github_installation_repositories
+  for (const repo of normalizedRepositories) {
+    statements.push({
+      sql: `INSERT INTO github_installation_repositories
        (installation_id, repository_id, owner_login, name, full_name, is_private, default_branch, state, observed_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
        ON CONFLICT(installation_id, repository_id) DO UPDATE SET
          owner_login = excluded.owner_login, name = excluded.name, full_name = excluded.full_name,
          is_private = excluded.is_private, default_branch = excluded.default_branch, state = 'active',
          observed_at = excluded.observed_at, updated_at = excluded.updated_at`,
-      binding.installation_id,
-      repo.id,
-      repo.owner.login,
-      repo.name,
-      repo.full_name,
-      repo.private ? 1 : 0,
-      repo.default_branch,
-      timestamp,
-      timestamp,
-    );
+      params: [
+        binding.installation_id,
+        repo.id,
+        repo.owner.login,
+        repo.name,
+        repo.full_name,
+        repo.private ? 1 : 0,
+        repo.default_branch,
+        timestamp,
+        timestamp,
+      ],
+    });
   }
-  return repositories;
+  if (statements.length > 0) {
+    try {
+      await executeAtomicStatements(database(env), statements);
+    } catch {
+      throw new GithubControlPlaneError(
+        "github_repository_snapshot_failed",
+        "The repository snapshot could not be committed atomically; the previous authority remains in place.",
+        503,
+        true,
+      );
+    }
+  }
+  return normalizedRepositories;
 }
 
 export async function handleGithubRepositories(env: Env, principal: PlexusPrincipal | null): Promise<Response> {
@@ -1349,8 +1450,14 @@ export async function handleGithubRepositories(env: Env, principal: PlexusPrinci
   if (denied) return denied;
   try {
     const bindings = await assertActiveBindings(env, principal!.workspaceId);
-    const repositories = (await Promise.all(bindings.map(async (binding) => ({ binding, repositories: await discoverRepositories(env, binding) }))))
+    const discovered = (await Promise.all(bindings.map(async (binding) => ({ binding, repositories: await discoverRepositories(env, binding) }))))
       .flatMap(({ binding, repositories: installationRepositories }) => installationRepositories.map((repo) => ({ binding, repo })));
+    const repositories = [...new Map(discovered.map((entry) => [entry.repo.id, entry])).values()]
+      .sort((left, right) => {
+        const leftName = left.repo.full_name.toLowerCase();
+        const rightName = right.repo.full_name.toLowerCase();
+        return leftName < rightName ? -1 : leftName > rightName ? 1 : left.repo.id - right.repo.id;
+      });
     return jsonOk({
       status: "connected" as const,
       repositories: repositories.map(({ binding, repo }) => ({
@@ -1361,6 +1468,7 @@ export async function handleGithubRepositories(env: Env, principal: PlexusPrinci
         defaultBranch: repo.default_branch,
         owner: repo.owner.login,
         installationId: binding.installation_id,
+        repositorySelection: githubRepositorySelection(binding.repository_selection),
         account: installationTargetOf(binding),
       })),
     });
@@ -1439,6 +1547,7 @@ export async function handleGithubRepoVerify(env: Env, request: Request, project
         defaultBranch: repo.default_branch,
         verifiedAt,
         installationId: binding.installation_id,
+        repositorySelection: githubRepositorySelection(binding.repository_selection),
         account: installationTargetOf(binding),
       },
     });
