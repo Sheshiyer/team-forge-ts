@@ -1433,6 +1433,71 @@ describe("GitHub App routes", () => {
     vi.unstubAllGlobals();
   });
 
+  it("uses a signed installation fact for a state-less GitHub settings return without mutating authority", async () => {
+    const nonceHash = await sha256Hex("nonce-stateless-settings-return");
+    const fixture = connectionFlowDb(nonceHash);
+    const secret = "webhook-test-secret";
+    const callbackEnv = { ...env(fixture.db), TF_GITHUB_APP_WEBHOOK_SECRET: secret };
+    const payload = JSON.stringify({
+      action: "created",
+      installation: {
+        id: 42,
+        account: { id: 8, login: "thoughtseed", type: "Organization" },
+        repository_selection: "all",
+        permissions: requiredInstallationPermissions,
+      },
+      sender: { id: 77, login: "installer" },
+      repositories: [],
+    });
+    const webhook = await handleGithubWebhook(callbackEnv, new Request("https://worker.test/v1/github/webhook", {
+      method: "POST",
+      headers: {
+        "x-hub-signature-256": await webhookSignature(payload, secret),
+        "x-github-delivery": "delivery-stateless-settings-return",
+        "x-github-event": "installation",
+      },
+      body: payload,
+    }));
+    expect(webhook.status).toBe(200);
+    expect(fixture.fact()).toMatchObject({
+      installation_id: 42,
+      account_id: 8,
+      repository_selection: "all",
+      state: "active",
+    });
+    const stateBeforeCallback = { ...fixture.state };
+
+    const callbackUrl = new URL("https://worker.test/v1/github/callback?installation_id=42&setup_action=update");
+    const response = await handleGithubCallback(callbackEnv, new Request(callbackUrl), callbackUrl);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        status: "pending",
+        target: { id: 8, login: "thoughtseed", type: "Organization" },
+      },
+    });
+    expect(fixture.state).toEqual(stateBeforeCallback);
+    expect(fixture.binding()).toBeNull();
+  });
+
+  it("keeps an unverified state-less GitHub installation return retryable and fail-closed", async () => {
+    const nonceHash = await sha256Hex("nonce-stateless-installation-unverified");
+    const fixture = connectionFlowDb(nonceHash);
+    const callbackUrl = new URL("https://worker.test/v1/github/callback?installation_id=42&setup_action=install");
+
+    const response = await handleGithubCallback(env(fixture.db), new Request(callbackUrl), callbackUrl);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: "github_installation_fact_pending",
+        retryable: true,
+      },
+    });
+    expect(fixture.binding()).toBeNull();
+  });
+
   it("returns a typed retryable error when the GitHub OAuth transport fails", async () => {
     const nonce = "nonce-oauth-transport";
     const nonceHash = await sha256Hex(nonce);

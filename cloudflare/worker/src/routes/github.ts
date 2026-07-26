@@ -922,9 +922,50 @@ async function handleGithubActorCallback(
   }
 }
 
+async function handleStatelessGithubInstallationCallback(env: Env, request: Request, url: URL): Promise<Response> {
+  const installationParam = url.searchParams.get("installation_id");
+  const setupAction = url.searchParams.get("setup_action");
+  const installationId = installationParam && /^\d+$/.test(installationParam) ? Number(installationParam) : null;
+  if (!installationId || !Number.isSafeInteger(installationId)) {
+    throw new GithubControlPlaneError("github_installation_hint_invalid", "Installation ID hint must be numeric.", 400);
+  }
+  if (setupAction !== "install" && setupAction !== "update") {
+    throw new GithubControlPlaneError("github_callback_invalid", "GitHub installation setup action is invalid.", 400);
+  }
+
+  const fact = await queryFirst<InstallationFactRow>(
+    database(env),
+    "SELECT installation_id, installer_sender_id, account_id, account_login, account_type, repository_selection, permissions_json, state FROM github_installation_facts WHERE installation_id = ? LIMIT 1",
+    installationId,
+  );
+  if (!fact || fact.state === "deleted") {
+    throw new GithubControlPlaneError(
+      "github_installation_fact_pending",
+      "The signed GitHub installation event has not been verified yet. Return to Plexus and refresh.",
+      409,
+      true,
+    );
+  }
+  if (fact.account_type !== "Organization" && fact.account_type !== "User") {
+    throw new GithubControlPlaneError("github_installation_account_forbidden", "GitHub App installation account type is invalid.", 403);
+  }
+  if (!githubRepositorySelection(fact.repository_selection)) {
+    throw new GithubControlPlaneError("github_repository_selection_forbidden", "GitHub App repository selection is unsupported.", 403);
+  }
+
+  const target = { id: fact.account_id, login: fact.account_login, type: fact.account_type };
+  return githubCallbackCompletion(request, plexusGithubInstallationReturnUrl(env, target), {
+    status: "pending" as const,
+    target,
+  });
+}
+
 export async function handleGithubCallback(env: Env, request: Request, url: URL): Promise<Response> {
   try {
     const stateValue = url.searchParams.get("state") ?? "";
+    if (!stateValue && (url.searchParams.has("installation_id") || url.searchParams.has("setup_action"))) {
+      return await handleStatelessGithubInstallationCallback(env, request, url);
+    }
     const state = await verifyConnectState(stateValue, stateSecret(env));
     await ensureCallbackActorStillAdmin(env, state);
     const nonceHash = await sha256Hex(state.nonce);
