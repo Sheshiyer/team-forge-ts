@@ -144,23 +144,15 @@ The Worker project routes are expected to separate summary and graph concerns:
 
 The desktop app persists that config into local SQLite before syncing. Display
 pages should consume the backend projections and should not hardcode repo,
-client, milestone, Huly, Clockify, or Slack assumptions.
+client, milestone, Huly, Clockify, or Slack assumptions. This legacy display
+mapping is not GitHub App authority and never filters the repository options
+returned by `GET /v1/github/repositories`.
 
 Example `TF_INTEGRATION_CONFIG_JSON`:
 
 ```json
 {
-  "github": {
-    "repos": [
-      {
-        "repo": "Sheshiyer/parkarea-aleph",
-        "displayName": "ParkArea Phase 2 - Germany Launch",
-        "clientName": "ParkArea",
-        "defaultMilestoneNumber": 1,
-        "enabled": true
-      }
-    ]
-  },
+  "github": { "repos": [] },
   "huly": { "mirrorMode": "read_only", "mirrorEnabled": true },
   "slack": {},
   "clockify": {}
@@ -216,11 +208,18 @@ numeric user ID must both match.
 GitHub delivers the `installation` and `installation_repositories` webhook
 events to every GitHub App automatically; they are not selectable in the
 optional event-subscription list. Leave unrelated optional events unchecked.
-Install the App separately on each approved account, choose **Only select
-repositories**, and select only that account's approved repositories.
-The Worker rejects the GitHub `repository_selection: all` grant and ignores
-signed public-App webhooks from non-allowlisted accounts before persisting
-installation or repository facts.
+Install the App separately on each approved account and choose either **Only
+select repositories** or **All repositories**. The Worker mirrors that user
+choice: repository discovery returns every repository accessible to the
+installation, across every connected allowlisted account. Both modes retain
+the exact account and actor allowlists, exact project binding, and per-operation
+installation tokens narrowed to the bound numeric repository ID. Unknown scope
+values fail closed. Signed public-App webhooks from non-allowlisted accounts are
+ignored before installation or repository facts are persisted. The repository
+options endpoint refreshes this installation-scoped list on every request, so
+new repositories granted to an **All repositories** installation appear without
+editing project configuration. Discovery fails closed rather than persisting a
+partial list if GitHub pagination cannot be completed.
 
 Required GitHub App repository permissions are:
 
