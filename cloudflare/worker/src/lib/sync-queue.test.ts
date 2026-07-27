@@ -19,7 +19,7 @@ interface JobRow {
 
 function messageBody(overrides: Partial<TeamForgeSyncJobMessage> = {}): TeamForgeSyncJobMessage {
   return {
-    schemaVersion: SYNC_JOB_SCHEMA_VERSION,
+    schema: SYNC_JOB_SCHEMA_VERSION,
     jobId: "job_123",
     workspaceId: "workspace_123",
     projectId: "project_123",
@@ -169,7 +169,17 @@ function env(db: D1DatabaseLike): Env {
 
 describe("teamforge.sync-job.v1", () => {
   it("accepts only the frozen bounded message", () => {
-    expect(parseSyncJobMessage(messageBody())).toEqual(messageBody());
+    const message = parseSyncJobMessage(messageBody());
+    expect(message).toEqual(messageBody());
+    expect(Object.keys(message ?? {}).sort()).toEqual([
+      "schema",
+      "jobId",
+      "workspaceId",
+      "source",
+      "jobType",
+      "projectId",
+      "requestedAt",
+    ].sort());
     expect(parseSyncJobMessage(messageBody({ jobType: "team_snapshot" as "project_sync" }))).toBeNull();
     expect(parseSyncJobMessage(messageBody({ source: "internal" as "github" }))).toBeNull();
     expect(parseSyncJobMessage(messageBody({ projectId: "x".repeat(129) }))).toBeNull();
@@ -207,7 +217,7 @@ describe("teamforge.sync-job.v1", () => {
     expect(response.status).toBe(202);
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0][0]).toEqual({
-      schemaVersion: SYNC_JOB_SCHEMA_VERSION,
+      schema: SYNC_JOB_SCHEMA_VERSION,
       jobId: expect.any(String),
       workspaceId: "workspace_123",
       projectId: "project_123",

@@ -75,7 +75,7 @@ export async function handlePostSyncJob(env: Env, request: Request): Promise<Res
   const jobId = nanoid();
   const ts = now();
   const queueMessage = parseSyncJobMessage({
-    schemaVersion: SYNC_JOB_SCHEMA_VERSION,
+    schema: SYNC_JOB_SCHEMA_VERSION,
     jobId,
     workspaceId: body.workspace_id,
     projectId: body.project_id,

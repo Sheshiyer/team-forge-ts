@@ -22,16 +22,28 @@ const base = {
 test("builds the frozen projection and hashes exact markdown bytes", () => {
   const projection = buildContextProjection(base);
   assert.equal(Buffer.byteLength(base.markdown, "utf8"), 32);
+  assert.deepEqual(Object.keys(projection).sort(), [
+    "schema",
+    "key",
+    "tenantId",
+    "routine",
+    "generation",
+    "generatedAt",
+    "validUntil",
+    "sourceRevision",
+    "contentDigest",
+    "markdown",
+  ].sort());
   assert.deepEqual(projection, {
-    schemaVersion: "thoughtseed.context-projection.v1",
+    schema: "thoughtseed.context-projection.v1",
     key: CONTEXT_PROJECTION_KEY,
-    tenant: "cambium",
+    tenantId: "cambium",
     routine: "daily-standup-digest",
     generation: 7,
     generatedAt: "2026-07-28T10:00:00.000Z",
     validUntil: "2026-07-29T10:00:00.000Z",
     sourceRevision: "vault:abc123",
-    digest: "sha256:7d696bb44566df0ffec55bce3a17117aa397f923f92e26b91c0695f9fc9fd8e4",
+    contentDigest: "sha256:7d696bb44566df0ffec55bce3a17117aa397f923f92e26b91c0695f9fc9fd8e4",
     markdown: base.markdown,
   });
 });
@@ -39,7 +51,7 @@ test("builds the frozen projection and hashes exact markdown bytes", () => {
 test("digest changes when the exact markdown bytes change", () => {
   const lf = buildContextProjection(base);
   const crlf = buildContextProjection({ ...base, markdown: base.markdown.replace("\n", "\r\n") });
-  assert.notEqual(lf.digest, crlf.digest);
+  assert.notEqual(lf.contentDigest, crlf.contentDigest);
 });
 
 test("rejects non-positive generations, invalid times, and expired projections", () => {
@@ -57,7 +69,7 @@ test("dry-run summary excludes markdown and source revision", () => {
   const projection = buildContextProjection(base);
   assert.deepEqual(summarizeContextProjection(projection), {
     key: CONTEXT_PROJECTION_KEY,
-    digest: projection.digest,
+    contentDigest: projection.contentDigest,
     generation: 7,
     generatedAt: base.generatedAt,
     validUntil: base.validUntil,
@@ -84,6 +96,7 @@ test("apply requires named URL/token environment variables and never returns the
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "https://example.test/context");
   assert.equal(calls[0].init.headers.authorization, "Bearer top-secret");
+  assert.deepEqual(JSON.parse(calls[0].init.body), projection);
   assert.equal(result.applied, true);
   assert.equal(JSON.stringify(result).includes("top-secret"), false);
 
@@ -122,7 +135,7 @@ test("vault parity projection dry-run prints metadata only", async () => {
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), {
       key: CONTEXT_PROJECTION_KEY,
-      digest: "sha256:7d696bb44566df0ffec55bce3a17117aa397f923f92e26b91c0695f9fc9fd8e4",
+      contentDigest: "sha256:7d696bb44566df0ffec55bce3a17117aa397f923f92e26b91c0695f9fc9fd8e4",
       generation: 7,
       generatedAt: base.generatedAt,
       validUntil: base.validUntil,

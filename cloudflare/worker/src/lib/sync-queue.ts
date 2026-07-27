@@ -60,7 +60,7 @@ export function parseSyncJobMessage(input: unknown): TeamForgeSyncJobMessage | n
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   const candidate = input as Record<string, unknown>;
   const expectedKeys = [
-    "schemaVersion",
+    "schema",
     "jobId",
     "workspaceId",
     "projectId",
@@ -74,7 +74,7 @@ export function parseSyncJobMessage(input: unknown): TeamForgeSyncJobMessage | n
   ) {
     return null;
   }
-  if (candidate.schemaVersion !== SYNC_JOB_SCHEMA_VERSION) return null;
+  if (candidate.schema !== SYNC_JOB_SCHEMA_VERSION) return null;
   if (!isBoundedIdentifier(candidate.jobId)) return null;
   if (!isBoundedIdentifier(candidate.workspaceId)) return null;
   if (!isBoundedIdentifier(candidate.projectId)) return null;

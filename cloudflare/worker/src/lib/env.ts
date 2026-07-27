@@ -47,7 +47,7 @@ export interface DurableObjectNamespaceLike {
 }
 
 export interface SyncJobMessage {
-  schemaVersion: "teamforge.sync-job.v1";
+  schema: "teamforge.sync-job.v1";
   jobId: string;
   workspaceId: string;
   projectId: string;

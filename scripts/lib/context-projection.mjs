@@ -53,19 +53,19 @@ export function buildContextProjection({
 
   // Do not normalize line endings, trim, or otherwise mutate markdown. The
   // digest is defined over its exact UTF-8 bytes.
-  const digest = `sha256:${createHash("sha256").update(
+  const contentDigest = `sha256:${createHash("sha256").update(
     Buffer.from(markdown, "utf8"),
   ).digest("hex")}`;
   return {
-    schemaVersion: CONTEXT_PROJECTION_SCHEMA_VERSION,
+    schema: CONTEXT_PROJECTION_SCHEMA_VERSION,
     key: CONTEXT_PROJECTION_KEY,
-    tenant: CONTEXT_PROJECTION_TENANT,
+    tenantId: CONTEXT_PROJECTION_TENANT,
     routine: CONTEXT_PROJECTION_ROUTINE,
     generation,
     generatedAt: normalizedGeneratedAt,
     validUntil: normalizedValidUntil,
     sourceRevision,
-    digest,
+    contentDigest,
     markdown,
   };
 }
@@ -73,7 +73,7 @@ export function buildContextProjection({
 export function summarizeContextProjection(projection) {
   return {
     key: projection.key,
-    digest: projection.digest,
+    contentDigest: projection.contentDigest,
     generation: projection.generation,
     generatedAt: projection.generatedAt,
     validUntil: projection.validUntil,
