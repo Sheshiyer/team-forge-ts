@@ -36,6 +36,43 @@ interface SyncRun {
   created_at: string;
 }
 
+async function persistQueueProducerFailure(
+  env: Env,
+  jobId: string,
+  workspaceId: string,
+  source: string,
+  code: "sync_queue_unavailable" | "sync_queue_send_failed",
+  message: string,
+  timestamp: string,
+): Promise<void> {
+  const db = env.TEAMFORGE_DB!;
+  await execute(
+    db,
+    "UPDATE sync_jobs SET status = ?, finished_at = ?, updated_at = ? WHERE id = ?",
+    "failed",
+    timestamp,
+    timestamp,
+    jobId,
+  );
+  await execute(
+    db,
+    `INSERT INTO sync_runs
+      (id, workspace_id, source, job_id, status, error_code, error_message,
+       started_at, finished_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    nanoid(),
+    workspaceId,
+    source,
+    jobId,
+    "failed",
+    code,
+    message,
+    timestamp,
+    timestamp,
+    timestamp,
+  );
+}
+
 export async function handlePostSyncJob(env: Env, request: Request): Promise<Response> {
   if (!env.TEAMFORGE_DB) return jsonError({ code: "db_unavailable", message: "Database not available.", retryable: true }, 503);
 
@@ -105,13 +142,40 @@ export async function handlePostSyncJob(env: Env, request: Request): Promise<Res
     ts,
   );
 
-  if (env.SYNC_QUEUE) {
-    try {
-      await env.SYNC_QUEUE.send(queueMessage);
-      await execute(env.TEAMFORGE_DB, "UPDATE sync_jobs SET queue_message_id = ?, updated_at = ? WHERE id = ?", "enqueued", ts, jobId);
-    } catch {
-      // queue send failure is non-fatal — job is still recorded
-    }
+  if (!env.SYNC_QUEUE) {
+    await persistQueueProducerFailure(
+      env,
+      jobId,
+      body.workspace_id,
+      body.source,
+      "sync_queue_unavailable",
+      "The sync Queue binding is unavailable.",
+      ts,
+    );
+    return jsonError({
+      code: "sync_queue_unavailable",
+      message: "Sync Queue is unavailable.",
+      retryable: true,
+    }, 503);
+  }
+  try {
+    await env.SYNC_QUEUE.send(queueMessage);
+    await execute(env.TEAMFORGE_DB, "UPDATE sync_jobs SET queue_message_id = ?, updated_at = ? WHERE id = ?", "enqueued", ts, jobId);
+  } catch {
+    await persistQueueProducerFailure(
+      env,
+      jobId,
+      body.workspace_id,
+      body.source,
+      "sync_queue_send_failed",
+      "The sync Queue did not accept the job.",
+      ts,
+    );
+    return jsonError({
+      code: "sync_queue_send_failed",
+      message: "Sync Queue did not accept the job.",
+      retryable: true,
+    }, 503);
   }
 
   const job = await queryFirst<SyncJob>(env.TEAMFORGE_DB, "SELECT * FROM sync_jobs WHERE id = ?", jobId);

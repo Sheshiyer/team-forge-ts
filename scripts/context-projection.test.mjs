@@ -62,6 +62,8 @@ test("rejects non-positive generations, invalid times, and expired projections",
 
 test("enforces source revision and 32 KiB UTF-8 markdown bounds", () => {
   assert.throws(() => buildContextProjection({ ...base, sourceRevision: "x".repeat(129) }), /sourceRevision/);
+  assert.throws(() => buildContextProjection({ ...base, sourceRevision: " revision " }), /sourceRevision/);
+  assert.throws(() => buildContextProjection({ ...base, sourceRevision: "revision\nnext" }), /sourceRevision/);
   assert.throws(() => buildContextProjection({ ...base, markdown: "💡".repeat(8_193) }), /markdown/);
 });
 
@@ -108,6 +110,29 @@ test("apply requires named URL/token environment variables and never returns the
     }),
     /environment variable names/,
   );
+});
+
+test("apply rejects HTTP endpoints before fetch to protect the bearer", async () => {
+  const projection = buildContextProjection(base);
+  let fetchCalled = false;
+
+  await assert.rejects(
+    applyContextProjection(projection, {
+      apply: true,
+      urlEnvName: "PROJECTION_URL",
+      tokenEnvName: "PROJECTION_TOKEN",
+      env: {
+        PROJECTION_URL: "http://example.test/context",
+        PROJECTION_TOKEN: "top-secret",
+      },
+      fetchImpl: async () => {
+        fetchCalled = true;
+        return new Response(null, { status: 202 });
+      },
+    }),
+    /HTTPS/,
+  );
+  assert.equal(fetchCalled, false);
 });
 
 test("vault parity projection dry-run prints metadata only", async () => {

@@ -7,11 +7,12 @@ import {
   type TeamForgeSyncJobMessage,
 } from "./sync-queue";
 import { handlePostSyncJob } from "../routes/sync";
+import { handlePostTeamRefresh } from "../routes/team";
 
 interface JobRow {
   id: string;
   workspace_id: string;
-  project_id: string;
+  project_id: string | null;
   source: string;
   job_type: string;
   status: string;
@@ -54,11 +55,18 @@ function fakeBatch(message: QueueMessageLike<unknown>): QueueBatchLike<unknown> 
   return { queue: "teamforge-sync", messages: [message] };
 }
 
-function makeQueueDb(initialJob?: Partial<JobRow>) {
+function makeQueueDb(
+  initialJob?: Partial<JobRow>,
+  options: {
+    failSyncRunInsert?: boolean;
+    failCompletedJobUpdateOnce?: boolean;
+  } = {},
+) {
   const jobs = new Map<string, JobRow>();
   const runs = new Map<string, Record<string, unknown>>();
   const receipts = new Map<string, Record<string, unknown>>();
   const calls: Array<{ sql: string; values: unknown[] }> = [];
+  let completedJobUpdateFailures = 0;
   if (initialJob) {
     const row: JobRow = {
       id: "job_123",
@@ -91,6 +99,9 @@ function makeQueueDb(initialJob?: Partial<JobRow>) {
               return { results: [] as T[] };
             },
             async run() {
+              if (options.failSyncRunInsert && sql.includes("INSERT INTO sync_runs")) {
+                throw new Error("deterministic sync_runs insert failure");
+              }
               if (sql.includes("UPDATE sync_jobs") && sql.includes("status = 'running'")) {
                 const id = values[values.length - 1] as string;
                 const job = jobs.get(id);
@@ -100,18 +111,31 @@ function makeQueueDb(initialJob?: Partial<JobRow>) {
                 job.status = "running";
                 return { success: true, meta: { changes: 1 } };
               }
-              if (sql.includes("INSERT INTO sync_runs")) {
+              if (sql.includes("INTO sync_runs")) {
+                const hasFailureEvidence = sql.includes("error_code");
                 runs.set(values[0] as string, {
                   id: values[0],
                   status: values[4],
-                  error_code: null,
-                  error_message: null,
+                  error_code: hasFailureEvidence ? values[5] : null,
+                  error_message: hasFailureEvidence ? values[6] : null,
                 });
                 return { success: true, meta: { changes: 1 } };
+              }
+              if (sql.includes("queue_message_id")) {
+                const job = jobs.get(values[values.length - 1] as string);
+                return { success: true, meta: { changes: job ? 1 : 0 } };
               }
               if (sql.includes("UPDATE sync_jobs")) {
                 const id = values[values.length - 1] as string;
                 const job = jobs.get(id);
+                if (
+                  options.failCompletedJobUpdateOnce
+                  && values[0] === "completed"
+                  && completedJobUpdateFailures === 0
+                ) {
+                  completedJobUpdateFailures += 1;
+                  throw new Error("deterministic completion write failure");
+                }
                 if (job) job.status = values[0] as string;
                 return { success: true, meta: { changes: job ? 1 : 0 } };
               }
@@ -141,13 +165,14 @@ function makeQueueDb(initialJob?: Partial<JobRow>) {
                 return { success: true, meta: { changes: 1 } };
               }
               if (sql.includes("INSERT INTO sync_jobs")) {
+                const hasProjectId = sql.includes("project_id");
                 const row: JobRow = {
                   id: values[0] as string,
                   workspace_id: values[1] as string,
-                  project_id: values[2] as string,
-                  source: values[3] as string,
-                  job_type: values[4] as string,
-                  status: values[5] as string,
+                  project_id: hasProjectId ? values[2] as string : null,
+                  source: values[hasProjectId ? 3 : 2] as string,
+                  job_type: values[hasProjectId ? 4 : 3] as string,
+                  status: values[hasProjectId ? 5 : 4] as string,
                 };
                 jobs.set(row.id, row);
                 return { success: true, meta: { changes: 1 } };
@@ -226,12 +251,83 @@ describe("teamforge.sync-job.v1", () => {
       requestedAt: expect.stringMatching(/Z$/),
     });
   });
+
+  it("fails terminally when the Queue binding is missing", async () => {
+    const mock = makeQueueDb();
+    const response = await handlePostSyncJob(
+      env(mock.db),
+      new Request("https://forge.example/v1/sync/jobs", {
+        method: "POST",
+        body: JSON.stringify({
+          workspace_id: "workspace_123",
+          project_id: "project_123",
+          source: "github",
+        }),
+      }),
+    );
+    const payload = await response.json() as { error: { code: string } };
+
+    expect(response.status).toBe(503);
+    expect(payload.error.code).toBe("sync_queue_unavailable");
+    expect(Array.from(mock.jobs.values())[0]?.status).toBe("failed");
+    expect(Array.from(mock.runs.values())[0]).toMatchObject({
+      status: "failed",
+      error_code: "sync_queue_unavailable",
+    });
+  });
+
+  it("persists bounded terminal evidence when Queue send rejects", async () => {
+    const mock = makeQueueDb();
+    const response = await handlePostSyncJob(
+      {
+        ...env(mock.db),
+        SYNC_QUEUE: {
+          async send() {
+            throw new Error("Bearer producer-secret external body");
+          },
+        },
+      },
+      new Request("https://forge.example/v1/sync/jobs", {
+        method: "POST",
+        body: JSON.stringify({
+          workspace_id: "workspace_123",
+          project_id: "project_123",
+          source: "github",
+        }),
+      }),
+    );
+    const persistedValues = JSON.stringify(mock.calls.flatMap(({ values }) => values));
+
+    expect(response.status).toBe(503);
+    expect(Array.from(mock.jobs.values())[0]?.status).toBe("failed");
+    expect(Array.from(mock.runs.values())[0]).toMatchObject({
+      status: "failed",
+      error_code: "sync_queue_send_failed",
+    });
+    expect(persistedValues).not.toContain("producer-secret");
+    expect(persistedValues).not.toContain("external body");
+  });
 });
 
 describe("sync queue consumer", () => {
   it("fails closed before D1 and adapters for an unknown source", async () => {
     const mock = makeQueueDb({ status: "queued" });
     const queueMessage = fakeMessage(messageBody({ source: "unknown" as "github" }));
+    const runAdapter = vi.fn(async () => ({}));
+
+    await handleSyncQueueBatch(fakeBatch(queueMessage), env(mock.db), { runAdapter });
+
+    expect(mock.calls).toHaveLength(0);
+    expect(runAdapter).not.toHaveBeenCalled();
+    expect(queueMessage.acked).toBe(true);
+    expect(queueMessage.retried).toBe(false);
+  });
+
+  it("rejects a source array before D1 and adapters", async () => {
+    const mock = makeQueueDb({ status: "queued" });
+    const queueMessage = fakeMessage(messageBody({
+      source: ["github"] as unknown as "github",
+    }));
     const runAdapter = vi.fn(async () => ({}));
 
     await handleSyncQueueBatch(fakeBatch(queueMessage), env(mock.db), { runAdapter });
@@ -309,6 +405,124 @@ describe("sync queue consumer", () => {
     expect(mock.receipts.get("runtime_test")?.last_status).toBe("failed");
     expect(queueMessage.retried).toBe(true);
     expect(queueMessage.acked).toBe(false);
+  });
+
+  it("recovers a claimed job when sync run insertion fails", async () => {
+    const mock = makeQueueDb(
+      { status: "queued" },
+      { failSyncRunInsert: true },
+    );
+    const queueMessage = fakeMessage(messageBody());
+    const runAdapter = vi.fn(async () => ({}));
+
+    await handleSyncQueueBatch(fakeBatch(queueMessage), env(mock.db), {
+      runAdapter,
+      runtimeId: "runtime_test",
+      now: () => new Date("2026-07-28T10:01:00.000Z"),
+    });
+
+    expect(runAdapter).not.toHaveBeenCalled();
+    expect(mock.jobs.get("job_123")?.status).toBe("queued");
+    expect(mock.receipts.get("runtime_test")?.last_status).toBe("failed");
+    expect(queueMessage.retried).toBe(true);
+    expect(queueMessage.acked).toBe(false);
+  });
+
+  it("does not rerun an adapter after a completion persistence failure", async () => {
+    const mock = makeQueueDb(
+      { status: "queued" },
+      { failCompletedJobUpdateOnce: true },
+    );
+    const runAdapter = vi.fn(async () => ({ updatedMappings: 1 }));
+    const firstDelivery = fakeMessage(messageBody());
+
+    await handleSyncQueueBatch(fakeBatch(firstDelivery), env(mock.db), {
+      runAdapter,
+      runtimeId: "runtime_test",
+      now: () => new Date("2026-07-28T10:01:00.000Z"),
+    });
+    expect(firstDelivery.retried).toBe(true);
+    expect(mock.jobs.get("job_123")?.status).toBe("failed");
+    expect(Array.from(mock.runs.values())[0]).toMatchObject({
+      status: "failed",
+      error_code: "sync_completion_persistence_failed",
+    });
+
+    const redelivery = fakeMessage(messageBody(), {
+      id: "message_124",
+      attempts: 2,
+    });
+    await handleSyncQueueBatch(fakeBatch(redelivery), env(mock.db), {
+      runAdapter,
+      runtimeId: "runtime_test",
+      now: () => new Date("2026-07-28T10:02:00.000Z"),
+    });
+
+    expect(runAdapter).toHaveBeenCalledTimes(1);
+    expect(redelivery.acked).toBe(true);
+    expect(redelivery.retried).toBe(false);
+  });
+
+  it("terminally rejects the exact legacy team refresh message without an adapter", async () => {
+    const mock = makeQueueDb();
+    let producedMessage: unknown;
+    const producerEnv: Env = {
+      ...env(mock.db),
+      SYNC_QUEUE: {
+        async send(message) {
+          producedMessage = message;
+        },
+      },
+    };
+    const response = await handlePostTeamRefresh(
+      producerEnv,
+      new Request("https://forge.example/v1/team/refresh", {
+        method: "POST",
+        body: JSON.stringify({ workspace_id: "workspace_123" }),
+      }),
+    );
+    expect(response.status).toBe(202);
+    expect(producedMessage).toEqual({
+      jobId: expect.any(String),
+      workspaceId: "workspace_123",
+      source: "huly",
+      jobType: "team_snapshot",
+    });
+
+    const queueMessage = fakeMessage(producedMessage);
+    const runAdapter = vi.fn(async () => ({}));
+    await handleSyncQueueBatch(fakeBatch(queueMessage), producerEnv, {
+      runAdapter,
+      runtimeId: "runtime_test",
+      now: () => new Date("2026-07-28T10:01:00.000Z"),
+    });
+
+    expect(runAdapter).not.toHaveBeenCalled();
+    expect(Array.from(mock.jobs.values())[0]?.status).toBe("failed");
+    expect(Array.from(mock.runs.values())[0]).toMatchObject({
+      status: "failed",
+      error_code: "job_type_unsupported",
+    });
+    expect(mock.receipts.get("runtime_test")?.last_status).toBe("rejected");
+    expect(queueMessage.acked).toBe(true);
+    expect(queueMessage.retried).toBe(false);
+  });
+
+  it("acks malformed legacy refresh shapes before D1", async () => {
+    const mock = makeQueueDb();
+    const queueMessage = fakeMessage({
+      jobId: "job_123",
+      workspaceId: "workspace_123",
+      source: ["huly"],
+      jobType: "team_snapshot",
+    });
+    const runAdapter = vi.fn(async () => ({}));
+
+    await handleSyncQueueBatch(fakeBatch(queueMessage), env(mock.db), { runAdapter });
+
+    expect(mock.calls).toHaveLength(0);
+    expect(runAdapter).not.toHaveBeenCalled();
+    expect(queueMessage.acked).toBe(true);
   });
 
   it("marks exhausted work failed before its final retry reaches the DLQ", async () => {

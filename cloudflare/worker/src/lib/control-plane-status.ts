@@ -1,13 +1,15 @@
 import type { Env } from "./env";
 
 export const SYNC_CONSUMER_RECEIPT_MAX_AGE_MS = 15 * 60 * 1_000;
+export const SYNC_CONSUMER_RECEIPT_MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
 
 type ConsumerStatus = "unavailable" | "degraded" | "stale" | "healthy";
 
 interface RuntimeReceiptRow {
+  schema_version: string;
   runtime_id: string;
-  last_message_id: string | null;
-  last_job_id: string | null;
+  last_message_id: string;
+  last_job_id: string;
   last_status: "completed" | "failed" | "rejected";
   last_consumed_at: string;
   last_terminal_at: string;
@@ -19,6 +21,7 @@ export interface SyncConsumerStatus {
   reason:
     | "consumer_binding_missing"
     | "consumer_receipt_missing"
+    | "consumer_receipt_invalid"
     | "consumer_receipt_stale"
     | "last_consumer_failed"
     | "last_consumer_rejected"
@@ -46,6 +49,54 @@ function status(
   };
 }
 
+function isBoundedIdentity(value: unknown): value is string {
+  return typeof value === "string"
+    && value.trim().length > 0
+    && value.trim() === value
+    && new TextEncoder().encode(value).byteLength <= 256;
+}
+
+function parseCanonicalTimestamp(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const timestamp = Date.parse(value);
+  if (
+    !Number.isFinite(timestamp)
+    || new Date(timestamp).toISOString() !== value
+  ) {
+    return null;
+  }
+  return timestamp;
+}
+
+function validateReceipt(
+  receipt: RuntimeReceiptRow,
+  at: Date,
+): { valid: true; updatedAt: number } | { valid: false } {
+  if (
+    receipt.schema_version !== "teamforge.sync-runtime-receipt.v1"
+    || !isBoundedIdentity(receipt.runtime_id)
+    || !isBoundedIdentity(receipt.last_message_id)
+    || !isBoundedIdentity(receipt.last_job_id)
+    || !["completed", "failed", "rejected"].includes(receipt.last_status)
+  ) {
+    return { valid: false };
+  }
+  const consumedAt = parseCanonicalTimestamp(receipt.last_consumed_at);
+  const terminalAt = parseCanonicalTimestamp(receipt.last_terminal_at);
+  const updatedAt = parseCanonicalTimestamp(receipt.updated_at);
+  if (
+    consumedAt === null
+    || terminalAt === null
+    || updatedAt === null
+    || consumedAt > terminalAt
+    || terminalAt > updatedAt
+    || updatedAt > at.getTime() + SYNC_CONSUMER_RECEIPT_MAX_FUTURE_SKEW_MS
+  ) {
+    return { valid: false };
+  }
+  return { valid: true, updatedAt };
+}
+
 export async function getSyncConsumerStatus(
   env: Env,
   at: Date = new Date(),
@@ -60,7 +111,7 @@ export async function getSyncConsumerStatus(
   let receipt: RuntimeReceiptRow | null;
   try {
     receipt = await env.TEAMFORGE_DB.prepare(
-      `SELECT runtime_id, last_message_id, last_job_id, last_status,
+      `SELECT schema_version, runtime_id, last_message_id, last_job_id, last_status,
               last_consumed_at, last_terminal_at, updated_at
        FROM sync_runtime_receipts
        ORDER BY updated_at DESC
@@ -73,10 +124,13 @@ export async function getSyncConsumerStatus(
     return status("degraded", "consumer_receipt_missing");
   }
 
-  const updatedAt = Date.parse(receipt.updated_at);
+  const validation = validateReceipt(receipt, at);
+  if (!validation.valid) {
+    return status("degraded", "consumer_receipt_invalid", receipt);
+  }
+  const { updatedAt } = validation;
   if (
-    !Number.isFinite(updatedAt)
-    || at.getTime() - updatedAt > SYNC_CONSUMER_RECEIPT_MAX_AGE_MS
+    at.getTime() - updatedAt > SYNC_CONSUMER_RECEIPT_MAX_AGE_MS
   ) {
     return status("stale", "consumer_receipt_stale", receipt);
   }

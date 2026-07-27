@@ -46,9 +46,13 @@ export function buildContextProjection({
   if (
     typeof sourceRevision !== "string"
     || sourceRevision.length === 0
+    || sourceRevision.trim() !== sourceRevision
+    || /\p{Cc}/u.test(sourceRevision)
     || utf8Bytes(sourceRevision) > MAX_SOURCE_REVISION_BYTES
   ) {
-    throw new TypeError("sourceRevision must contain 1-128 UTF-8 bytes.");
+    throw new TypeError(
+      "sourceRevision must contain 1-128 trimmed, control-free UTF-8 bytes.",
+    );
   }
 
   // Do not normalize line endings, trim, or otherwise mutate markdown. The
@@ -103,8 +107,8 @@ export async function applyContextProjection(
     throw new TypeError("The named projection URL and token environment variables must be set.");
   }
   const url = new URL(urlValue);
-  if (!["https:", "http:"].includes(url.protocol)) {
-    throw new TypeError("The projection URL must use HTTP or HTTPS.");
+  if (url.protocol !== "https:") {
+    throw new TypeError("The projection URL must use HTTPS.");
   }
   const response = await fetchImpl(url.href, {
     method: "POST",

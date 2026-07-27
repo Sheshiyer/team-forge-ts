@@ -117,11 +117,20 @@ explicitly gated remote operations.
 frozen `teamforge.sync-job.v1` envelope. Queue payloads, vendor response bodies,
 and tokens are never stored; D1 retains only job/run state, fixed bounded
 failure evidence, and `teamforge.sync-runtime-receipt.v1` liveness evidence.
+Missing bindings or rejected sends terminalize the producer job with fixed
+failure evidence and return 503 instead of leaving queued work orphaned.
+
+The existing `/v1/team/refresh` route still produces the bounded legacy
+`team_snapshot` shape. The Queue consumer does not pretend this unsupported job
+executed: an exact matching legacy job is terminalized as failed with fixed
+`job_type_unsupported` run evidence, a rejected runtime receipt, and no vendor
+adapter call. Malformed legacy shapes are acknowledged before D1 access.
 
 Bootstrap reports consumer evidence independently of route presence:
 
 - missing Queue binding: `unavailable`
 - bound without a runtime receipt: `degraded` / `consumer_receipt_missing`
+- malformed or materially future receipt: `degraded` / `consumer_receipt_invalid`
 - expired receipt: `stale` / `consumer_receipt_stale`
 - fresh completed receipt: `healthy`
 - fresh failed receipt: `degraded` / `last_consumer_failed`
@@ -135,7 +144,8 @@ The digest covers the exact unmodified Markdown UTF-8 bytes, capped at 32 KiB.
 
 Network delivery is disabled unless `--apply`, `--projection-url-env <name>`,
 and `--projection-token-env <name>` are all supplied and the two named
-environment variables are set. The bearer value is never printed.
+environment variables are set. Apply endpoints must use HTTPS. The bearer
+value is never printed.
 
 ## Next Steps
 
