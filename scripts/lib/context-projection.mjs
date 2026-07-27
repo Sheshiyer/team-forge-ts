@@ -28,8 +28,8 @@ function requireCanonicalTimestamp(value, fieldName) {
 export function buildContextProjection({
   markdown,
   generation,
-  generatedAt,
-  validUntil,
+  producedAt,
+  expiresAt,
   sourceRevision,
 }) {
   if (typeof markdown !== "string" || utf8Bytes(markdown) > MAX_MARKDOWN_BYTES) {
@@ -38,10 +38,10 @@ export function buildContextProjection({
   if (!Number.isSafeInteger(generation) || generation <= 0) {
     throw new TypeError("generation must be a positive safe integer.");
   }
-  const normalizedGeneratedAt = requireCanonicalTimestamp(generatedAt, "generatedAt");
-  const normalizedValidUntil = requireCanonicalTimestamp(validUntil, "validUntil");
-  if (Date.parse(normalizedValidUntil) <= Date.parse(normalizedGeneratedAt)) {
-    throw new TypeError("validUntil must be later than generatedAt.");
+  const normalizedProducedAt = requireCanonicalTimestamp(producedAt, "producedAt");
+  const normalizedExpiresAt = requireCanonicalTimestamp(expiresAt, "expiresAt");
+  if (Date.parse(normalizedExpiresAt) <= Date.parse(normalizedProducedAt)) {
+    throw new TypeError("expiresAt must be later than producedAt.");
   }
   if (
     typeof sourceRevision !== "string"
@@ -62,8 +62,8 @@ export function buildContextProjection({
     tenantId: CONTEXT_PROJECTION_TENANT,
     routine: CONTEXT_PROJECTION_ROUTINE,
     generation,
-    generatedAt: normalizedGeneratedAt,
-    validUntil: normalizedValidUntil,
+    producedAt: normalizedProducedAt,
+    expiresAt: normalizedExpiresAt,
     sourceRevision,
     contentDigest,
     markdown,
@@ -75,8 +75,8 @@ export function summarizeContextProjection(projection) {
     key: projection.key,
     contentDigest: projection.contentDigest,
     generation: projection.generation,
-    generatedAt: projection.generatedAt,
-    validUntil: projection.validUntil,
+    producedAt: projection.producedAt,
+    expiresAt: projection.expiresAt,
   };
 }
 

@@ -2043,8 +2043,8 @@ async function runContextProjection(args) {
   const projection = buildContextProjection({
     markdown,
     generation: args.projectionGeneration ?? generated.getTime(),
-    generatedAt,
-    validUntil,
+    producedAt: generatedAt,
+    expiresAt: validUntil,
     sourceRevision: args.projectionSourceRevision,
   });
   const result = await applyContextProjection(projection, {

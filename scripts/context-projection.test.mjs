@@ -14,8 +14,8 @@ import {
 const base = {
   markdown: "# Daily Standup\nBounded evidence",
   generation: 7,
-  generatedAt: "2026-07-28T10:00:00.000Z",
-  validUntil: "2026-07-29T10:00:00.000Z",
+  producedAt: "2026-07-28T10:00:00.000Z",
+  expiresAt: "2026-07-29T10:00:00.000Z",
   sourceRevision: "vault:abc123",
 };
 
@@ -28,8 +28,8 @@ test("builds the frozen projection and hashes exact markdown bytes", () => {
     "tenantId",
     "routine",
     "generation",
-    "generatedAt",
-    "validUntil",
+    "producedAt",
+    "expiresAt",
     "sourceRevision",
     "contentDigest",
     "markdown",
@@ -40,8 +40,8 @@ test("builds the frozen projection and hashes exact markdown bytes", () => {
     tenantId: "cambium",
     routine: "daily-standup-digest",
     generation: 7,
-    generatedAt: "2026-07-28T10:00:00.000Z",
-    validUntil: "2026-07-29T10:00:00.000Z",
+    producedAt: "2026-07-28T10:00:00.000Z",
+    expiresAt: "2026-07-29T10:00:00.000Z",
     sourceRevision: "vault:abc123",
     contentDigest: "sha256:7d696bb44566df0ffec55bce3a17117aa397f923f92e26b91c0695f9fc9fd8e4",
     markdown: base.markdown,
@@ -56,8 +56,8 @@ test("digest changes when the exact markdown bytes change", () => {
 
 test("rejects non-positive generations, invalid times, and expired projections", () => {
   assert.throws(() => buildContextProjection({ ...base, generation: 0 }), /generation/);
-  assert.throws(() => buildContextProjection({ ...base, generatedAt: "today" }), /generatedAt/);
-  assert.throws(() => buildContextProjection({ ...base, validUntil: base.generatedAt }), /validUntil/);
+  assert.throws(() => buildContextProjection({ ...base, producedAt: "today" }), /producedAt/);
+  assert.throws(() => buildContextProjection({ ...base, expiresAt: base.producedAt }), /expiresAt/);
 });
 
 test("enforces source revision and 32 KiB UTF-8 markdown bounds", () => {
@@ -71,8 +71,8 @@ test("dry-run summary excludes markdown and source revision", () => {
     key: CONTEXT_PROJECTION_KEY,
     contentDigest: projection.contentDigest,
     generation: 7,
-    generatedAt: base.generatedAt,
-    validUntil: base.validUntil,
+    producedAt: base.producedAt,
+    expiresAt: base.expiresAt,
   });
 });
 
@@ -126,9 +126,9 @@ test("vault parity projection dry-run prints metadata only", async () => {
         "--projection-source-revision",
         "vault:abc123",
         "--projection-generated-at",
-        base.generatedAt,
+        base.producedAt,
         "--projection-valid-until",
-        base.validUntil,
+        base.expiresAt,
       ],
       { encoding: "utf8" },
     );
@@ -137,8 +137,8 @@ test("vault parity projection dry-run prints metadata only", async () => {
       key: CONTEXT_PROJECTION_KEY,
       contentDigest: "sha256:7d696bb44566df0ffec55bce3a17117aa397f923f92e26b91c0695f9fc9fd8e4",
       generation: 7,
-      generatedAt: base.generatedAt,
-      validUntil: base.validUntil,
+      producedAt: base.producedAt,
+      expiresAt: base.expiresAt,
     });
     assert.equal(result.stdout.includes(base.markdown), false);
     assert.equal(result.stdout.includes("vault:abc123"), false);
