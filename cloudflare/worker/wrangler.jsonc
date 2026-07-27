@@ -52,6 +52,15 @@
         "binding": "SYNC_QUEUE",
         "queue": "teamforge-sync"
       }
+    ],
+    "consumers": [
+      {
+        "queue": "teamforge-sync",
+        "max_batch_size": 5,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "teamforge-sync-dlq"
+      }
     ]
   },
   "durable_objects": {

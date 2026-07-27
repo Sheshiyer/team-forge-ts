@@ -102,6 +102,40 @@ Because of that, `wrangler.jsonc` still contains placeholder IDs for:
 - D1 database name: `teamforge-primary`
 - R2 bucket name: `teamforge-artifacts`
 - Queue name: `teamforge-sync`
+- Queue dead-letter name: `teamforge-sync-dlq`
+
+## Project sync Queue contract
+
+The Worker source declares, but does not create, a `teamforge-sync` consumer
+with a maximum batch size of 5, five-second batch timeout, three retries, and
+the `teamforge-sync-dlq` dead-letter target. Provisioning either Queue,
+applying `0017_sync_runtime_receipts.sql`, and deploying the Worker remain
+explicitly gated remote operations.
+
+`POST /v1/sync/jobs` accepts a bounded `workspace_id`, `project_id`, one of
+`clockify|github|huly|slack`, and only the `project_sync` job type. It emits the
+frozen `teamforge.sync-job.v1` envelope. Queue payloads, vendor response bodies,
+and tokens are never stored; D1 retains only job/run state, fixed bounded
+failure evidence, and `teamforge.sync-runtime-receipt.v1` liveness evidence.
+
+Bootstrap reports consumer evidence independently of route presence:
+
+- missing Queue binding: `unavailable`
+- bound without a runtime receipt: `degraded` / `consumer_receipt_missing`
+- expired receipt: `stale` / `consumer_receipt_stale`
+- fresh completed receipt: `healthy`
+- fresh failed receipt: `degraded` / `last_consumer_failed`
+
+## Daily standup context projection
+
+`scripts/teamforge-vault-parity.mjs --context-projection <markdown-path>` builds
+the frozen `thoughtseed.context-projection.v1` projection in dry-run mode.
+Default output is metadata-only: key, digest, generation, and timestamps.
+The digest covers the exact unmodified Markdown UTF-8 bytes, capped at 32 KiB.
+
+Network delivery is disabled unless `--apply`, `--projection-url-env <name>`,
+and `--projection-token-env <name>` are all supplied and the two named
+environment variables are set. The bearer value is never printed.
 
 ## Next Steps
 
@@ -112,7 +146,7 @@ Because of that, `wrangler.jsonc` still contains placeholder IDs for:
    - Huly project links
    - project artifacts
    - project sync policy
-3. Create the R2 bucket and queue, then replace the remaining placeholders if still missing.
+3. Create the R2 bucket, Queue, and DLQ, then replace remaining placeholders if still missing.
 4. Implement the first repository-backed project routes:
    - `/v1/projects` for summary rows
    - `/v1/project-mappings` for full project graph reads/writes
