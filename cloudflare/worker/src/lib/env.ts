@@ -17,6 +17,22 @@ export interface QueueLike<T> {
   send(message: T): Promise<void>;
 }
 
+export interface QueueMessageLike<T> {
+  readonly id: string;
+  readonly body: T;
+  readonly attempts: number;
+  readonly timestamp?: Date;
+  ack(): void;
+  retry(options?: { delaySeconds?: number }): void;
+}
+
+export interface QueueBatchLike<T> {
+  readonly queue: string;
+  readonly messages: QueueMessageLike<T>[];
+  ackAll?(): void;
+  retryAll?(options?: { delaySeconds?: number }): void;
+}
+
 export interface DurableObjectStateLike {
   id?: {
     toString(): string;
@@ -31,10 +47,20 @@ export interface DurableObjectNamespaceLike {
 }
 
 export interface SyncJobMessage {
+  schema: "teamforge.sync-job.v1";
   jobId: string;
   workspaceId: string;
+  projectId: string;
   source: "clockify" | "github" | "huly" | "slack";
-  jobType: string;
+  jobType: "project_sync";
+  requestedAt: string;
+}
+
+export interface LegacyTeamSnapshotMessage {
+  jobId: string;
+  workspaceId: string;
+  source: "huly";
+  jobType: "team_snapshot";
 }
 
 export interface Env {
@@ -80,7 +106,7 @@ export interface Env {
   TF_REPORTING_WORKSPACE_ID?: string;
   TEAMFORGE_DB?: D1DatabaseLike;
   TEAMFORGE_ARTIFACTS?: R2BucketLike;
-  SYNC_QUEUE?: QueueLike<SyncJobMessage>;
+  SYNC_QUEUE?: QueueLike<SyncJobMessage | LegacyTeamSnapshotMessage>;
   WORKSPACE_LOCKS?: DurableObjectNamespaceLike;
   // Temporary internal shared secret for m2m calls (e.g. parity, Hermes) when CF Access service tokens have compatibility issues with Worker routes.
   // Used as alternative to TF_CREDENTIAL_ENVELOPE_KEY for app routes. Caller sends header "X-TeamForge-Internal-Secret".

@@ -9,7 +9,7 @@ import {
 } from "./huly-api";
 import { acquireProjectLock } from "./locks";
 import { execute, nanoid, now, queryAll, queryFirst } from "./db";
-import type { D1DatabaseLike, Env } from "./env";
+import type { D1DatabaseLike, Env, SyncJobMessage } from "./env";
 import { getProjectGraph, type ProjectGraph } from "./project-registry";
 
 type OwnershipDomain = "engineering" | "execution_admin" | "milestone";
@@ -536,6 +536,72 @@ function buildPromotionBody(mapping: SyncEntityMappingRow): string {
   const payload = safeJsonParse<Record<string, unknown>>(mapping.payload_json) ?? {};
   const body = typeof payload.description === "string" ? payload.description : "";
   return `${body}\n\n---\nPromoted from TeamForge execution item${mapping.huly_entity_id ? ` (${mapping.huly_entity_id})` : ""}.`;
+}
+
+export async function runQueuedProjectSync(
+  env: Env,
+  message: SyncJobMessage,
+  runId: string,
+): Promise<Record<string, unknown>> {
+  const db = env.TEAMFORGE_DB;
+  if (!db) {
+    throw new Error("TeamForge database binding is unavailable.");
+  }
+  const graph = await getProjectGraph(db, message.projectId);
+  if (
+    !graph
+    || graph.project.workspaceId !== message.workspaceId
+  ) {
+    throw new Error("The queued project scope is unavailable.");
+  }
+
+  const context: SyncContext = {
+    db,
+    env,
+    graph,
+    workspaceId: message.workspaceId,
+    actorId: `queue:${message.source}`,
+    jobId: message.jobId,
+    runId,
+    githubClient: null,
+    hulyClient: null,
+    hulyActorSocialId: null,
+    stats: {
+      updatedMappings: 0,
+      conflictsOpened: 0,
+      journalCompleted: 0,
+      journalFailed: 0,
+    },
+  };
+
+  const lock = await acquireProjectLock(env, message.projectId, message.jobId);
+  try {
+    if (message.source === "github") {
+      if (!env.TF_GITHUB_TOKEN_GLOBAL?.trim()) {
+        throw new Error("The GitHub sync adapter is unavailable.");
+      }
+      context.githubClient = new GithubApiClient(env.TF_GITHUB_TOKEN_GLOBAL);
+      await syncGithubMilestones(context);
+      await syncGithubEngineeringIssues(context);
+    } else if (message.source === "huly") {
+      if (!env.TF_HULY_USER_TOKEN_GLOBAL?.trim()) {
+        throw new Error("The Huly sync adapter is unavailable.");
+      }
+      context.hulyClient = await HulyApiClient.connect(env.TF_HULY_USER_TOKEN_GLOBAL);
+      const account = await context.hulyClient.getAccountInfo();
+      context.hulyActorSocialId = resolveHulyActorSocialId(account);
+      await syncHulyExecutionIssues(context);
+      await detectHulyMilestoneDrift(context);
+    } else {
+      // Clockify and Slack remain valid frozen sources, but this control-plane
+      // module has no project adapter for them yet. Failing closed gives the
+      // Queue retry/DLQ path truthful evidence instead of claiming success.
+      throw new Error("The selected project sync adapter is unavailable.");
+    }
+    return { ...context.stats };
+  } finally {
+    await lock.release();
+  }
 }
 
 async function runProjectSync(

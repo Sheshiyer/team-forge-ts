@@ -19,6 +19,10 @@ import path from "node:path";
 import process from "node:process";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import {
+  applyContextProjection,
+  buildContextProjection,
+} from "./lib/context-projection.mjs";
 
 const DEFAULT_VAULT_ROOT =
   "/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/thoughtseed-labs";
@@ -60,6 +64,13 @@ Options:
   --internal-secret <secret> Temporary shared secret for m2m internal auth (X-TeamForge-Internal-Secret header). Use when CF Access service tokens have issues with the Worker route (also via TF_INTERNAL_SHARED_SECRET env). For use with IP bypass or other Access-passing methods.
   --project <slug>           Limit to one or more project_id values.
   --report <path>            Write JSON report to disk.
+  --context-projection <path> Build a daily-standup projection from exact Markdown bytes.
+  --projection-generation <n> Positive projection generation (default: current epoch milliseconds).
+  --projection-source-revision <revision> Bounded source revision for projection provenance.
+  --projection-generated-at <timestamp> Canonical generation timestamp.
+  --projection-valid-until <timestamp> Canonical expiry timestamp.
+  --projection-url-env <name> Environment variable containing apply URL.
+  --projection-token-env <name> Environment variable containing apply bearer.
   --help                     Show this help.
 
 Examples:
@@ -68,6 +79,8 @@ Examples:
   node scripts/teamforge-vault-parity.mjs --workspace-id tf-prod --apply
   node scripts/teamforge-vault-parity.mjs --local-only --apply --teamforge-db ~/Library/Application\\ Support/com.thoughtseed.teamforge/teamforge.db
   node scripts/teamforge-vault-parity.mjs --project axtech --project heyzack --report /tmp/teamforge-parity.json
+  node scripts/teamforge-vault-parity.mjs --context-projection /tmp/standup.md
+  node scripts/teamforge-vault-parity.mjs --context-projection /tmp/standup.md --apply --projection-url-env PROJECTION_URL --projection-token-env PROJECTION_TOKEN
 `);
 }
 
@@ -85,6 +98,13 @@ function parseArgs(argv) {
     internalSecret: process.env.TF_INTERNAL_SHARED_SECRET ?? null,
     projects: new Set(),
     reportPath: null,
+    contextProjectionPath: null,
+    projectionGeneration: null,
+    projectionSourceRevision: "teamforge-vault-parity",
+    projectionGeneratedAt: null,
+    projectionValidUntil: null,
+    projectionUrlEnvName: null,
+    projectionTokenEnvName: null,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -139,6 +159,34 @@ function parseArgs(argv) {
     }
     if (value === "--report") {
       args.reportPath = argv[++index];
+      continue;
+    }
+    if (value === "--context-projection") {
+      args.contextProjectionPath = argv[++index];
+      continue;
+    }
+    if (value === "--projection-generation") {
+      args.projectionGeneration = Number(argv[++index]);
+      continue;
+    }
+    if (value === "--projection-source-revision") {
+      args.projectionSourceRevision = argv[++index];
+      continue;
+    }
+    if (value === "--projection-generated-at") {
+      args.projectionGeneratedAt = argv[++index];
+      continue;
+    }
+    if (value === "--projection-valid-until") {
+      args.projectionValidUntil = argv[++index];
+      continue;
+    }
+    if (value === "--projection-url-env") {
+      args.projectionUrlEnvName = argv[++index];
+      continue;
+    }
+    if (value === "--projection-token-env") {
+      args.projectionTokenEnvName = argv[++index];
       continue;
     }
     throw new Error(`Unknown argument: ${value}`);
@@ -1984,8 +2032,35 @@ async function maybeWriteReport(reportPath, report) {
   await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 }
 
+async function runContextProjection(args) {
+  const markdown = await fs.readFile(args.contextProjectionPath, "utf8");
+  const generated = args.projectionGeneratedAt
+    ? new Date(args.projectionGeneratedAt)
+    : new Date();
+  const generatedAt = generated.toISOString();
+  const validUntil = args.projectionValidUntil
+    ?? new Date(generated.getTime() + 24 * 60 * 60 * 1_000).toISOString();
+  const projection = buildContextProjection({
+    markdown,
+    generation: args.projectionGeneration ?? generated.getTime(),
+    producedAt: generatedAt,
+    expiresAt: validUntil,
+    sourceRevision: args.projectionSourceRevision,
+  });
+  const result = await applyContextProjection(projection, {
+    apply: args.apply,
+    urlEnvName: args.projectionUrlEnvName,
+    tokenEnvName: args.projectionTokenEnvName,
+  });
+  console.log(JSON.stringify(result, null, 2));
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.contextProjectionPath) {
+    await runContextProjection(args);
+    return;
+  }
   const clientRoot = path.join(args.vaultRoot, "60-client-ecosystem");
   const teamRoot = path.join(args.vaultRoot, "50-team");
   const token =

@@ -1,6 +1,7 @@
-import type { DurableObjectStateLike, Env } from "./lib/env";
+import type { DurableObjectStateLike, Env, QueueBatchLike } from "./lib/env";
 import { requireBearerAuth } from "./lib/auth";
 import { jsonError, jsonOk } from "./lib/response";
+import { handleSyncQueueBatch } from "./lib/sync-queue";
 import { handleInternalRequest } from "./routes/internal";
 import { handleV1Request } from "./routes/v1";
 
@@ -55,6 +56,9 @@ export default {
       },
       404,
     );
+  },
+  async queue(batch: QueueBatchLike<unknown>, env: Env): Promise<void> {
+    await handleSyncQueueBatch(batch, env);
   },
 };
 

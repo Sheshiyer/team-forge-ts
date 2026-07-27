@@ -102,6 +102,7 @@ import {
   handleGithubWebhook,
 } from "./github";
 import { handleGetWeeklyReportingContext } from "./reporting";
+import { getSyncConsumerStatus } from "../lib/control-plane-status";
 
 interface DatabaseStatus {
   available: boolean;
@@ -808,7 +809,10 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 }
 
 async function buildBootstrapPayload(env: Env): Promise<Record<string, unknown>> {
-  const database = await probeDatabase(env);
+  const [database, syncConsumer] = await Promise.all([
+    probeDatabase(env),
+    getSyncConsumerStatus(env),
+  ]);
   return {
     service: "teamforge-api",
     phase: "phase-2-wave-3",
@@ -820,6 +824,9 @@ async function buildBootstrapPayload(env: Env): Promise<Record<string, unknown>>
       artifactsBound: Boolean(env.TEAMFORGE_ARTIFACTS),
       syncQueueBound: Boolean(env.SYNC_QUEUE),
       workspaceLocksBound: Boolean(env.WORKSPACE_LOCKS),
+    },
+    controlPlaneStatus: {
+      syncConsumer,
     },
     routeStatus: {
       bootstrap: "live",
