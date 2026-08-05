@@ -1,0 +1,75 @@
+{
+  // CF-4 Labs production cutover — custom domains on Thoughtseed Labs account
+  "name": "teamforge-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-09",
+  "workers_dev": true,
+  "keep_vars": true,
+  "account_id": "9d7cec1b5a32b2df8c6cdc1321ccd00b",
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "TF_ENV": "production",
+    "TF_API_BASE_URL": "https://forge.thoughtseed.space",
+    "TF_DEFAULT_OTA_CHANNEL": "stable",
+    "TF_ACCESS_TEAM_DOMAIN": "thoughtseedlabs.cloudflareaccess.com",
+    "TF_ACCESS_AUD": "dd832e556cd9ee7c4e2fb9fddc6bb16bccd64d1b28b0784f84884a69f8a2f3d9,38b502a01f4063c5521191e084c7fd9b086099c0061b045145cd93165b9af8d0,29e1c8a6760778891fe1278ea0c8639afba1eb41a0008a7fd14850e4168911b5",
+    "TF_ACCESS_AUDIENCE": "dd832e556cd9ee7c4e2fb9fddc6bb16bccd64d1b28b0784f84884a69f8a2f3d9",
+    "TF_INTEGRATION_CONFIG_JSON": "{\"github\":{\"repos\":[]},\"decommissioned\":[\"slack\",\"clockify\",\"huly\"],\"note\":\"Slack/Clockify/Huly retired — features live in Plexus directly\"}"
+  },
+  "d1_databases": [
+    {
+      "binding": "TEAMFORGE_DB",
+      "database_name": "teamforge-primary",
+      "database_id": "613f3e80-0dd5-4740-bccf-8c5913dd5d2e",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "TEAMFORGE_ARTIFACTS",
+      "bucket_name": "teamforge-artifacts"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "SECRETS",
+      "id": "d219bbf6ac4345f1bbd63b62a50f9ac7"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "SYNC_QUEUE",
+        "queue": "teamforge-sync"
+      }
+    ]
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "WORKSPACE_LOCKS",
+        "class_name": "WorkspaceLock"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "WorkspaceLock"
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "pattern": "forge.thoughtseed.space",
+      "custom_domain": true
+    },
+    {
+      "pattern": "plexus-api.thoughtseed.space",
+      "custom_domain": true
+    }
+  ]
+}
