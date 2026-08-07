@@ -1,4 +1,4 @@
-use reqwest::Client;
+use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -51,6 +51,32 @@ pub struct FounderCommandRun {
     pub error_message: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FounderCommandRunListResult {
+    pub runs: Vec<FounderCommandRun>,
+    pub count: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FounderCommandAuditEvent {
+    pub id: String,
+    pub run_id: String,
+    pub kind: String,
+    pub actor_id: Option<String>,
+    pub actor_kind: Option<String>,
+    pub payload_json: Option<String>,
+    pub occurred_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FounderCommandAuditTrail {
+    pub events: Vec<FounderCommandAuditEvent>,
+    pub count: usize,
+}
+
 #[derive(Debug, Deserialize)]
 struct WorkerEnvelope<T> {
     ok: bool,
@@ -94,11 +120,66 @@ struct WorkerRunWire {
     error_message: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WorkerRunListWire {
+    runs: Vec<WorkerRunWire>,
+    count: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkerAuditEventWire {
+    id: String,
+    run_id: String,
+    kind: String,
+    actor_id: Option<String>,
+    actor_kind: Option<String>,
+    payload_json: Option<String>,
+    occurred_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkerAuditTrailWire {
+    events: Vec<WorkerAuditEventWire>,
+    count: usize,
+}
+
 /// Wire-shape returned by the Worker for `POST /v1/commands/intent` (snake_case).
 #[derive(Debug, Deserialize)]
 struct WorkerIntentResultWire {
     run_id: String,
     state: String,
+}
+
+fn founder_run_from_wire(wire: WorkerRunWire) -> FounderCommandRun {
+    FounderCommandRun {
+        id: wire.id,
+        command_id: wire.command_id,
+        actor_id: wire.actor_id,
+        actor_kind: wire.actor_kind,
+        auth_mode: wire.auth_mode,
+        state: wire.state,
+        target_kind: wire.target_kind,
+        target_id: wire.target_id,
+        correlation_id: wire.correlation_id,
+        requested_at: wire.requested_at,
+        accepted_at: wire.accepted_at,
+        completed_at: wire.completed_at,
+        result_json: wire.result_json,
+        error_code: wire.error_code,
+        error_message: wire.error_message,
+    }
+}
+
+fn founder_audit_from_wire(wire: WorkerAuditEventWire) -> FounderCommandAuditEvent {
+    FounderCommandAuditEvent {
+        id: wire.id,
+        run_id: wire.run_id,
+        kind: wire.kind,
+        actor_id: wire.actor_id,
+        actor_kind: wire.actor_kind,
+        payload_json: wire.payload_json,
+        occurred_at: wire.occurred_at,
+    }
 }
 
 #[tauri::command]
@@ -193,21 +274,110 @@ pub async fn get_command_run(
     let wire = envelope
         .data
         .ok_or_else(|| "Worker /v1/commands/runs/:id response missing data".to_string())?;
-    Ok(FounderCommandRun {
-        id: wire.id,
-        command_id: wire.command_id,
-        actor_id: wire.actor_id,
-        actor_kind: wire.actor_kind,
-        auth_mode: wire.auth_mode,
-        state: wire.state,
-        target_kind: wire.target_kind,
-        target_id: wire.target_id,
-        correlation_id: wire.correlation_id,
-        requested_at: wire.requested_at,
-        accepted_at: wire.accepted_at,
-        completed_at: wire.completed_at,
-        result_json: wire.result_json,
-        error_code: wire.error_code,
-        error_message: wire.error_message,
+    Ok(founder_run_from_wire(wire))
+}
+
+#[tauri::command]
+pub async fn list_command_runs(
+    db: State<'_, DbPool>,
+    state: String,
+    route: Option<String>,
+    limit: Option<u32>,
+) -> Result<FounderCommandRunListResult, String> {
+    let pool = &db.0;
+    let base_url = worker_base_url_pub(pool).await?;
+    let access_token = worker_access_token_pub(pool).await?;
+    let endpoint = format!("{}/v1/commands/runs", base_url.trim_end_matches('/'));
+    let mut url = Url::parse(&endpoint).map_err(|e| format!("build command runs URL: {e}"))?;
+    let limit_string = limit.unwrap_or(8).clamp(1, 50).to_string();
+
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("state", &state);
+        query.append_pair("limit", &limit_string);
+        if let Some(route_value) = route.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            query.append_pair("route", route_value);
+        }
+    }
+
+    let client = Client::new();
+    let response = client
+        .get(url)
+        .bearer_auth(access_token)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("list command runs: {e}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("Worker /v1/commands/runs returned status {status}"));
+    }
+    let envelope: WorkerEnvelope<WorkerRunListWire> = response
+        .json()
+        .await
+        .map_err(|e| format!("parse command runs response: {e}"))?;
+    if !envelope.ok {
+        return Err("Worker /v1/commands/runs returned ok=false".to_string());
+    }
+    let wire = envelope
+        .data
+        .ok_or_else(|| "Worker /v1/commands/runs response missing data".to_string())?;
+    Ok(FounderCommandRunListResult {
+        runs: wire.runs.into_iter().map(founder_run_from_wire).collect(),
+        count: wire.count,
+    })
+}
+
+#[tauri::command]
+pub async fn get_command_run_audit(
+    db: State<'_, DbPool>,
+    run_id: String,
+    limit: Option<u32>,
+) -> Result<FounderCommandAuditTrail, String> {
+    let pool = &db.0;
+    let base_url = worker_base_url_pub(pool).await?;
+    let access_token = worker_access_token_pub(pool).await?;
+    let endpoint = format!(
+        "{}/v1/commands/runs/{}/audit",
+        base_url.trim_end_matches('/'),
+        run_id
+    );
+    let mut url = Url::parse(&endpoint).map_err(|e| format!("build command audit URL: {e}"))?;
+    let limit_string = limit.unwrap_or(10).clamp(1, 50).to_string();
+    url.query_pairs_mut().append_pair("limit", &limit_string);
+
+    let client = Client::new();
+    let response = client
+        .get(url)
+        .bearer_auth(access_token)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("get command run audit: {e}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!(
+            "Worker /v1/commands/runs/:id/audit returned status {status}"
+        ));
+    }
+    let envelope: WorkerEnvelope<WorkerAuditTrailWire> = response
+        .json()
+        .await
+        .map_err(|e| format!("parse command audit response: {e}"))?;
+    if !envelope.ok {
+        return Err("Worker /v1/commands/runs/:id/audit returned ok=false".to_string());
+    }
+    let wire = envelope
+        .data
+        .ok_or_else(|| "Worker /v1/commands/runs/:id/audit response missing data".to_string())?;
+    Ok(FounderCommandAuditTrail {
+        events: wire
+            .events
+            .into_iter()
+            .map(founder_audit_from_wire)
+            .collect(),
+        count: wire.count,
     })
 }

@@ -134,7 +134,17 @@ See `cloudflare/worker/src/lib/env.ts` for `MULTICA_*` settings.
 
 **Handoff Protocol:** Agent stage-to-stage transitions live in `thoughtseed-labs/handoffs/` (HO-NNN.md). TeamForge now owns the status machine and registry surface so Hermes `/ts-handoffs`, `/ts-approve`, `/ts-reject` can act on them.
 
-**Hermes Telegram commands (13):** `ts-status`, `ts-agents`, `ts-agent`, `ts-projects`, `ts-project`, `ts-run`, `ts-handoffs`, `ts-approve`, `ts-reject`, `ts-vault`, `ts-standup`, `ts-digest`, `ts-help`.
+**Remote cutover pilot commands:** `ts-status`, `ts-standup`.
+
+**Legacy Hermes founder vocabulary (compatibility surface, not remote cutover proof):**
+`ts-status`, `ts-agents`, `ts-agent`, `ts-projects`, `ts-project`, `ts-run`,
+`ts-handoffs`, `ts-approve`, `ts-reject`, `ts-vault`, `ts-standup`,
+`ts-digest`, `ts-help`.
+
+Treat the TeamForge Worker command registry as the authoritative remote-safe
+surface. Older Hermes Telegram commands remain useful local founder tooling,
+but they do not by themselves prove that a command is wired through the
+TeamForge run pipeline.
 
 Group: `-1003698657291`. Co-founders (equal authority): `1371522080`, `926168615`.
 

@@ -243,6 +243,8 @@ pub fn run() {
             commands::probe_teamforge_worker_api,
             commands::founder_commands::post_command_intent,
             commands::founder_commands::get_command_run,
+            commands::founder_commands::list_command_runs,
+            commands::founder_commands::get_command_run_audit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

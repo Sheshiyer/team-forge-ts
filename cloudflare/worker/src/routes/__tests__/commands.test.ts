@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { handleCommandIntent, handleGetCommandRun, handleListCommandRuns } from "../commands";
+import { handleCommandIntent, handleGetCommandRun, handleGetCommandRunAudit, handleListCommandRuns } from "../commands";
 import { makeMockDb, type MockDbHandle } from "../../lib/test-utils/mock-d1";
 import type { Env } from "../../lib/env";
 
@@ -99,7 +99,7 @@ describe("commands routes", () => {
     expect(mock.events.map((e) => e.kind)).toContain("run_created");
   });
 
-  it("POST /v1/commands/intent with valid ts-trace-signal returns 201 accepted (local_worker route)", async () => {
+  it("POST /v1/commands/intent with valid ts-trace-signal returns 201 created (cambium_operator route)", async () => {
     const res = await handleCommandIntent(
       env,
       makeReq({
@@ -116,7 +116,32 @@ describe("commands routes", () => {
       ok: boolean;
       data: { run_id: string; state: string };
     };
-    expect(body.data.state).toBe("accepted");
+    expect(body.data.state).toBe("created");
+  });
+
+  it("POST /v1/commands/intent with valid ts-status queues to Cambium operator", async () => {
+    const res = await handleCommandIntent(
+      env,
+      makeReq({
+        id: "ts-status",
+        actor_id: "f-status",
+        actor_kind: "founder",
+        auth_mode: "cf_access",
+        correlation_id: "c-status",
+        payload: {},
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      ok: boolean;
+      data: { run_id: string; state: string };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data.state).toBe("created");
+
+    const run = mock.runs.get(body.data.run_id);
+    expect(run?.state).toBe("created");
+    expect(run?.result_json).toBeNull();
   });
 
   it("GET /v1/commands/runs/:id returns 404 for missing run", async () => {
@@ -151,6 +176,99 @@ describe("commands routes", () => {
     };
     expect(body.data.id).toBe(runId);
     expect(body.data.state).toBe("created");
+  });
+
+  it("GET /v1/commands/runs/:id/audit returns ordered audit events", async () => {
+    const created = await handleCommandIntent(
+      env,
+      makeReq({
+        id: "ts-standup",
+        actor_id: "f3",
+        actor_kind: "founder",
+        auth_mode: "cf_access",
+        correlation_id: "c-audit",
+        payload: { project_id: "proj-audit" },
+      }),
+    );
+    const createdBody = (await created.json()) as {
+      ok: boolean;
+      data: { run_id: string };
+    };
+    const runId = createdBody.data.run_id;
+    const res = await handleGetCommandRunAudit(
+      env,
+      runId,
+      new URL("https://x/v1/commands/runs/run_x/audit?limit=10"),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      data: { events: Array<{ run_id: string; kind: string; payload_json: string | null }>; count: number };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.data.count).toBe(2);
+    expect(body.data.events.map((event) => event.kind)).toEqual(["command_received", "run_created"]);
+    expect(body.data.events.every((event) => event.run_id === runId)).toBe(true);
+    expect(JSON.parse(body.data.events[0].payload_json as string).payload).toEqual({
+      project_id: "proj-audit",
+    });
+  });
+
+  it("GET /v1/commands/runs/:id/audit for ts-status includes queued intake events", async () => {
+    const created = await handleCommandIntent(
+      env,
+      makeReq({
+        id: "ts-status",
+        actor_id: "f3",
+        actor_kind: "founder",
+        auth_mode: "cf_access",
+        correlation_id: "c-status-audit",
+        payload: {},
+      }),
+    );
+    const createdBody = (await created.json()) as {
+      ok: boolean;
+      data: { run_id: string };
+    };
+    const runId = createdBody.data.run_id;
+    const res = await handleGetCommandRunAudit(
+      env,
+      runId,
+      new URL("https://x/v1/commands/runs/run_x/audit?limit=10"),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      data: { events: Array<{ kind: string; payload_json: string | null }>; count: number };
+    };
+    expect(body.data.count).toBe(2);
+    expect(body.data.events.map((event) => event.kind)).toEqual([
+      "command_received",
+      "run_created",
+    ]);
+    expect(JSON.parse(body.data.events[0].payload_json as string).command_id).toBe("ts-status");
+  });
+
+  it("GET /v1/commands/runs/:id/audit returns 404 for missing run", async () => {
+    const res = await handleGetCommandRunAudit(
+      env,
+      "run_missing",
+      new URL("https://x/v1/commands/runs/run_missing/audit"),
+    );
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("not_found");
+  });
+
+  it("GET /v1/commands/runs/:id/audit validates limit", async () => {
+    const res = await handleGetCommandRunAudit(
+      env,
+      "run_missing",
+      new URL("https://x/v1/commands/runs/run_missing/audit?limit=nope"),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("invalid_limit");
   });
 
   it("POST /v1/commands/intent with invalid actor_kind returns 400 invalid_intent", async () => {
@@ -321,8 +439,8 @@ describe("GET /v1/commands/runs", () => {
     expect(body.data.runs.every((r) => r.state === "created")).toBe(true);
   });
 
-  it("state=created&route=downstream_multica filters by route correctly", async () => {
-    // ts-standup is downstream_multica
+  it("state=created&route=hermes_bridge filters by route correctly", async () => {
+    // ts-standup is hermes_bridge
     await handleCommandIntent(env, new Request("https://x/v1/commands/intent", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -331,7 +449,7 @@ describe("GET /v1/commands/runs", () => {
         correlation_id: "rt-c1", payload: {},
       }),
     }));
-    // ts-generate-brief is downstream_multica
+    // ts-generate-brief is hermes_bridge
     await handleCommandIntent(env, new Request("https://x/v1/commands/intent", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -340,7 +458,7 @@ describe("GET /v1/commands/runs", () => {
         correlation_id: "rt-c2", payload: {},
       }),
     }));
-    // ts-trace-signal is local_worker — should be excluded from downstream_multica results
+    // ts-trace-signal is cambium_operator - should be excluded from hermes_bridge results
     await handleCommandIntent(env, new Request("https://x/v1/commands/intent", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -350,7 +468,7 @@ describe("GET /v1/commands/runs", () => {
       }),
     }));
 
-    const res = await handleListCommandRuns(env, listUrl("?state=created&route=downstream_multica"));
+    const res = await handleListCommandRuns(env, listUrl("?state=created&route=hermes_bridge"));
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       data: { runs: Array<{ command_id: string }>; count: number };
@@ -361,8 +479,8 @@ describe("GET /v1/commands/runs", () => {
     expect(cmdIds).not.toContain("ts-trace-signal");
   });
 
-  it("state=created&route=local_worker excludes downstream_multica runs", async () => {
-    // ts-standup (downstream_multica) — stays in "created"
+  it("state=created&route=cambium_operator excludes hermes_bridge runs", async () => {
+    // ts-standup (hermes_bridge) stays in "created"
     await handleCommandIntent(env, new Request("https://x/v1/commands/intent", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -371,11 +489,7 @@ describe("GET /v1/commands/runs", () => {
         correlation_id: "lw-c1", payload: {},
       }),
     }));
-    // ts-trace-signal (local_worker) flips to "accepted" immediately,
-    // so it will NOT appear in state=created results either. To exercise
-    // the route filter while having a row in 'created' that matches
-    // local_worker, we use a state that the local_worker route uses
-    // post-intake: "accepted". The route filter still applies.
+    // ts-trace-signal (cambium_operator) also stays in "created".
     await handleCommandIntent(env, new Request("https://x/v1/commands/intent", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -385,23 +499,22 @@ describe("GET /v1/commands/runs", () => {
       }),
     }));
 
-    // state=created&route=local_worker — should be empty because the only
-    // local_worker run is already 'accepted'.
-    const createdLocal = await handleListCommandRuns(env, listUrl("?state=created&route=local_worker"));
-    expect(createdLocal.status).toBe(200);
-    const bodyCreated = (await createdLocal.json()) as {
+    const createdCambium = await handleListCommandRuns(env, listUrl("?state=created&route=cambium_operator"));
+    expect(createdCambium.status).toBe(200);
+    const bodyCreated = (await createdCambium.json()) as {
       data: { runs: Array<{ command_id: string }>; count: number };
     };
     expect(bodyCreated.data.runs.map((r) => r.command_id)).not.toContain("ts-standup");
-    expect(bodyCreated.data.count).toBe(0);
+    expect(bodyCreated.data.runs.map((r) => r.command_id)).toContain("ts-trace-signal");
+  });
 
-    // state=accepted&route=local_worker — should surface the ts-trace-signal row
-    const acceptedLocal = await handleListCommandRuns(env, listUrl("?state=accepted&route=local_worker"));
-    expect(acceptedLocal.status).toBe(200);
-    const bodyAccepted = (await acceptedLocal.json()) as {
+  it("state=created&route=legacy_multica is a valid empty drain route", async () => {
+    const res = await handleListCommandRuns(env, listUrl("?state=created&route=legacy_multica"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
       data: { runs: Array<{ command_id: string }>; count: number };
     };
-    expect(bodyAccepted.data.runs.map((r) => r.command_id)).toContain("ts-trace-signal");
-    expect(bodyAccepted.data.runs.map((r) => r.command_id)).not.toContain("ts-standup");
+    expect(body.data.runs).toEqual([]);
+    expect(body.data.count).toBe(0);
   });
 });

@@ -2,6 +2,247 @@
 
 ## Goal
 
+Surface TeamForge OTA update controls in the active Command Cortex app shell so
+operators can check, install, restart, and reach detailed update settings
+without knowing about the hidden classic Settings route.
+
+## Plan
+
+- [x] Wire the existing Tauri updater bridge into shell-level React state for
+      checking, available-update, download/install, restart, unsupported, and
+      error states.
+- [x] Add a persistent Command Cortex release console with check/install/details
+      actions and progress feedback.
+- [x] Route legacy `/settings` and command-palette update actions to real update
+      controls instead of the Cortex placeholder route.
+- [x] Keep the classic sidebar's app-version/update strip actionable.
+- [x] Run app build and browser-preview verification, then record the result
+      here.
+
+## Review
+
+- Added shell-level OTA state in `src/App.tsx` backed by the existing
+  Tauri updater bridge: unsupported, checking, current, available,
+  downloading, installing, restarting, and error states now have visible UI.
+- Added a Command Cortex release console on the active shell with direct
+  `Check`, `Install + Restart`, and `Details` actions. Browser preview shows
+  the expected packaged-app fallback; packaged Tauri builds will use the real
+  updater IPC.
+- Redirected legacy `/settings` to `/classic/settings` so older settings links
+  reach the existing Settings page instead of the Mission Cortex placeholder.
+- Updated command palette actions so update checks run directly and install is
+  offered when an update handle is available.
+- Updated the classic sidebar version strip so OTA remains actionable outside
+  Command Cortex.
+- Verification:
+  - `pnpm build` passed.
+  - `git diff --check` passed.
+  - Browser route probe for `http://127.0.0.1:4175/settings` rendered the
+    Settings shell and contained the existing `APP UPDATES` section.
+  - Desktop screenshot captured:
+    `/tmp/teamforge-ota-desktop-final.png`.
+  - Mobile screenshot captured:
+    `/tmp/teamforge-ota-mobile-final.png`.
+- Remaining proof gate:
+  - Run the packaged Tauri app against the signed OTA feed to prove live
+    update availability, download, install, and relaunch behavior. Browser
+    preview cannot exercise Tauri updater IPC.
+
+# Task Plan
+
+## Goal
+
+Ship Milestone 2's first live `ts-status` path in TeamForge: register the
+read-only founder/cofounder command, execute it synchronously inside the
+Worker, persist a terminal result plus audit events, and expose a compact
+founder-safe status summary in the Hermes founder surface.
+
+## Plan
+
+- [x] Register `ts-status` in the Worker command registry and add a narrow
+      synchronous local-worker executor for it.
+- [x] Persist inline terminal results for local-worker execution, including
+      `result_json`, `succeeded` / `failed` terminal state, and the matching
+      audit sequence.
+- [x] Add route and registry tests for `ts-status` presence, terminal success,
+      result payload shape, and audit ordering.
+- [x] Reuse the returned status payload to render a compact founder-safe
+      summary in the Hermes founder dispatch surface.
+- [x] Run targeted Worker and frontend verification, then record the result
+      here.
+
+## Review
+
+- Added `ts-status` to `cloudflare/worker/src/lib/commands/registry.ts` as a
+  founder/cofounder read-only `local_worker` command owned by TeamForge and
+  attributed to Hermes.
+- Split control-plane bootstrap/status assembly into
+  `cloudflare/worker/src/lib/control-plane-status.ts` so both
+  `GET /v1/bootstrap` and the new inline `ts-status` executor use the same
+  Worker-local truth without a route import cycle.
+- Added terminal run-result persistence through
+  `recordRunResult(...)`, then wired `ts-status` execution so a successful
+  run now records:
+  - `command_received`
+  - `run_created`
+  - `result_received`
+  - `result_delivered`
+- `ts-status` now writes structured `result_json` with:
+  - `summary`
+  - `service`
+  - `bindings`
+  - `routes`
+  - `auth_gates`
+  - `source_refs`
+  - `telegram_summary`
+- Added frontend parsing at `src/lib/commandRuns/tsStatus.ts` and reused the
+  returned `telegram_summary` in:
+  - `src/pages/Agents.tsx` for the founder Hermes `STATUS` command
+  - `src/components/cortex/TacticalMembrane.tsx` so command history/result
+    panels show the compact founder-safe summary instead of only raw JSON when
+    the run payload is `ts-status`
+- Verification:
+  - `pnpm exec vitest run src/routes/__tests__/commands.test.ts src/lib/commands/registry.test.ts src/lib/commands/runs.test.ts`
+    in `cloudflare/worker` passed: 3 files, 40 tests
+  - `pnpm exec tsc -p tsconfig.json --noEmit`
+    in `cloudflare/worker` passed
+  - `pnpm build`
+    in the app root passed
+  - `git diff --check`
+    passed
+- Existing non-blocking warnings remain:
+  - Vite React plugin deprecation warnings around `esbuild` vs `oxc`
+  - root `tsconfig.json` still warns that `astro/tsconfigs/strict` cannot be
+    found
+  - Vite chunk-size warnings remain for large bundled assets
+
+# Task Plan
+
+## Goal
+
+Productize the TeamForge command loop beyond backend-only contracts by adding
+a visible Mission Cortex run console with read-only run history, callback result
+surface area, and per-run audit trail plumbing.
+
+## Plan
+
+- [x] Add a Worker read endpoint for command audit events so
+      `/v1/commands/runs/:id/audit` returns ordered D1 audit rows after
+      authenticated run lookup.
+- [x] Bridge command run history and audit reads through Tauri commands and the
+      shared React invoke facade.
+- [x] Render state-filtered run history in Mission Cortex, with selectable run
+      rows, result payload summaries, URL extraction for callback artifacts,
+      and a selected-run audit trail panel.
+- [x] Verify Worker, Tauri, TypeScript build, and browser-preview rendering.
+
+## Review
+
+- Added `listAuditEventsByRun` and `handleGetCommandRunAudit` to the Worker
+  command route stack. The route validates positive `limit`, returns 404 for
+  missing runs, and returns `{ events, count }` for ordered
+  `command_audit_events`.
+- Added command audit support to the Worker test D1 mock and expanded command
+  route tests for ordered audit events, missing-run 404, and invalid limits.
+- Added Tauri commands:
+  - `list_command_runs`
+  - `get_command_run_audit`
+- Updated Mission Cortex so the tactical membrane now shows:
+  - state filters for `created`, `accepted`, `in_progress`, `succeeded`,
+    `failed`, `partial`, and `cancelled`
+  - recent run rows for the selected state
+  - selected-run audit events refreshed from Tauri
+  - result/audit links when callback payload JSON contains a URL
+- Verification:
+  - `pnpm check` in `cloudflare/worker` passed.
+  - `pnpm test src/routes/__tests__/commands.test.ts src/lib/commands/runs.test.ts`
+    passed: 2 files, 31 tests.
+  - `pnpm exec wrangler deploy --dry-run` in `cloudflare/worker` passed and
+    confirmed the live bindings for `TEAMFORGE_DB`, `TEAMFORGE_ARTIFACTS`,
+    `SYNC_QUEUE`, and `WORKSPACE_LOCKS`.
+  - `pnpm run deploy` in `cloudflare/worker` deployed Worker version
+    `a1bc25c4-c49c-4af8-a171-16e4259a265b` to
+    `teamforge-api.sheshnarayan-iyer.workers.dev`, `forge.thoughtseed.space`,
+    and `plexus-api.thoughtseed.space`.
+  - Before deploy, unauthenticated
+    `GET https://plexus-api.thoughtseed.space/v1/commands/runs/run_nonexistent/audit`
+    returned the reserved `501 feature_not_ready` contract response.
+  - After deploy, the same live route returns the real command-route auth gate
+    (`401 missing_authorization`), proving the deployed Worker now reaches the
+    audit handler path instead of the reserved placeholder.
+  - Remote D1 has one historical command run,
+    `run_b850a769f3454de29a18685d`, state `failed`, command `ts-standup`,
+    correlation `smoke-1781549465`, error `multica_timeout`.
+  - Remote D1 has four audit events for that run:
+    `command_received`, `run_created`, `downstream_agent_responded`, and
+    `failure`.
+  - `pnpm test` in `cloudflare/worker` passed: 10 files, 73 tests.
+  - `rustfmt --edition 2021 --check src-tauri/src/commands/founder_commands.rs`
+    passed.
+  - `cargo check --manifest-path src-tauri/Cargo.toml` passed with the existing
+    unrelated warnings in `src/commands/mod.rs` and `src/huly/naming.rs`.
+  - `pnpm build` passed; Vite still warns that the parent tsconfig extends
+    missing `astro/tsconfigs/strict`, and bundle-size warnings remain.
+  - Browser preview at `http://127.0.0.1:4174/mission-cortex` showed the new
+    `RUN HISTORY` section and state filters. Browser preview still logs the
+    existing Tauri-bridge errors because desktop `invoke` is unavailable
+    outside the Tauri shell.
+- Remaining live gates:
+  - run a real desktop/Tauri command E2E that posts an intent, sees MultiCA pick
+    it up, receives a callback, and proves the run row plus audit trail in the
+    Mission Cortex UI
+  - capture screenshot/log evidence for that desktop E2E
+  - complete an authenticated live route probe for
+    `/v1/commands/runs/run_b850a769f3454de29a18685d/audit`; the route is now
+    deployed, but this session lacks a current Plexus/Forge Access JWT or
+    internal app credential after the Plexus OTP flow was intentionally reset.
+
+# Task Plan
+
+## Goal
+
+Move the Thoughtseed infra/Plexus wiring from documented contracts toward
+operator-safe product proof: redact sensitive infra status material, remove
+employee-facing legacy credential scaffolding from Plexus Settings, and keep
+live OTP/realtime/command-loop proof gates explicit.
+
+## Plan
+
+- [x] Redact `INFRA_STATUS.md` so it preserves architecture truth without
+      publishing live PATs, service-token secrets, Access AUDs, or HMAC paths.
+- [x] Clean Plexus Settings so Cloudflare Access session proof is the normal
+      control surface instead of Worker URL / workspace / bearer-token editing.
+- [x] Update Plexus task status to clarify `0.3.1` is local WIP while `0.3.0`
+      remains the last proven release, and keep OTP/admin/realtime gates open.
+- [x] Run Worker and Plexus verification commands after the edits.
+
+## Review
+
+- Redacted the live MultiCA PAT, Cloudflare Access service token ID/secret,
+  Access AUD values, and callback HMAC secret location from
+  `/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/INFRA_STATUS.md`.
+- Updated Plexus Settings so the normal operator view shows Access role,
+  workspace, project visibility, identity, employee link, onboarding state,
+  endpoint, and Worker reachability; the legacy token and editable Worker
+  connection fields no longer appear on that screen.
+- Updated Plexus `tasks/todo.md` to distinguish released `0.3.0` from local
+  unreleased `0.3.1` WIP.
+- Verification:
+  - `pnpm check` in `team-forge-ts/cloudflare/worker` passed.
+  - `pnpm test` in `team-forge-ts/cloudflare/worker` passed: 10 files, 70 tests.
+  - `npm run typecheck` in `plexus-ts` passed.
+  - `npx vite build` in `plexus-ts` passed; Vite still warns that the parent
+    tsconfig extends missing `astro/tsconfigs/strict`.
+  - Cached Plexus Access JWT live probes passed for `/v1/whoami`,
+    `/v1/admin/demo`, `/v1/realtime/rooms`, and state-filtered
+    `/v1/commands/runs`; a reversible admin onboarding write restored the
+    employee `preferences` step to its original `optional` state.
+  - `git diff --check` passed in both `team-forge-ts` and `plexus-ts`.
+
+# Task Plan
+
+## Goal
+
 Tighten the current TeamForge Rust build baseline by removing the remaining
 active dead-code warnings in `cargo check`, so verification output reflects
 real problems instead of long-standing unused helper noise.

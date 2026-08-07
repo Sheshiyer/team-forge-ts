@@ -90,4 +90,10 @@ export interface Env {
   CF_REALTIME_API_TOKEN?: string;
   CF_REALTIME_APP_TOKEN?: string;
   CF_REALTIME_API_BASE_URL?: string;
+
+  // Founder secrets vault — AES-256-GCM envelope key.
+  // base64 of a 32-byte key. WORKER SECRET ONLY — never set as a plain var.
+  // Pre-provisioned for feat/founder-secrets-zero-disk (routes/secrets.ts + SECRETS_KV binding).
+  // Do NOT delete: the live secret is active; the consuming code lands on that branch merge.
+  TF_SECRETS_MASTER_KEY?: string;
 }

@@ -265,6 +265,130 @@ function normalizeStringArray(value) {
   return normalized ? [normalized] : [];
 }
 
+function stripMarkdownCode(value) {
+  return String(value ?? "").replace(/`([^`]+)`/g, "$1").trim();
+}
+
+function normalizeGitHubRepoCandidate(value) {
+  const raw = stripMarkdownCode(value)
+    .replace(/^\s*[-*]\s+/, "")
+    .replace(/^\s*\|/, "")
+    .trim();
+  if (!raw) return null;
+  if (/gitlab\.com/i.test(raw)) return null;
+  if (/\.(md|ts|tsx|js|jsx|json|yml|yaml|png|jpg|jpeg|pdf)(?:\b|$)/i.test(raw)) return null;
+  if (/(^|\/)(pull|pulls|issues|issue|commit|commits|blob|tree)\/[^/\s]+/i.test(raw)) return null;
+
+  const match = raw.match(
+    /^(?:https?:\/\/github\.com\/)?([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)(?:\.git)?(?:[/?#].*)?$/i,
+  );
+  if (!match) return null;
+
+  const owner = match[1];
+  const repo = match[2].replace(/\.git$/i, "");
+  const bannedOwners = new Set([
+    "api",
+    "apps",
+    "archive",
+    "client",
+    "code",
+    "communication",
+    "communications",
+    "config",
+    "data-access",
+    "developers.cloudflare.com",
+    "docs",
+    "evidence",
+    "handoff",
+    "https:",
+    "lib",
+    "manage-dns-records",
+    "mocs",
+    "onboarding",
+    "products",
+    "recipient",
+    "repo",
+    "scripts",
+    "shop",
+    "source",
+    "storage",
+    "tech-stack",
+    "volumes",
+    "www.notion.so",
+  ]);
+  if (bannedOwners.has(owner.toLowerCase())) return null;
+  return `${owner}/${repo}`;
+}
+
+function extractGitHubUrlLinksFromText(text) {
+  const repos = [];
+  const seen = new Set();
+  const add = (candidate) => {
+    const repo = normalizeGitHubRepoCandidate(candidate);
+    if (!repo || seen.has(repo.toLowerCase())) return;
+    seen.add(repo.toLowerCase());
+    repos.push(repo);
+  };
+
+  for (const match of String(text ?? "").matchAll(/https?:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?(?:[/?#][^\s)`|<]*)?/gi)) {
+    add(match[0]);
+  }
+  return repos;
+}
+
+function extractGitHubLinksFromText(text) {
+  const repos = extractGitHubUrlLinksFromText(text);
+  const seen = new Set(repos.map((repo) => repo.toLowerCase()));
+  const add = (candidate) => {
+    const repo = normalizeGitHubRepoCandidate(candidate);
+    if (!repo || seen.has(repo.toLowerCase())) return;
+    seen.add(repo.toLowerCase());
+    repos.push(repo);
+  };
+
+  for (const match of String(text ?? "").matchAll(/`([A-Za-z0-9][A-Za-z0-9_.-]+\/[A-Za-z0-9][A-Za-z0-9_.-]+)`/g)) {
+    add(match[1]);
+  }
+  return repos;
+}
+
+function extractProjectGitHubLinks(data, body) {
+  const externalRefRepos = Array.isArray(data.external_refs)
+    ? data.external_refs
+        .filter((item) => normalizeOptionalString(item?.system)?.toLowerCase() === "github")
+        .map((item) => item.id)
+    : [];
+  const direct = [
+    ...normalizeStringArray(data.github_repos),
+    ...normalizeStringArray(data.githubRepos),
+    ...normalizeStringArray(data.github_repo_urls),
+    ...normalizeStringArray(data.githubRepoUrls),
+    ...normalizeStringArray(externalRefRepos),
+  ];
+  const sections = parseMarkdownSections(body);
+  const repoSections = sections
+    .filter((section) => section.key.includes("repo"))
+    .map((section) => section.content)
+    .join("\n");
+  const repos = [];
+  const seen = new Set();
+  for (const candidate of [...direct, ...extractGitHubUrlLinksFromText(body), ...extractGitHubLinksFromText(repoSections)]) {
+    const repo = normalizeGitHubRepoCandidate(candidate);
+    if (!repo || seen.has(repo.toLowerCase())) continue;
+    seen.add(repo.toLowerCase());
+    repos.push({
+      repo,
+      repoRole: repos.length === 0 ? "primary" : "supporting",
+      displayName: null,
+      syncIssues: true,
+      syncMilestones: true,
+      syncLabels: true,
+      isPrimary: repos.length === 0,
+    });
+  }
+  return repos;
+}
+
 function normalizeNullableBoolean(value) {
   if (typeof value === "boolean") return value;
   const normalized = normalizeOptionalString(value)?.toLowerCase() ?? null;
@@ -513,6 +637,7 @@ function normalizeProjectBrief(filePath, vaultRoot) {
     const clientName = clientId ? titleizeSlug(clientId) : titleizeSlug(topClientFolder);
     const status = normalizeStatus(data.status, tags);
     const clockifyProjectId = findExternalRefId(externalRefs, ["clockify", "clockify-project"]);
+    const githubLinks = extractProjectGitHubLinks(data, body);
 
     return {
       key: projectId,
@@ -531,6 +656,7 @@ function normalizeProjectBrief(filePath, vaultRoot) {
         status,
         visibility: "workspace",
         syncMode: "manual",
+        githubLinks,
       },
       artifacts: buildParityArtifacts({
         filePath,
@@ -1393,6 +1519,33 @@ function mergeArtifacts(existingArtifacts = [], parityArtifacts = []) {
   return merged;
 }
 
+function repoKey(link) {
+  const repo = normalizeOptionalString(link?.repo);
+  if (repo) return repo.toLowerCase();
+  const owner = normalizeOptionalString(link?.repoOwner ?? link?.repo_owner);
+  const name = normalizeOptionalString(link?.repoName ?? link?.repo_name);
+  return owner && name ? `${owner}/${name}`.toLowerCase() : null;
+}
+
+function mergeGithubLinks(existingLinks = [], parityLinks = []) {
+  const merged = [];
+  const seen = new Set();
+  for (const link of [...existingLinks, ...parityLinks]) {
+    const key = repoKey(link);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push({
+      ...link,
+      repoRole: link.repoRole ?? link.repo_role ?? (merged.length === 0 ? "primary" : "supporting"),
+      syncIssues: link.syncIssues ?? link.sync_issues ?? true,
+      syncMilestones: link.syncMilestones ?? link.sync_milestones ?? true,
+      syncLabels: link.syncLabels ?? link.sync_labels ?? true,
+      isPrimary: link.isPrimary ?? link.is_primary ?? merged.length === 0,
+    });
+  }
+  return merged;
+}
+
 function buildMergedPayload(record, existingGraph, workspaceId, extraArtifacts = []) {
   const existingProject = existingGraph?.project ?? null;
   const resolvedWorkspaceId =
@@ -1426,7 +1579,7 @@ function buildMergedPayload(record, existingGraph, workspaceId, extraArtifacts =
       visibility: existingProject?.visibility ?? "workspace",
       syncMode: existingProject?.syncMode ?? "manual",
     },
-    githubLinks: existingGraph?.githubLinks ?? [],
+    githubLinks: mergeGithubLinks(existingGraph?.githubLinks ?? [], record.metadata.githubLinks ?? []),
     hulyLinks: existingGraph?.hulyLinks ?? [],
     artifacts: mergeArtifacts(existingGraph?.artifacts ?? [], [...record.artifacts, ...extraArtifacts]),
     policy: existingGraph?.policy ?? null,
@@ -1846,11 +1999,14 @@ function normalizeRemoteGraph(item) {
   return null;
 }
 
-async function fetchJson(baseUrl, pathname, token, cfAccessClientId = null, cfAccessClientSecret = null, internalSecret = null) {
-  const url = new URL(pathname, baseUrl);
-  const headers = { Accept: "application/json" };
+function applyWorkerAuthHeaders(headers, token, cfAccessClientId = null, cfAccessClientSecret = null, internalSecret = null) {
   if (token) {
     headers.Authorization = `Bearer ${token}`;
+  }
+  const cfJwt = process.env.CF_ACCESS_JWT ?? null;
+  if (cfJwt) {
+    headers["Cf-Access-Jwt-Assertion"] = cfJwt;
+    headers.Cookie = `CF_Authorization=${cfJwt}`;
   }
   const cfId = cfAccessClientId || process.env.CF_ACCESS_CLIENT_ID || null;
   const cfSecret = cfAccessClientSecret || process.env.CF_ACCESS_CLIENT_SECRET || null;
@@ -1864,6 +2020,12 @@ async function fetchJson(baseUrl, pathname, token, cfAccessClientId = null, cfAc
   if (intSecret) {
     headers["X-TeamForge-Internal-Secret"] = intSecret;
   }
+}
+
+async function fetchJson(baseUrl, pathname, token, cfAccessClientId = null, cfAccessClientSecret = null, internalSecret = null) {
+  const url = new URL(pathname, baseUrl);
+  const headers = { Accept: "application/json" };
+  applyWorkerAuthHeaders(headers, token, cfAccessClientId, cfAccessClientSecret, internalSecret);
   const response = await fetch(url, { headers });
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
@@ -1878,21 +2040,7 @@ async function putJson(baseUrl, pathname, body, token, cfAccessClientId = null, 
     Accept: "application/json",
     "Content-Type": "application/json",
   };
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-  const cfId = cfAccessClientId || process.env.CF_ACCESS_CLIENT_ID || null;
-  const cfSecret = cfAccessClientSecret || process.env.CF_ACCESS_CLIENT_SECRET || null;
-  if (cfId) {
-    headers["CF-Access-Client-Id"] = cfId;
-  }
-  if (cfSecret) {
-    headers["CF-Access-Client-Secret"] = cfSecret;
-  }
-  const intSecret = internalSecret || process.env.TF_INTERNAL_SHARED_SECRET || null;
-  if (intSecret) {
-    headers["X-TeamForge-Internal-Secret"] = intSecret;
-  }
+  applyWorkerAuthHeaders(headers, token, cfAccessClientId, cfAccessClientSecret, internalSecret);
   const response = await fetch(url, {
     method: "PUT",
     headers,
@@ -1912,21 +2060,7 @@ async function postJson(baseUrl, pathname, body, token, cfAccessClientId = null,
     Accept: "application/json",
     "Content-Type": "application/json",
   };
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-  const cfId = cfAccessClientId || process.env.CF_ACCESS_CLIENT_ID || null;
-  const cfSecret = cfAccessClientSecret || process.env.CF_ACCESS_CLIENT_SECRET || null;
-  if (cfId) {
-    headers["CF-Access-Client-Id"] = cfId;
-  }
-  if (cfSecret) {
-    headers["CF-Access-Client-Secret"] = cfSecret;
-  }
-  const intSecret = internalSecret || process.env.TF_INTERNAL_SHARED_SECRET || null;
-  if (intSecret) {
-    headers["X-TeamForge-Internal-Secret"] = intSecret;
-  }
+  applyWorkerAuthHeaders(headers, token, cfAccessClientId, cfAccessClientSecret, internalSecret);
   const response = await fetch(url, {
     method: "POST",
     headers,
@@ -2384,6 +2518,7 @@ async function main() {
           relativePath: operation.relativePath,
           diffs: operation.diffs,
           remoteShape: operation.remoteShape,
+          githubLinks: operation.payload.githubLinks.map((link) => link.repo),
           latestSource: operation.latestSource,
         })),
       },

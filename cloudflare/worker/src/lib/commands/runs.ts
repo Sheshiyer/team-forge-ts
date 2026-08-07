@@ -1,5 +1,5 @@
 import type { D1DatabaseLike } from "../env";
-import type { AuditEventKind, CommandIntent, CommandRun, CommandRunState, ActorKind } from "./types";
+import type { AuditEvent, AuditEventKind, CommandIntent, CommandRun, CommandRunState, ActorKind } from "./types";
 
 function newId(prefix: string): string {
   const random = crypto.randomUUID().replace(/-/g, "");
@@ -78,6 +78,27 @@ export async function transitionRun(
   if (!result.success) throw new Error("D1 UPDATE failed for command_runs");
 }
 
+export async function recordRunResult(
+  db: D1DatabaseLike,
+  runId: string,
+  state: Extract<CommandRunState, "succeeded" | "failed" | "partial" | "cancelled">,
+  resultJson: string | null,
+  errorCode: string | null,
+  errorMessage: string | null,
+  now: number,
+): Promise<void> {
+  const result = await db
+    .prepare(
+      `UPDATE command_runs
+       SET result_json = ?, error_code = ?, error_message = ?, state = ?,
+           completed_at = COALESCE(completed_at, ?)
+       WHERE id = ?`,
+    )
+    .bind(resultJson, errorCode, errorMessage, state, now, runId)
+    .run();
+  if (!result.success) throw new Error("D1 UPDATE failed for command_runs result");
+}
+
 /**
  * Look up the most recently created run for a correlation_id. Used by the
  * Phase 2 callback route to short-circuit idempotent retries.
@@ -153,4 +174,17 @@ export async function recordAuditEvent(
     )
     .run();
   if (!result.success) throw new Error("D1 INSERT failed for command_audit_events");
+}
+
+export async function listAuditEventsByRun(
+  db: D1DatabaseLike,
+  runId: string,
+  limit: number,
+): Promise<AuditEvent[]> {
+  const safeLimit = Math.min(Math.max(limit, 1), 100);
+  const result = await db
+    .prepare(`SELECT * FROM command_audit_events WHERE run_id = ? ORDER BY occurred_at ASC LIMIT ?`)
+    .bind(runId, safeLimit)
+    .all<AuditEvent>();
+  return result.results;
 }

@@ -17,7 +17,7 @@
     // Rollback gotcha: keep_vars=true means removing these lines does NOT unset them on deploy —
     // use `wrangler rollback`, set them to "", or delete in the dashboard.
     "TF_ACCESS_TEAM_DOMAIN": "red-queen-4dfa.cloudflareaccess.com",
-    "TF_ACCESS_AUD": "5695e8409cd4e838eaaef4de4995541dae4f31a2773945ea67f136800977c200,d3892b5d2a62027029b09b2fd015a9e8074d5efb38c443099f803517cb3feb51",
+    "TF_ACCESS_AUD": "5695e8409cd4e838eaaef4de4995541dae4f31a2773945ea67f136800977c200,d3892b5d2a62027029b09b2fd015a9e8074d5efb38c443099f803517cb3feb51,027d9959d1bab2ffb291b294b2cf49427fe63608a44c228fd05c3c7731ee60d7",
     "TF_INTEGRATION_CONFIG_JSON": "{\"github\":{\"repos\":[{\"repo\":\"Sheshiyer/parkarea-aleph\",\"displayName\":\"ParkArea Phase 2 - Germany Launch\",\"clientName\":\"ParkArea\",\"defaultMilestoneNumber\":1,\"enabled\":true}]},\"huly\":{\"mirrorMode\":\"read_only\",\"mirrorEnabled\":true},\"slack\":{},\"clockify\":{}}",
     // Temporary internal shared secret for m2m (parity, Hermes) bypassing CF Access service token issues on this Worker route.
     // Set a long random value. Callers send header X-TeamForge-Internal-Secret.

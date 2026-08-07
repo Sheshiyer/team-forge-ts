@@ -11,3 +11,7 @@ sidecar/node_modules/
 # Sidecar secrets
 sidecar/.env
 .secrets/
+
+# Codex worktrees: checkouts of THIS repo, not content of it.
+# Committing them creates gitlinks to commits the repo does not contain.
+.codex-worktrees/

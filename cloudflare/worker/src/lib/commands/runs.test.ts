@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { createRun, getRunById, getRunByCorrelationId, listRunsByState, recordAuditEvent, transitionRun } from "./runs";
+import { createRun, getRunById, getRunByCorrelationId, listRunsByState, recordAuditEvent, recordRunResult, transitionRun } from "./runs";
 import type { CommandIntent } from "./types";
 import { makeMockDb, type MockDbHandle } from "../test-utils/mock-d1";
 
@@ -50,6 +50,21 @@ describe("command runs", () => {
     expect(mock.events[0].kind).toBe("command_received");
     expect(mock.events[0].run_id).toBe(run.id);
     expect(JSON.parse(mock.events[0].payload_json as string)).toEqual({ hello: "world" });
+  });
+
+  it("recordRunResult stores terminal payload and error fields", async () => {
+    const intent: CommandIntent = {
+      id: "ts-status", actor_id: "f", actor_kind: "founder", auth_mode: "cf_access",
+      correlation_id: "c-4", payload: {},
+    };
+    const run = await createRun(mock.db, intent, 1000);
+    await transitionRun(mock.db, run.id, "accepted", 1500);
+    await recordRunResult(mock.db, run.id, "succeeded", "{\"overall\":\"healthy\"}", null, null, 2000);
+    const updated = await getRunById(mock.db, run.id);
+    expect(updated?.state).toBe("succeeded");
+    expect(updated?.result_json).toBe("{\"overall\":\"healthy\"}");
+    expect(updated?.completed_at).toBe(2000);
+    expect(updated?.error_code).toBeNull();
   });
 });
 

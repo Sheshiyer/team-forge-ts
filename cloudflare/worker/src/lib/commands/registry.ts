@@ -12,8 +12,8 @@ export interface CommandSpec {
   allowed_actor_kinds: ActorKind[];
   /** Where execution happens. */
   route: CommandRoute;
-  /** MultiCA agent that handles this command — used by the cambium-bridge teamforge-consumer to pick the assignee. */
-  multica_agent: string;
+  /** Hermes/Cambium lane that owns the command after intake. */
+  operator_lane: string;
   /** Whether this command mutates state. */
   mutates: boolean;
   /** State owner — teamforge owns the run record; route owns the execution leg. */
@@ -26,50 +26,60 @@ export const COMMAND_REGISTRY: CommandSpec[] = [
     label: "Standup",
     description: "Aggregate read-only standup data via the Hermes daily-standup autopilot.",
     allowed_actor_kinds: ["founder", "cofounder"],
-    route: "downstream_multica",
-    multica_agent: "Hermes",
+    route: "hermes_bridge",
+    operator_lane: "founder_standup",
     mutates: false,
-    state_owner: "teamforge",
+    state_owner: "cambium",
   },
   {
     id: "ts-summon-agent",
     label: "Summon Agent",
     description: "Bring a specific agent into a project/client branch.",
     allowed_actor_kinds: ["founder", "cofounder"],
-    route: "downstream_multica",
-    multica_agent: "CEO",
+    route: "cambium_operator",
+    operator_lane: "quest_spawn",
     mutates: true,
-    state_owner: "teamforge",
+    state_owner: "cambium",
   },
   {
     id: "ts-approve-synapse",
     label: "Approve Synapse",
     description: "Approve a pending decision gate (e.g. PR review).",
     allowed_actor_kinds: ["founder", "cofounder"],
-    route: "downstream_multica",
-    multica_agent: "CEO",
+    route: "cambium_operator",
+    operator_lane: "approval_gate",
     mutates: true,
-    state_owner: "teamforge",
+    state_owner: "cambium",
+  },
+  {
+    id: "ts-status",
+    label: "Status",
+    description: "Read-only founder status snapshot for TeamForge control-plane health.",
+    allowed_actor_kinds: ["founder", "cofounder"],
+    route: "cambium_operator",
+    operator_lane: "status_snapshot",
+    mutates: false,
+    state_owner: "cambium",
   },
   {
     id: "ts-trace-signal",
     label: "Trace Signal",
     description: "Read-only: surface recent events for a node.",
     allowed_actor_kinds: ["founder", "cofounder", "employee"],
-    route: "local_worker",
-    multica_agent: "Scientist",
+    route: "cambium_operator",
+    operator_lane: "signal_trace",
     mutates: false,
-    state_owner: "teamforge",
+    state_owner: "cambium",
   },
   {
     id: "ts-generate-brief",
     label: "Generate Brief",
     description: "Synthesize a tactical brief from node context.",
     allowed_actor_kinds: ["founder", "cofounder"],
-    route: "downstream_multica",
-    multica_agent: "Synthesist",
+    route: "hermes_bridge",
+    operator_lane: "brief_synthesis",
     mutates: false,
-    state_owner: "teamforge",
+    state_owner: "cambium",
   },
 ];
 

@@ -20,6 +20,7 @@
  */
 
 import type { Env } from "../lib/env";
+import { buildBootstrapPayload } from "../lib/control-plane-status";
 import { requireBearerAuth, requireInternalAuth } from "../lib/auth";
 import { jsonError, jsonNotImplemented, jsonOk } from "../lib/response";
 import { verifyAccessJwt } from "../lib/access";
@@ -33,7 +34,7 @@ import {
   updateOnboardingStep,
 } from "../lib/plexus-session";
 import { handleGetTimeEntries, handlePostTimeEntries } from "./time-entries";
-import { handleCommandIntent, handleGetCommandRun, handleListCommandRuns } from "./commands";
+import { handleCommandIntent, handleGetCommandRun, handleGetCommandRunAudit, handleListCommandRuns } from "./commands";
 import { handleCommandsCallback } from "./commands-callback";
 import { handleBackfillClockify } from "./clockify-backfill";
 import { handleAgentFeedExport, handleProjectCloseout, handleProjectScaffold } from "./agent-feed";
@@ -77,11 +78,6 @@ import {
 import { handleGetSyncJob, handleGetSyncRuns, handlePostSyncJob } from "./sync";
 import { handleGetTeamSnapshot, handlePostTeamRefresh } from "./team";
 import { queryFirst, queryAll } from "../lib/db";
-
-interface DatabaseStatus {
-  available: boolean;
-  schemaReady: boolean;
-}
 
 export async function handleV1Request(request: Request, env: Env, url: URL): Promise<Response> {
   const { method, pathname } = { method: request.method, pathname: url.pathname };
@@ -452,30 +448,34 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // ── Hermes Phase 1: Command intake (POST intent + GET run) ──────
   // Single intake endpoint for the founder command vocabulary. Persists a
-  // command_run + audit trail in D1; downstream execution (MultiCA/Paperclip)
-  // happens in Phase 2/3 via callbacks. local_worker commands flip to
-  // "accepted" immediately; downstream routes stay in "created" until callback.
+  // command_run + audit trail in D1; active execution is Hermes/Cambium-owned.
+  // local_worker commands can still flip to "accepted" immediately for
+  // transitional diagnostics; Hermes/Cambium routes stay in "created" until ack.
   if (method === "POST" && pathname === "/v1/commands/intent") {
     const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleCommandIntent(env, request);
   }
-  // Phase B: queue interface — the cambium-bridge teamforge-consumer polls this
-  // every ~5s to pick up new runs (state=created, route=downstream_multica),
-  // then dispatches via `multica issue assign` and posts back via the Phase 2
-  // callback route. Must be matched BEFORE the regex below so the literal
+  // Phase B: queue interface - Hermes/Cambium operators poll this to pick up
+  // new created runs (route=hermes_bridge or route=cambium_operator), then post
+  // results back via the callback route. Must be matched BEFORE the regex below so the literal
   // /v1/commands/runs path doesn't fall through unmatched.
   if (method === "GET" && pathname === "/v1/commands/runs") {
     const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
     return handleListCommandRuns(env, url);
   }
-  // Phase 2: MultiCA result callback. Auth is the HMAC verifier inside the handler
-  // (NOT requireAppOrInternalAuth) because MultiCA's ECS task role has no CF
-  // Access JWT and no app Bearer — the shared secret signs each request.
+  // Legacy drain: MultiCA result callback. Auth is the HMAC verifier inside the
+  // handler (NOT requireAppOrInternalAuth). Keep this only until old callbacks drain.
   const commandRunResultMatch = pathname.match(/^\/v1\/commands\/runs\/([^/]+)\/result$/);
   if (method === "POST" && commandRunResultMatch) {
     return handleCommandsCallback(env, request, commandRunResultMatch[1]);
+  }
+  const commandRunAuditMatch = pathname.match(/^\/v1\/commands\/runs\/([^/]+)\/audit$/);
+  if (method === "GET" && commandRunAuditMatch) {
+    const authFailure = requireAppOrInternalAuth();
+    if (authFailure) return authFailure;
+    return handleGetCommandRunAudit(env, commandRunAuditMatch[1], url);
   }
   const commandRunIdMatch = pathname.match(/^\/v1\/commands\/runs\/([^/]+)$/);
   if (method === "GET" && commandRunIdMatch) {
@@ -662,50 +662,4 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   }
 
   return jsonNotImplemented(pathname, method);
-}
-
-async function buildBootstrapPayload(env: Env): Promise<Record<string, unknown>> {
-  const database = await probeDatabase(env);
-  return {
-    service: "teamforge-api",
-    phase: "phase-2-wave-3",
-    environment: env.TF_ENV,
-    defaultOtaChannel: env.TF_DEFAULT_OTA_CHANNEL ?? "stable",
-    bindings: {
-      d1Available: database.available,
-      schemaReady: database.schemaReady,
-      artifactsBound: Boolean(env.TEAMFORGE_ARTIFACTS),
-      syncQueueBound: Boolean(env.SYNC_QUEUE),
-      workspaceLocksBound: Boolean(env.WORKSPACE_LOCKS),
-    },
-    routeStatus: {
-      bootstrap: "live",
-      remoteConfig: "live",
-      projects: "live",
-      clientProfiles: "live",
-      onboardingFlows: "live",
-      projectMappings: "live",
-      connections: "live",
-      sync: "live",
-      teamSnapshot: "live",
-      realtime: "live",
-      hulyNormalization: "live",
-      ota: "live",
-      handoffs: "live",
-      timeEntries: "live",
-      whoami: "live",
-    },
-  };
-}
-
-async function probeDatabase(env: Env): Promise<DatabaseStatus> {
-  if (!env.TEAMFORGE_DB) return { available: false, schemaReady: false };
-  try {
-    const row = await env.TEAMFORGE_DB.prepare(
-      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'organizations') AS schema_ready",
-    ).first<{ schema_ready?: number }>();
-    return { available: true, schemaReady: Boolean(row?.schema_ready) };
-  } catch {
-    return { available: false, schemaReady: false };
-  }
 }

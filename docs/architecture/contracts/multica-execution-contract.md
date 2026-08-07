@@ -1,5 +1,10 @@
 # MultiCA Execution Contract
 
+> Retirement notice, 2026-06-20: MultiCA is no longer a target agent plane.
+> This contract is retained as historical extraction reference only. New work
+> must route through Hermes, Cambium, and the curios.self bot/mini app. See
+> `docs/plans/2026-06-20-teamforge-function-retirement-map.md`.
+
 > System of record: Cloudflare Worker, `cloudflare/worker/src/routes/commands-callback.ts`.
 
 ## Scope

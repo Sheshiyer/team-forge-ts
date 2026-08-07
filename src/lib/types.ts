@@ -1142,8 +1142,22 @@ export interface HermesDispatchResult {
 export interface FounderCommandIntent {
   id: string;
   actorId: string;
-  actorKind: "founder" | "cofounder" | "employee" | "multica_service" | "paperclip_agent";
-  authMode: "cf_access" | "m2m" | "app_bearer" | "aws_task_role" | "paperclip_token";
+  actorKind:
+    | "founder"
+    | "cofounder"
+    | "employee"
+    | "hermes_service"
+    | "cambium_operator"
+    | "legacy_multica"
+    | "paperclip_agent";
+  authMode:
+    | "cf_access"
+    | "m2m"
+    | "app_bearer"
+    | "hermes_callback"
+    | "cambium_internal"
+    | "legacy_multica_hmac"
+    | "paperclip_token";
   targetKind?: string;
   targetId?: string;
   correlationId: string;
@@ -1166,6 +1180,28 @@ export interface FounderCommandRun {
   resultJson: string | null;
   errorCode: string | null;
   errorMessage: string | null;
+}
+
+export interface FounderCommandRunListResult {
+  runs: FounderCommandRun[];
+  count: number;
+}
+
+export type FounderCommandRoute = "hermes_bridge" | "cambium_operator" | "legacy_multica";
+
+export interface FounderCommandAuditEvent {
+  id: string;
+  runId: string;
+  kind: string;
+  actorId: string | null;
+  actorKind: string | null;
+  payloadJson: string | null;
+  occurredAt: number;
+}
+
+export interface FounderCommandAuditTrail {
+  events: FounderCommandAuditEvent[];
+  count: number;
 }
 
 export interface FounderCommandIntentResult {

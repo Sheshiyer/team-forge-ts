@@ -18,10 +18,8 @@ export function makeMockDb(): MockDbHandle {
   const events: Array<Record<string, unknown>> = [];
   const db = {
     prepare(sql: string) {
-      return {
-        bind(...args: unknown[]) {
-          return {
-            async run() {
+      const statementFor = (args: unknown[]) => ({
+        async run() {
               if (sql.includes("INSERT INTO command_runs")) {
                 const [
                   id,
@@ -102,6 +100,9 @@ export function makeMockDb(): MockDbHandle {
               throw new Error(`mock-d1: unhandled SQL: ${sql.substring(0, 80)}`);
             },
             async first<T = Record<string, unknown>>(): Promise<T | null> {
+              if (sql.includes("sqlite_master") && sql.includes("schema_ready")) {
+                return { schema_ready: 0 } as T;
+              }
               if (sql.includes("SELECT") && sql.includes("command_runs") && sql.includes("WHERE id")) {
                 return (runs.get(args[0] as string) as T) ?? null;
               }
@@ -132,9 +133,30 @@ export function makeMockDb(): MockDbHandle {
                   .slice(0, limit);
                 return { results: matches as T[] };
               }
+              if (sql.includes("SELECT") && sql.includes("command_audit_events") && sql.includes("WHERE run_id")) {
+                const runId = args[0] as string;
+                const limit = (args.filter((a) => typeof a === "number").pop() as number | undefined) ?? 50;
+                const matches = events
+                  .filter((event) => event.run_id === runId)
+                  .sort((a, b) => (a.occurred_at as number) - (b.occurred_at as number))
+                  .slice(0, limit);
+                return { results: matches as T[] };
+              }
               return { results: [] };
             },
-          };
+          });
+      return {
+        bind(...args: unknown[]) {
+          return statementFor(args);
+        },
+        run() {
+          return statementFor([]).run();
+        },
+        first<T = Record<string, unknown>>() {
+          return statementFor([]).first<T>();
+        },
+        all<T = Record<string, unknown>>() {
+          return statementFor([]).all<T>();
         },
       };
     },

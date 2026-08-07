@@ -48,6 +48,10 @@ These documents freeze the design assumptions that must remain stable before Pha
   - TeamForge export command contract for Paperclip consumers
   - cursor/timestamp filter semantics and continuation rules
   - machine-parseable error envelope + lag metadata
+- [hermes-cambium-command-contract.md](/Volumes/madara/2026/twc-vault/01-Projects/thoughtseed/team-forge-ts/docs/architecture/contracts/hermes-cambium-command-contract.md)
+  - post-MultiCA command routing
+  - Hermes bridge and Cambium operator ownership
+  - legacy MultiCA drain boundary
 
 ## Phase 1 Done Standard
 

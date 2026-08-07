@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CortexLensDefinition } from "../../lib/commandCortex/lensTypes";
 import type { CortexCommand, CortexGraph, CortexLensId, CortexNode } from "../../lib/commandCortex/types";
-import type { FounderCommandRun } from "../../lib/types";
+import type { FounderCommandAuditEvent, FounderCommandRun } from "../../lib/types";
 import { getCommandsForNode } from "../../lib/commandCortex/commandRules";
 import LensRail from "./LensRail";
 import NeuralField from "./NeuralField";
@@ -32,6 +32,14 @@ export interface MissionCortexProps {
   lastCommand?: string;
   activeRun?: FounderCommandRun | null;
   activeRunLabel?: string | null;
+  recentRuns?: FounderCommandRun[];
+  commandRunState?: FounderCommandRun["state"];
+  commandRunError?: string | null;
+  selectedCommandRunId?: string | null;
+  commandRunAudit?: FounderCommandAuditEvent[];
+  commandRunAuditError?: string | null;
+  onSelectCommandRunState?: (state: FounderCommandRun["state"]) => void;
+  onSelectCommandRun?: (runId: string) => void;
   onSelectLens: (lensId: CortexLensId) => void;
   onSelectNode: (nodeId: string) => void;
   onCommand: (command: CortexCommand, node: CortexNode) => void;
@@ -46,6 +54,14 @@ export default function MissionCortex({
   lastCommand,
   activeRun,
   activeRunLabel,
+  recentRuns = [],
+  commandRunState = "created",
+  commandRunError = null,
+  selectedCommandRunId = null,
+  commandRunAudit = [],
+  commandRunAuditError = null,
+  onSelectCommandRunState,
+  onSelectCommandRun,
   onSelectLens,
   onSelectNode,
   onCommand,
@@ -226,6 +242,14 @@ export default function MissionCortex({
         signals={selectedContext.signals}
         activeRun={activeRun ?? null}
         activeRunLabel={activeRunLabel ?? null}
+        recentRuns={recentRuns}
+        commandRunState={commandRunState}
+        commandRunError={commandRunError}
+        selectedCommandRunId={selectedCommandRunId}
+        commandRunAudit={commandRunAudit}
+        commandRunAuditError={commandRunAuditError}
+        onSelectCommandRunState={onSelectCommandRunState}
+        onSelectCommandRun={onSelectCommandRun}
       />
 
       <form

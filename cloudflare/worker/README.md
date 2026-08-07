@@ -49,15 +49,24 @@ Wave 1 does not yet provide:
 
 ## Current Cloudflare Status
 
-The Cloudflare MCP spec is reachable in this environment, but live account execution is currently blocked by an authentication error:
+Wrangler is authenticated against the target Cloudflare account and live Worker/D1
+execution is available from this checkout.
 
-- `10000 Authentication error`
+Current remote resources:
 
-Because of that, `wrangler.jsonc` still contains placeholder IDs for:
+- Worker name: `teamforge-api`
+- Worker routes: `teamforge-api.sheshnarayan-iyer.workers.dev`,
+  `forge.thoughtseed.space`, `plexus-api.thoughtseed.space`
+- D1 database: `teamforge-primary`
+- R2 bucket: `teamforge-artifacts`
+- Queue: `teamforge-sync`
+- Durable Object: `WorkspaceLock`
+- Last verified deploy in this ledger: Worker version
+  `a1bc25c4-c49c-4af8-a171-16e4259a265b` on 2026-06-17.
 
-- the D1 database
-- the R2 bucket
-- the sync queue
+Live command-loop note: `/v1/commands/runs/:id/audit` is deployed. Without an
+app/internal credential it correctly returns the normal command-route auth gate
+instead of the old `feature_not_ready` placeholder.
 
 ## Expected Remote Resource Names
 
@@ -68,18 +77,19 @@ Because of that, `wrangler.jsonc` still contains placeholder IDs for:
 
 ## Next Steps
 
-1. Authenticate the Cloudflare MCP or Wrangler against the target account.
-2. Apply the additive project control-plane migration so D1 owns:
+1. Keep applying additive migrations as the control plane grows so D1 owns:
    - canonical project metadata
    - GitHub repo links
    - Huly project links
    - project artifacts
    - project sync policy
-3. Create the R2 bucket and queue, then replace the remaining placeholders if still missing.
-4. Implement the first repository-backed project routes:
+2. Implement and verify repository-backed project routes:
    - `/v1/projects` for summary rows
    - `/v1/project-mappings` for full project graph reads/writes
-5. Add queue consumers and Durable Object coordination for sync flows.
+3. Add queue consumers and Durable Object coordination for sync flows.
+4. Run the next command-loop desktop E2E with a current Access/internal app
+   credential: command intent → MultiCA pickup → callback → run row → audit
+   trail visible in Mission Cortex.
 
 ## Project Control Plane
 

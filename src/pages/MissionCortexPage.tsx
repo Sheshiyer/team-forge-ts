@@ -9,7 +9,7 @@ import {
   TS_STANDUP_COMMAND_ID,
 } from "../lib/commandCortex/cortexToRegistry";
 import type { CortexGraph, CortexLensId } from "../lib/commandCortex/types";
-import type { FounderCommandIntent, FounderCommandRun } from "../lib/types";
+import type { FounderCommandAuditEvent, FounderCommandIntent, FounderCommandRun } from "../lib/types";
 import MissionCortex from "../components/cortex/MissionCortex";
 import { useInvoke } from "../hooks/useInvoke";
 
@@ -52,6 +52,12 @@ export default function MissionCortexPage() {
   const [graph, setGraph] = useState<CortexGraph>(sampleCortexGraph);
   const [activeRun, setActiveRun] = useState<FounderCommandRun | null>(null);
   const [activeRunLabel, setActiveRunLabel] = useState<string | null>(null);
+  const [commandRuns, setCommandRuns] = useState<FounderCommandRun[]>([]);
+  const [commandRunState, setCommandRunState] = useState<FounderCommandRun["state"]>("created");
+  const [commandRunError, setCommandRunError] = useState<string | null>(null);
+  const [selectedCommandRunId, setSelectedCommandRunId] = useState<string | null>(null);
+  const [commandRunAudit, setCommandRunAudit] = useState<FounderCommandAuditEvent[]>([]);
+  const [commandRunAuditError, setCommandRunAuditError] = useState<string | null>(null);
 
   useEffect(() => {
     setActiveLens(routeLens);
@@ -87,6 +93,79 @@ export default function MissionCortexPage() {
       window.clearInterval(handle);
     };
   }, [activeRun, api]);
+
+  useEffect(() => {
+    if (!activeRun) return;
+    const terminal: FounderCommandRun["state"][] = [
+      "succeeded",
+      "failed",
+      "partial",
+      "cancelled",
+    ];
+    if (terminal.includes(activeRun.state)) {
+      setCommandRunState(activeRun.state);
+    }
+  }, [activeRun]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let cancelled = false;
+
+    const loadRuns = async () => {
+      try {
+        const result = await api.listCommandRuns(commandRunState, null, 8);
+        if (cancelled) return;
+        setCommandRuns(result.runs);
+        setCommandRunError(null);
+        setSelectedCommandRunId((current) =>
+          current && result.runs.some((run) => run.id === current)
+            ? current
+            : (result.runs[0]?.id ?? null),
+        );
+      } catch (error) {
+        if (cancelled) return;
+        setCommandRuns([]);
+        setCommandRunError(String(error).slice(0, 120));
+        setSelectedCommandRunId(null);
+      }
+    };
+
+    void loadRuns();
+    const handle = window.setInterval(loadRuns, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [api, commandRunState]);
+
+  useEffect(() => {
+    if (!isTauriRuntime() || !selectedCommandRunId) {
+      setCommandRunAudit([]);
+      setCommandRunAuditError(null);
+      return;
+    }
+    let cancelled = false;
+
+    const loadAudit = async () => {
+      try {
+        const result = await api.getCommandRunAudit(selectedCommandRunId, 10);
+        if (cancelled) return;
+        setCommandRunAudit(result.events);
+        setCommandRunAuditError(null);
+      } catch (error) {
+        if (cancelled) return;
+        setCommandRunAudit([]);
+        setCommandRunAuditError(String(error).slice(0, 120));
+      }
+    };
+
+    void loadAudit();
+    const handle = window.setInterval(loadAudit, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [api, selectedCommandRunId]);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
@@ -145,6 +224,14 @@ export default function MissionCortexPage() {
       lastCommand={lastCommand}
       activeRun={activeRun}
       activeRunLabel={activeRunLabel}
+      recentRuns={commandRuns}
+      commandRunState={commandRunState}
+      commandRunError={commandRunError}
+      selectedCommandRunId={selectedCommandRunId}
+      commandRunAudit={commandRunAudit}
+      commandRunAuditError={commandRunAuditError}
+      onSelectCommandRunState={setCommandRunState}
+      onSelectCommandRun={setSelectedCommandRunId}
       onSelectLens={setActiveLens}
       onSelectNode={setSelectedNodeId}
       onCommand={(command, node) => {
@@ -210,6 +297,17 @@ export default function MissionCortexPage() {
               errorCode: null,
               errorMessage: null,
             });
+            setCommandRunState(result.state);
+            setSelectedCommandRunId(result.runId);
+            api
+              .listCommandRuns(result.state, null, 8)
+              .then((history) => {
+                setCommandRuns(history.runs);
+                setCommandRunError(null);
+              })
+              .catch((error: unknown) => {
+                setCommandRunError(String(error).slice(0, 120));
+              });
             setLastCommand(
               `[${ts}] ${command.label} on ${node.label} — run ${result.runId.slice(0, 12)}…`,
             );

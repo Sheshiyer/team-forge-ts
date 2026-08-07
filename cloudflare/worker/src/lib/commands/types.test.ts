@@ -3,13 +3,29 @@ import type { ActorKind, AuthMode, CommandIntent, CommandRunState, AuditEventKin
 
 describe("types module", () => {
   it("exports the actor kinds", () => {
-    const kinds: ActorKind[] = ["founder", "cofounder", "employee", "multica_service", "paperclip_agent"];
-    expect(kinds).toHaveLength(5);
+    const kinds: ActorKind[] = [
+      "founder",
+      "cofounder",
+      "employee",
+      "hermes_service",
+      "cambium_operator",
+      "legacy_multica",
+      "paperclip_agent",
+    ];
+    expect(kinds).toHaveLength(7);
   });
 
   it("exports the auth modes", () => {
-    const modes: AuthMode[] = ["cf_access", "m2m", "app_bearer", "aws_task_role", "paperclip_token"];
-    expect(modes).toHaveLength(5);
+    const modes: AuthMode[] = [
+      "cf_access",
+      "m2m",
+      "app_bearer",
+      "hermes_callback",
+      "cambium_internal",
+      "legacy_multica_hmac",
+      "paperclip_token",
+    ];
+    expect(modes).toHaveLength(7);
   });
 
   it("exports the run states", () => {

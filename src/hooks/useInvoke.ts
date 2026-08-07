@@ -98,7 +98,10 @@ import type {
   HermesIntakeInput,
   FounderCommandIntent,
   FounderCommandIntentResult,
+  FounderCommandAuditTrail,
   FounderCommandRun,
+  FounderCommandRunListResult,
+  FounderCommandRoute,
   EntityRelation,
   EntityRelationInput,
   IdentityMapEntry,
@@ -377,6 +380,18 @@ const invokeApi = {
     invoke<FounderCommandIntentResult>("post_command_intent", { intent }),
   getCommandRun: (runId: string) =>
     invoke<FounderCommandRun>("get_command_run", { runId }),
+  listCommandRuns: (
+    state: FounderCommandRun["state"],
+    route: FounderCommandRoute | null = null,
+    limit = 8,
+  ) =>
+    invoke<FounderCommandRunListResult>("list_command_runs", {
+      state,
+      route,
+      limit,
+    }),
+  getCommandRunAudit: (runId: string, limit = 10) =>
+    invoke<FounderCommandAuditTrail>("get_command_run_audit", { runId, limit }),
 };
 
 export function useInvoke() {

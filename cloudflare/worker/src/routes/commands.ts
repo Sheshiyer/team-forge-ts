@@ -1,21 +1,26 @@
 import type { Env, D1DatabaseLike } from "../lib/env";
+import { buildTsStatusSnapshot } from "../lib/control-plane-status";
 import { jsonError, jsonOk } from "../lib/response";
 import { COMMAND_REGISTRY, getCommandSpec, isAuthorized } from "../lib/commands/registry";
-import { createRun, getRunById, listRunsByState, recordAuditEvent, transitionRun } from "../lib/commands/runs";
+import { createRun, getRunById, listAuditEventsByRun, listRunsByState, recordAuditEvent, recordRunResult, transitionRun } from "../lib/commands/runs";
 import type { ActorKind, AuthMode, CommandIntent, CommandRunState } from "../lib/commands/types";
 
 const ACTOR_KINDS = new Set<ActorKind>([
   "founder",
   "cofounder",
   "employee",
-  "multica_service",
+  "hermes_service",
+  "cambium_operator",
+  "legacy_multica",
   "paperclip_agent",
 ]);
 const AUTH_MODES = new Set<AuthMode>([
   "cf_access",
   "m2m",
   "app_bearer",
-  "aws_task_role",
+  "hermes_callback",
+  "cambium_internal",
+  "legacy_multica_hmac",
   "paperclip_token",
 ]);
 
@@ -74,6 +79,82 @@ function requireDb(
   return { ok: true, db: env.TEAMFORGE_DB };
 }
 
+async function executeTsStatus(
+  env: Env,
+  db: D1DatabaseLike,
+  runId: string,
+): Promise<"succeeded" | "failed"> {
+  try {
+    const snapshot = await buildTsStatusSnapshot(env);
+    const now = Date.now();
+    await recordAuditEvent(
+      db,
+      runId,
+      "result_received",
+      null,
+      null,
+      {
+        overall: snapshot.summary.overall,
+        message: snapshot.summary.message,
+      },
+      now,
+    );
+    await recordRunResult(db, runId, "succeeded", JSON.stringify(snapshot), null, null, now);
+    await recordAuditEvent(
+      db,
+      runId,
+      "result_delivered",
+      null,
+      null,
+      {
+        channel: "sync_http",
+        state: "succeeded",
+        telegram_summary: snapshot.telegram_summary,
+      },
+      now,
+    );
+    return "succeeded";
+  } catch (error) {
+    const now = Date.now();
+    const message =
+      error instanceof Error ? error.message : "inline status snapshot failed";
+    await recordRunResult(
+      db,
+      runId,
+      "failed",
+      null,
+      "status_snapshot_failed",
+      message,
+      now,
+    );
+    await recordAuditEvent(
+      db,
+      runId,
+      "failure",
+      null,
+      null,
+      {
+        code: "status_snapshot_failed",
+        message,
+      },
+      now,
+    );
+    return "failed";
+  }
+}
+
+async function executeLocalWorkerCommand(
+  env: Env,
+  db: D1DatabaseLike,
+  intent: CommandIntent,
+  runId: string,
+): Promise<CommandRunState> {
+  if (intent.id === "ts-status") {
+    return executeTsStatus(env, db, runId);
+  }
+  return "accepted";
+}
+
 export async function handleCommandIntent(env: Env, request: Request): Promise<Response> {
   let body: unknown;
   try {
@@ -104,7 +185,7 @@ export async function handleCommandIntent(env: Env, request: Request): Promise<R
   // untrusted client input. When PlexusPrincipal gains an actor_kind field (Phase 2 likely),
   // derive actor_kind from the authenticated principal here, NOT from intent.actor_kind. Today
   // this is acceptable because all registered commands share the founder/cofounder tier, but
-  // it becomes exploitable once multica_service- or paperclip_agent-only commands ship.
+  // it becomes exploitable once service-only commands ship.
   if (!isAuthorized(intent.id, intent.actor_kind)) {
     return jsonError(
       {
@@ -146,12 +227,12 @@ export async function handleCommandIntent(env: Env, request: Request): Promise<R
       now,
     );
 
-    // local_worker commands transition to accepted immediately.
-    // downstream_multica commands stay in "created" until the cambium-bridge
-    // teamforge-consumer picks them up, dispatches via `multica issue assign`,
-    // and posts back via the Phase 2 callback route (POST /v1/commands/runs/:id/result).
+    // local_worker commands transition to accepted immediately. Hermes/Cambium
+    // routes stay in "created" until the active operator path acknowledges and
+    // posts back via the result route (POST /v1/commands/runs/:id/result).
     if (spec.route === "local_worker") {
       await transitionRun(db, run.id, "accepted", now);
+      await executeLocalWorkerCommand(env, db, intent, run.id);
     }
 
     const finalRun = await getRunById(db, run.id);
@@ -186,6 +267,38 @@ export async function handleGetCommandRun(env: Env, runId: string): Promise<Resp
   }
 }
 
+export async function handleGetCommandRunAudit(env: Env, runId: string, url: URL): Promise<Response> {
+  const dbCheck = requireDb(env);
+  if (!dbCheck.ok) return dbCheck.response;
+  const db = dbCheck.db;
+
+  const limitParam = url.searchParams.get("limit");
+  const limit = limitParam ? Number.parseInt(limitParam, 10) : 50;
+  if (Number.isNaN(limit) || limit < 1) {
+    return jsonError(
+      { code: "invalid_limit", message: "limit must be a positive integer", retryable: false },
+      400,
+    );
+  }
+
+  try {
+    const run = await getRunById(db, runId);
+    if (!run) {
+      return jsonError(
+        { code: "not_found", message: `run ${runId} not found`, retryable: false },
+        404,
+      );
+    }
+    const events = await listAuditEventsByRun(db, runId, limit);
+    return jsonOk({ events, count: events.length });
+  } catch {
+    return jsonError(
+      { code: "internal_error", message: "command audit trail failed", retryable: true },
+      500,
+    );
+  }
+}
+
 const VALID_RUN_STATES: readonly CommandRunState[] = [
   "created",
   "accepted",
@@ -196,15 +309,14 @@ const VALID_RUN_STATES: readonly CommandRunState[] = [
   "cancelled",
 ];
 
-const VALID_ROUTES = ["downstream_multica", "local_worker"] as const;
+const VALID_ROUTES = ["hermes_bridge", "cambium_operator", "legacy_multica"] as const;
 
 /**
  * Phase B queue interface: GET /v1/commands/runs?state=&route=&limit=
  *
- * The cambium-bridge teamforge-consumer polls this every ~5s to pick up new
- * runs and dispatch them via `multica issue assign`. Auth is via the same
- * `requireAppOrInternalAuth` helper used by other commands routes (m2m secret
- * or Bearer token or CF Access principal).
+ * The active operator path polls this to pick up created Hermes/Cambium runs.
+ * `legacy_multica` remains a compatibility route name for drain tooling only;
+ * no new command specs should target it.
  */
 export async function handleListCommandRuns(env: Env, url: URL): Promise<Response> {
   const dbCheck = requireDb(env);

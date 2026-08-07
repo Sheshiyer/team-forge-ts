@@ -20,11 +20,12 @@ transport layer is responsible for prepending `ts-` before POSTing to
 
 | Command ID | Route | Mutates | Allowed actors |
 |---|---|---|---|
-| `ts-standup` | `downstream_multica` | no | founder, cofounder |
-| `ts-summon-agent` | `downstream_paperclip` | yes | founder, cofounder |
-| `ts-approve-synapse` | `downstream_paperclip` | yes | founder, cofounder |
-| `ts-trace-signal` | `local_worker` | no | founder, cofounder, employee |
-| `ts-generate-brief` | `downstream_paperclip` | no | founder, cofounder |
+| `ts-standup` | `hermes_bridge` | no | founder, cofounder |
+| `ts-summon-agent` | `cambium_operator` | yes | founder, cofounder |
+| `ts-approve-synapse` | `cambium_operator` | yes | founder, cofounder |
+| `ts-status` | `cambium_operator` | no | founder, cofounder |
+| `ts-trace-signal` | `cambium_operator` | no | founder, cofounder, employee |
+| `ts-generate-brief` | `hermes_bridge` | no | founder, cofounder |
 
 ## State Machine
 
@@ -33,8 +34,7 @@ created → accepted → in_progress → succeeded | failed | partial | cancelle
 ```
 
 - `created` — Worker has accepted the intent and persisted a run.
-- `accepted` — auth + permission verified; downstream worker (MultiCA or
-  Paperclip) has acknowledged.
+- `accepted` — auth + permission verified; Hermes/Cambium has acknowledged.
 - `in_progress` — downstream worker is executing.
 - `succeeded` — completed with a final `result_json`.
 - `failed` — terminal error; `error_code` + `error_message` set.
@@ -47,11 +47,10 @@ preserves the original transition time on subsequent updates via
 `transitionRun` call — callers are responsible for legality (state-machine
 ordering is not enforced at the persistence layer).
 
-For `local_worker` commands, the Worker performs the `created → accepted`
-transition inline within `POST /v1/commands/intent` and the response carries
-`state: "accepted"`. For `downstream_multica` and `downstream_paperclip`
-routes, the response carries `state: "created"` and the transition to
-`accepted` arrives via the Phase 2 callback (`POST /v1/commands/runs/:id/result`).
+For `hermes_bridge` and `cambium_operator` routes, the response carries
+`state: "created"` and the transition to `accepted` arrives via the result
+acknowledgement path (`POST /v1/commands/runs/:id/result`). The `legacy_multica`
+route name is compatibility-only and must not be used by new registry specs.
 
 ## Audit Events
 
@@ -72,7 +71,7 @@ The original user `payload` is captured on the `command_received` audit event
 `command_runs` row itself does not store the payload — readers seeking the
 original request must join through `command_audit_events` filtered by
 `kind = 'command_received'`. This is the canonical payload source for
-downstream consumers (MultiCA enqueue, Paperclip envelope).
+downstream consumers (Hermes bridge, Cambium operator queue, or legacy drains).
 
 ## Routes
 
@@ -104,8 +103,8 @@ secret, or app Bearer). Per-command authorization is performed by the registry's
   `actor_kind` field (Phase 2 likely), the route handler must derive
   `actor_kind` from the authenticated principal rather than from
   `intent.actor_kind`. Today this is acceptable because all registered commands
-  share the founder/cofounder tier; it becomes exploitable once
-  `multica_service`- or `paperclip_agent`-only commands ship.
+  share the founder/cofounder tier; it becomes exploitable once service-only
+  commands ship.
 - **No idempotency on `correlation_id`:** two POSTs with the same
   `correlation_id` produce two distinct runs. Dedup logic is deferred to Phase
   2 if needed.

@@ -3,9 +3,11 @@ import { NavLink, Navigate, Route, Routes, useNavigate, useParams } from "react-
 import Avatar from "../components/ui/Avatar";
 import { SkeletonCard } from "../components/ui/Skeleton";
 import { useInvoke } from "../hooks/useInvoke";
+import { extractTsStatusFounderSummary } from "../lib/commandRuns/tsStatus";
 import { formatDuration, timeAgo } from "../lib/format";
 import { lcarsPageStyles } from "../lib/lcarsPageStyles";
 import type {
+  FounderCommandIntent,
   PaperclipAgentDetailView,
   PaperclipApprovalQueueView,
   PaperclipEscalationInput,
@@ -1772,7 +1774,7 @@ function AgentDetailRoute() {
 // ─── Hermes TG Dispatch ────────────────────────────────────────
 
 const HERMES_COMMANDS = [
-  { id: "status", label: "STATUS", description: "Check Hermes agent health and TG connection" },
+  { id: "status", label: "STATUS", description: "Read the founder-safe TeamForge control-plane status summary" },
   { id: "skills", label: "SKILLS", description: "List available agent skills" },
   { id: "standup", label: "STANDUP", description: "Trigger standup collection from Slack" },
   { id: "digest", label: "DIGEST", description: "Generate and send KPI-linked standup digest" },
@@ -1791,6 +1793,38 @@ function AgentsHermesRoute() {
     setDispatching(command);
     setError(null);
     try {
+      if (command === "status") {
+        const intent: FounderCommandIntent = {
+          id: "ts-status",
+          actorId: "founder",
+          actorKind: "founder",
+          authMode: "app_bearer",
+          correlationId: `hermes-status-${Date.now()}`,
+          payload: {},
+        };
+        const result = await api.postCommandIntent(intent);
+        const run = await api.getCommandRun(result.runId);
+        const output =
+          extractTsStatusFounderSummary(run.resultJson) ??
+          (run.state === "succeeded"
+            ? run.resultJson ?? "TEAMFORGE STATUS\noverall: succeeded"
+            : [
+                "TEAMFORGE STATUS FAILED",
+                `run: ${run.id}`,
+                `state: ${run.state}`,
+                `error: ${run.errorCode ?? "unknown"}${run.errorMessage ? ` / ${run.errorMessage}` : ""}`,
+              ].join("\n"));
+        setResults((prev) => [
+          {
+            command,
+            output,
+            success: run.state === "succeeded",
+            timestamp: new Date(),
+          },
+          ...prev,
+        ].slice(0, 20));
+        return;
+      }
       const result = await api.dispatchHermesCommand(command);
       setResults(prev => [
         { command: result.command, output: result.output, success: result.success, timestamp: new Date() },
@@ -1984,7 +2018,8 @@ function AgentsHermesRoute() {
         <div style={hermesStyles.outputHeader}>DISPATCH LOG</div>
         {results.length === 0 && (
           <div style={hermesStyles.emptyState}>
-            No commands dispatched yet. Click a command above to send it to Hermes via Telegram.
+            No founder-surface commands run yet. STATUS uses the TeamForge command path; the
+            other controls still dispatch through Hermes/Telegram.
           </div>
         )}
         {results.map((r, i) => (
