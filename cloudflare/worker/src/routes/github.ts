@@ -1,5 +1,6 @@
 import type { Env } from "../lib/env";
 import type { PlexusPrincipal } from "../lib/plexus-session";
+import type { ProjectGraph } from "../lib/project-registry";
 import { execute, executeChanges, now, queryAll, queryFirst } from "../lib/db";
 import { jsonError, jsonOk } from "../lib/response";
 import {
@@ -435,6 +436,109 @@ async function assertActiveBinding(env: Env, workspaceId: string, installationId
   const binding = await getBinding(env, workspaceId, installationId);
   if (!binding) throw new GithubControlPlaneError("github_unconfigured", "No matching GitHub App installation is connected to this workspace.", 409);
   return assertBindingIsActive(env, binding);
+}
+
+interface ProjectRepositoryProjectionRow extends InstallationBindingRow {
+  project_id: string;
+  repository_id: number;
+  repo_owner: string;
+  repo_name: string;
+  verified_branch: string;
+  verified_at: string;
+  fact_state: string | null;
+  fact_account_id: number | null;
+  repository_state: string | null;
+  owner_login: string | null;
+  repository_name: string | null;
+  full_name: string | null;
+  repository_branch: string | null;
+}
+
+/** Read-time projection of existing verification, never a new GitHub grant.
+ * Keep descriptive graph links separate from installation authority. One joined
+ * read per bounded batch checks the current actor, project and grant together.
+ */
+export async function projectRepositoryVerificationGraphs(
+  env: Env,
+  graphs: ProjectGraph[],
+  principal: PlexusPrincipal | null,
+) {
+  const checkedAt = now();
+  const byProject = new Map<string, ProjectRepositoryProjectionRow>();
+  const projectIds = graphs.filter((graph) => principal && graph.project.workspaceId === principal.workspaceId)
+    .map((graph) => graph.project.id);
+  if (principal) {
+    for (let offset = 0; offset < projectIds.length; offset += 80) {
+      const batch = projectIds.slice(offset, offset + 80);
+      const rows = await queryAll<ProjectRepositoryProjectionRow>(database(env), `
+        SELECT v.project_id, v.workspace_id, v.installation_id, v.repository_id,
+               v.repo_owner, v.repo_name, v.default_branch AS verified_branch, v.verified_at,
+               b.state, b.account_id, f.account_id AS fact_account_id,
+               f.account_login, f.account_type, f.repository_selection, f.permissions_json,
+               f.state AS fact_state, r.state AS repository_state, r.owner_login,
+               r.name AS repository_name, r.full_name, r.default_branch AS repository_branch
+        FROM project_github_verifications v
+        JOIN projects p ON p.id = v.project_id AND p.workspace_id = v.workspace_id
+        JOIN plexus_identities i ON i.id = ? AND i.workspace_id = v.workspace_id AND i.is_active = 1
+        LEFT JOIN github_workspace_installations b
+          ON b.workspace_id = v.workspace_id AND b.installation_id = v.installation_id
+        LEFT JOIN github_installation_facts f ON f.installation_id = b.installation_id
+        LEFT JOIN github_installation_repositories r
+          ON r.installation_id = v.installation_id AND r.repository_id = v.repository_id
+        WHERE v.workspace_id = ? AND v.project_id IN (${batch.map(() => "?").join(",")})
+          AND p.status = 'active' AND i.project_visibility IN ('all', 'active')
+      `, principal.identityId, principal.workspaceId, ...batch);
+      for (const row of rows) byProject.set(row.project_id, row);
+    }
+  }
+  return graphs.map((graph) => {
+    const row = byProject.get(graph.project.id);
+    let valid = false;
+    if (row) {
+      try {
+        assertBindingIsActive(env, row);
+        valid = row.workspace_id === principal?.workspaceId && graph.project.workspaceId === row.workspace_id
+          && row.fact_state === "active" && row.fact_account_id === row.account_id
+          && row.repository_state === "active"
+          && Number.isSafeInteger(row.installation_id) && row.installation_id > 0
+          && Number.isSafeInteger(row.repository_id) && row.repository_id > 0
+          && Number.isSafeInteger(row.account_id) && row.account_id > 0
+          && /^[A-Za-z0-9-]+$/.test(row.account_login)
+          && /^[A-Za-z0-9._-]+$/.test(row.repository_name ?? "")
+          && row.owner_login?.toLowerCase() === row.account_login.toLowerCase()
+          && row.repo_owner.toLowerCase() === row.owner_login?.toLowerCase()
+          && row.repo_name.toLowerCase() === row.repository_name?.toLowerCase()
+          && row.full_name?.toLowerCase() === `${row.owner_login}/${row.repository_name}`.toLowerCase()
+          // Repository webhooks may omit this optional inventory field. A
+          // missing branch is unknown; only a known mismatch revokes the proof.
+          && (row.repository_branch == null || row.verified_branch === row.repository_branch)
+          && Number.isFinite(Date.parse(row.verified_at)) && Date.parse(row.verified_at) <= Date.parse(checkedAt);
+      } catch {
+        // Missing policy or ineligible installation facts must not expose a grant.
+      }
+    }
+    const status = valid ? "verified" as const : row ? "revoked" as const : "unverified" as const;
+    return {
+      ...graph,
+      repositoryVerification: {
+        version: 1 as const, status, checkedAt,
+        ...(!valid ? { reason: row ? "authority_unavailable" : "missing_or_ineligible_verification" } : {}),
+      },
+      project: {
+        ...graph.project,
+        githubRepoId: valid ? String(row!.repository_id) : null,
+        githubInstallationId: valid ? row!.installation_id : null,
+        githubRepoOwnerId: valid ? row!.account_id : null,
+        githubRepoOwnerLogin: valid ? row!.account_login : null,
+        githubRepoOwnerType: valid ? row!.account_type : null,
+        githubRepoUrl: valid ? `https://github.com/${row!.full_name}` : null,
+        githubRepoFullName: valid ? row!.full_name : null,
+        repoEvidenceStatus: valid ? "verified" as const : row ? "inaccessible" as const : "unverified" as const,
+        repoVerifiedAt: valid ? row!.verified_at : null,
+        repoAuthoritySource: "worker" as const,
+      },
+    };
+  });
 }
 
 async function assertActiveBindings(env: Env, workspaceId: string): Promise<InstallationBindingRow[]> {

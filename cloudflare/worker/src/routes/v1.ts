@@ -380,7 +380,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   if (method === "GET" && pathname === "/v1/project-mappings") {
     const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
-    return handleGetProjectMappings(env, url);
+    return handleGetProjectMappings(env, url, plexusPrincipal);
   }
   if (method === "GET" && pathname === "/v1/project-mappings/issues") {
     const authFailure = requireAppOrInternalAuth();
@@ -397,7 +397,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
   if (method === "GET" && controlPlaneMatch) {
     const authFailure = requireAppOrInternalAuth();
     if (authFailure) return authFailure;
-    return handleGetProjectControlPlane(env, controlPlaneMatch[1]);
+    return handleGetProjectControlPlane(env, controlPlaneMatch[1], plexusPrincipal);
   }
   const projectActionMatch = pathname.match(/^\/v1\/project-mappings\/([^/]+)\/actions$/);
   if (method === "POST" && projectActionMatch) {
