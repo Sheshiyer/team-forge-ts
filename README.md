@@ -225,9 +225,9 @@ The repo-pinned 39-skill manifest lives at
 
 - **Current app version in repo:** `0.2.6`
 - **Latest published tag:** `v0.2.6` after the next release push
-- **Release trigger:** pushing a tag that matches `v*`
-- **Canonical OTA signing/publish path:** [`.github/workflows/release.yml`](.github/workflows/release.yml)
-- **Artifacts:** macOS `.app` and `.dmg` bundles built by GitHub Actions for Apple Silicon and Intel targets
+- **Release trigger:** manual local build; tag pushes do not trigger publication
+- **Local build:** `pnpm run build` then `pnpm exec tauri build` for the selected platform. Signing and multi-platform orchestration remain a separate local release task.
+- **Artifacts:** build locally for the selected target; no hosted builds are active. `pnpm run release:ota:publish` consumes an already-built artifact and requires separate publication authorization.
 - **Download page:** [GitHub Releases](https://github.com/Sheshiyer/team-forge-ts/releases)
 
 ## Architecture
