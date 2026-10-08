@@ -25,6 +25,10 @@
 # args, no echoing to stdout. Passwords use silent `read -rs`.
 
 set -euo pipefail
+
+# The hosted signing pipeline has been retired; reject before GitHub secret writes.
+echo 'GitHub Actions signing setup is retired. Configure the separately reviewed local signing procedure instead.' >&2
+exit 2
 set +x
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -159,7 +163,7 @@ gh secret list | grep -E "^(APPLE_|TAURI_|CLOUDFLARE_|TF_)" || true
 echo "================================================================"
 echo ""
 echo "  Test the pipeline:"
-echo "    gh workflow run 'Build & Release' --ref main && gh run watch"
+echo "    No hosted workflow is available; publication is manual."
 echo ""
 echo "  Or push a release tag:"
 echo "    git tag v0.X.Y && git push origin v0.X.Y"
