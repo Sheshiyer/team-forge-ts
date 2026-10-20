@@ -1,4 +1,6 @@
 import type { Env } from "../lib/env";
+import type { PlexusPrincipal } from "../lib/plexus-session";
+import { projectRepositoryVerificationGraphs } from "./github";
 import {
   getClientProfileDetail,
   listClientProfiles,
@@ -332,7 +334,7 @@ export async function handlePutOnboardingFlows(env: Env, request: Request): Prom
   }
 }
 
-export async function handleGetProjectMappings(env: Env, url: URL): Promise<Response> {
+export async function handleGetProjectMappings(env: Env, url: URL, principal: PlexusPrincipal | null = null): Promise<Response> {
   if (!env.TEAMFORGE_DB) {
     return jsonError({ code: "db_unavailable", message: "Database not available.", retryable: true }, 503);
   }
@@ -340,7 +342,8 @@ export async function handleGetProjectMappings(env: Env, url: URL): Promise<Resp
   const workspaceId = url.searchParams.get("workspace_id");
   const status = url.searchParams.get("status") ?? "active";
   const projects = await listProjectGraphs(env.TEAMFORGE_DB, workspaceId, status);
-  return jsonOk({ projects, total: projects.length });
+  const projected = await projectRepositoryVerificationGraphs(env, projects, principal);
+  return jsonOk({ projects: projected, total: projected.length });
 }
 
 export async function handleGetProjectMappingIssues(env: Env, url: URL): Promise<Response> {
@@ -381,6 +384,7 @@ export async function handlePutProjectMappings(
 export async function handleGetProjectControlPlane(
   env: Env,
   projectId: string,
+  principal: PlexusPrincipal | null = null,
 ): Promise<Response> {
   if (!env.TEAMFORGE_DB) {
     return jsonError({ code: "db_unavailable", message: "Database not available.", retryable: true }, 503);
@@ -391,7 +395,8 @@ export async function handleGetProjectControlPlane(
     return jsonError({ code: "not_found", message: `Project ${projectId} not found.`, retryable: false }, 404);
   }
 
-  return jsonOk({ detail });
+  const [project] = await projectRepositoryVerificationGraphs(env, [detail.project], principal);
+  return jsonOk({ detail: { ...detail, project } });
 }
 
 export async function handlePostProjectAction(
