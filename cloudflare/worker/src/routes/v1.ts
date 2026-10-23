@@ -1,3 +1,4 @@
+import { handleGithubKnowledgeRoutineSnapshot } from "./github-knowledge";
 /**
  * V1 API Router — Safety Audit Note (2026-06-10)
  *
@@ -57,6 +58,7 @@ import {
   handleLeaveRealtimeCall,
   handlePostRealtimeRoom,
   handlePostRealtimeTrack,
+  handleRenegotiateRealtimeCall,
   handleRealtimeCloseout,
 } from "./realtime";
 import {
@@ -121,6 +123,9 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Exact third-party inbound paths. Cloudflare Access must bypass only these
   // two routes; callback state and webhook HMAC independently fail closed.
+  if (method === "GET" && pathname === "/v1/github/knowledge/routine-snapshot") {
+    return handleGithubKnowledgeRoutineSnapshot(request, env, url);
+  }
   if (method === "GET" && pathname === "/v1/github/callback") {
     return handleGithubCallback(env, request, url);
   }
@@ -512,6 +517,8 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
       return handleJoinRealtimeRoom(env, request, decodeURIComponent(joinRoomMatch[1]), plexusPrincipal);
     }
 
+    const renegotiateMatch = pathname.match(/^\/v1\/realtime\/calls\/([^/]+)\/renegotiate$/);
+    if (method === "POST" && renegotiateMatch) return handleRenegotiateRealtimeCall(env, request, decodeURIComponent(renegotiateMatch[1]), plexusPrincipal);
     const tracksMatch = pathname.match(/^\/v1\/realtime\/calls\/([^/]+)\/tracks$/);
     if (method === "POST" && tracksMatch) {
       return handlePostRealtimeTrack(env, request, decodeURIComponent(tracksMatch[1]), plexusPrincipal);

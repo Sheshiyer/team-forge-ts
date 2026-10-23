@@ -119,6 +119,17 @@ export class WorkspaceLock {
       );
     }
 
+    if (key.startsWith("project:realtime:")) {
+      if (!this.state.storage) return jsonError({code: "lock_storage_unavailable", message: "Durable lock storage required.", retryable: true}, 503);
+      const ttlMs = Math.max(1000, Math.min(body.ttlMs ?? 30000, 300000));
+      const acquired = await this.state.storage.transaction(async txn => {
+        const existing = await txn.get<{owner: string; expiresAt: number}>(key);
+        if (existing && existing.expiresAt > Date.now() && existing.owner !== owner) return false;
+        await txn.put(key, {owner, expiresAt: Date.now() + ttlMs});
+        return true;
+      });
+      return acquired ? jsonOk({acquired: true, key, owner}) : jsonError({code: "lock_conflict", message: "Call operation already in progress.", retryable: true}, 409);
+    }
     const ttlMs = Math.max(1_000, Math.min(body.ttlMs ?? 30_000, 300_000));
     const currentTime = Date.now();
     const existing = this.locks.get(key);
@@ -176,6 +187,15 @@ export class WorkspaceLock {
       );
     }
 
+    if (key.startsWith("project:realtime:")) {
+      if (!this.state.storage) return jsonError({code: "lock_storage_unavailable", message: "Durable lock storage required.", retryable: true}, 503);
+      const released = await this.state.storage.transaction(async txn => {
+        const existing = await txn.get<{owner: string}>(key);
+        if (existing?.owner !== owner) return false;
+        await txn.delete(key); return true;
+      });
+      return jsonOk({released, key, owner});
+    }
     const existing = this.locks.get(key);
     if (existing?.owner === owner) {
       this.locks.delete(key);

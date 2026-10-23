@@ -33,7 +33,15 @@ export interface QueueBatchLike<T> {
   retryAll?(options?: { delaySeconds?: number }): void;
 }
 
+export interface DurableObjectStorageLike {
+  get<T>(key: string): Promise<T | undefined>;
+  put<T>(key: string, value: T): Promise<void>;
+  delete(key: string): Promise<boolean>;
+  transaction<T>(callback: (txn: DurableObjectStorageLike) => Promise<T>): Promise<T>;
+}
+
 export interface DurableObjectStateLike {
+  storage?: DurableObjectStorageLike;
   id?: {
     toString(): string;
   };
@@ -64,6 +72,10 @@ export interface LegacyTeamSnapshotMessage {
 }
 
 export interface Env {
+  TF_KNOWLEDGE_GATEWAY_TOKEN?: string;
+  TF_KNOWLEDGE_ROUTINE_ALLOWLIST_JSON?: string;
+  TF_KNOWLEDGE_WORKSPACE_ID?: string;
+  TF_KNOWLEDGE_PROJECT_ID?: string;
   TF_ENV: string;
   TF_API_BASE_URL?: string;
   TF_DEFAULT_OTA_CHANNEL?: string;
