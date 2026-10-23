@@ -617,6 +617,28 @@ describe("realtime routes", () => {
     } finally {warn.mockRestore(); sqlite.close();}
   });
 
+  it("accepts authoritative gone sessions and absent owned tracks but preserves unknown cleanup failures", async () => {
+    for (const outcome of ["gone", "absent", "unknown", "wrong-status", "missing-mid"]) {
+      const {sqlite, env, principal} = makeRealtimeHarness();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const roomId = (await createRooms(env, principal))[0].id;
+        const lease = await createPresenceSession(env, principal);
+        const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+        await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: joined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}}), joined.data.call.id, principal);
+        vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(
+          outcome === "gone" || outcome === "wrong-status" ? {errorCode: "session_error", errorDescription: "private test-token"} : {tracks: outcome === "missing-mid" ? [] : [{mid: "0", errorCode: outcome === "absent" ? "close_track_error" : "private-token", errorDescription: "private test-token"}]}
+        ), {status: outcome === "gone" ? 410 : outcome === "wrong-status" ? 500 : 200})));
+        const response = await handleLeaveRealtimeCall(env, makeReq("/leave", {participantId: joined.data.participant.id}), joined.data.call.id, principal);
+        const accepted = outcome === "gone" || outcome === "absent";
+        expect(response.status).toBe(accepted ? 200 : 502);
+        expect(sqlite.prepare("SELECT state FROM realtime_media_tracks").get()).toEqual({state: accepted ? "closed" : "live"});
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("test-token");
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("private-token");
+      } finally {warn.mockRestore(); sqlite.close();}
+    }
+  });
+
   it("rejects identity-only track publication when multiple app clients are joined", async () => {
     const { sqlite, env, principal } = makeRealtimeHarness();
     try {

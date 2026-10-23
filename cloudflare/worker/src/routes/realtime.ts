@@ -1631,7 +1631,22 @@ async function mediaProvider(env: Env, sessionId: string, path: string, method: 
   const base = (env.CF_REALTIME_API_BASE_URL ?? "https://rtc.live.cloudflare.com").replace(/\/+$/, "");
   validateProviderBase(base);
   const response = await fetch(`${base}/v1/apps/${encodeURIComponent(env.CF_REALTIME_APP_ID)}/sessions/${encodeURIComponent(sessionId)}${path}`, { method, redirect: "manual", signal: AbortSignal.timeout(10000), headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
-  const result = await boundedProviderJson(response);
+  const result = await boundedProviderJson(response).catch(() => {
+    if (path === "/tracks/close") console.warn("realtime_close_boundary", {operation: "tracks_close", upstreamStatus: response.status, category: "invalid_response"});
+    throw new Error("Invalid provider response");
+  });
+  if (path === "/tracks/close") {
+    // IDs/mids reach this helper only after scoped participant/track ownership checks.
+    const gone = response.status === 410 && result.errorCode === "session_error";
+    const requested = (body as {tracks?: {mid: string}[]}).tracks ?? [];
+    const items = Array.isArray(result.tracks) ? result.tracks : [];
+    const closed = response.ok && !result.errorCode && requested.length > 0 && requested.every(({mid}) => items.some((item: any) => item?.mid === mid && (!item.errorCode || item.errorCode === "close_track_error")));
+    if (gone || closed) return result;
+    const allowed = new Set(["session_error", "close_track_error", "internal_error", "unauthorized", "invalid_params", "invalid_session_description"]);
+    const safeCode = (value: unknown) => typeof value === "string" && allowed.has(value) ? value : value ? "other" : null;
+    console.warn("realtime_close_boundary", {operation: "tracks_close", upstreamStatus: response.status, errorCode: safeCode(result.errorCode), trackErrorCodes: items.slice(0, 8).map((item: any) => safeCode(item?.errorCode))});
+    throw new Error("Provider closure unconfirmed");
+  }
   if (!response.ok || result.errorCode || result.tracks?.some((t: any) => t.errorCode)) throw new Error("Provider failed");
   return result;
 }
