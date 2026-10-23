@@ -15,3 +15,9 @@ Production promotion awaits explicit operator approval. No deployed call or inst
 ## Approved promotion
 
 The operator explicitly approved promotion and call verification. Wrangler 4.152.0 successfully promoted 294c3fc3-ea28-4963-b325-d3b7a19cf42e to 100 percent. Independent API readback confirms that active version, exact observability preservation and unchanged logpush. The protected API returns the expected Labs Access sign-in. Member authentication is pending a freshly requested email code; no authenticated call or media success is claimed. Rollback version remains 44c06546-61c2-48bc-bedb-d1149409f12c.
+
+## Authenticated live attempt and diagnostic candidate
+
+The operator completed Labs Access. Live whoami confirms access and ws_thoughtseed admin membership. The empty workspace lobby had no participants/call. A developer harness bundling actual RealtimeSession attempted two independent client sessions under that identity, with generated media only. First media join failed502/realtime_provider_unavailable before capture or publication. Own presence disconnect succeeded; room readback confirms0 probe participants and0 probe tracks. No room was created/deleted.
+
+Source4469c85 adds bounded private session allocation diagnostics (category, upstream status, constrained Ray ID only), preserving generic client errors. TypeScript and211 tests across18 files pass. Version450ec42c-5690-4d0b-b059-eaa16554dca0 is staged with no traffic; bindings/runtime exactly match current294c3fc3. Exact new-version promotion approval requested.
