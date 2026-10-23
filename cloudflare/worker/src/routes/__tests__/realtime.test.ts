@@ -595,6 +595,28 @@ describe("realtime routes", () => {
     } finally {warn.mockRestore(); sqlite.close();}
   });
 
+  it("uses Worker-compatible manual redirects and rejects redirects without following", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(null, {status: 302, headers: {location: "https://untrusted.example/collect"}})));
+      expect((await joinRoom(env, principal, roomId, "client-a", lease)).status).toBe(502);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(fetch).mock.calls[0][1]?.redirect).toBe("manual");
+      expect(warn).toHaveBeenCalledWith("realtime_provider_boundary", expect.objectContaining({category: "http_rejected", upstreamStatus: 302}));
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({sessionId: "session"}))));
+      const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(null, {status: 307, headers: {location: "https://untrusted.example/collect"}})));
+      const response = await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: joined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}}), joined.data.call.id, principal);
+      expect(response.status).toBe(502);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(fetch).mock.calls[0][1]?.redirect).toBe("manual");
+      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM realtime_media_tracks").get()).toEqual({count: 0});
+    } finally {warn.mockRestore(); sqlite.close();}
+  });
+
   it("rejects identity-only track publication when multiple app clients are joined", async () => {
     const { sqlite, env, principal } = makeRealtimeHarness();
     try {

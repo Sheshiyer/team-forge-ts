@@ -665,7 +665,7 @@ async function createCloudflareSession(env: Env, sessionDescription: unknown): P
   let res: Response;
   try { res = await fetch(endpoint, {
     method: "POST",
-    redirect: "error", signal: AbortSignal.timeout(10000),
+    redirect: "manual", signal: AbortSignal.timeout(10000),
     headers: {
       Authorization: `Bearer ${token}`,
       "content-type": "application/json",
@@ -1630,7 +1630,7 @@ async function mediaProvider(env: Env, sessionId: string, path: string, method: 
   if (!env.CF_REALTIME_APP_ID || !token) throw new Error("Provider unavailable");
   const base = (env.CF_REALTIME_API_BASE_URL ?? "https://rtc.live.cloudflare.com").replace(/\/+$/, "");
   validateProviderBase(base);
-  const response = await fetch(`${base}/v1/apps/${encodeURIComponent(env.CF_REALTIME_APP_ID)}/sessions/${encodeURIComponent(sessionId)}${path}`, { method, redirect: "error", signal: AbortSignal.timeout(10000), headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const response = await fetch(`${base}/v1/apps/${encodeURIComponent(env.CF_REALTIME_APP_ID)}/sessions/${encodeURIComponent(sessionId)}${path}`, { method, redirect: "manual", signal: AbortSignal.timeout(10000), headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
   const result = await boundedProviderJson(response);
   if (!response.ok || result.errorCode || result.tracks?.some((t: any) => t.errorCode)) throw new Error("Provider failed");
   return result;
