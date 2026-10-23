@@ -147,6 +147,8 @@ interface TrackBody {
   trackKind?: TrackKind;
   direction?: TrackDirection;
   sdp?: string;
+  mid?: string;
+  sessionDescription?: { type: string; sdp: string };
   label?: string;
   sourceId?: string | null;
   cloudflareSessionId?: string | null;
@@ -644,7 +646,7 @@ async function getFreshPresenceLease(
 async function createCloudflareSession(env: Env, sessionDescription: unknown): Promise<Record<string, unknown>> {
   const appId = env.CF_REALTIME_APP_ID;
   const token = env.CF_REALTIME_API_TOKEN ?? env.CF_REALTIME_APP_TOKEN;
-  if (!appId || !token || !sessionDescription) {
+  if (!appId || !token) {
     return {
       configured: Boolean(appId && token),
       appId: appId ?? null,
@@ -664,7 +666,7 @@ async function createCloudflareSession(env: Env, sessionDescription: unknown): P
       "content-type": "application/json",
       accept: "application/json",
     },
-    body: JSON.stringify({ sessionDescription }),
+    ...(sessionDescription ? { body: JSON.stringify({ sessionDescription }) } : {}),
   });
   const providerBody = await res.json().catch(() => null) as Record<string, unknown> | null;
   if (!res.ok) {
@@ -846,7 +848,8 @@ export async function handleJoinRealtimeRoom(
 
   let cloudflare: Record<string, unknown>;
   try {
-    cloudflare = await createCloudflareSession(env, body.sessionDescription);
+    cloudflare = body.intent === "presence_only" ? { configured: false, sessionId: null } : await createCloudflareSession(env, body.sessionDescription);
+    if (body.intent !== "presence_only" && !cloudflare.sessionId) throw new Error("Realtime provider unavailable.");
   } catch (error) {
     return jsonError(
       { code: "realtime_provider_unavailable", message: error instanceof Error ? error.message : "Cloudflare Realtime unavailable.", retryable: true },
@@ -1143,7 +1146,26 @@ export async function handlePostRealtimeTrack(
     return jsonError({ code: "realtime_track_forbidden", message: "Cannot publish tracks for this participant.", retryable: false }, 403);
   }
 
+  if (body.cloudflareSessionId || body.cloudflareTrackId) return jsonError({ code: "realtime_track_forbidden", message: "Provider IDs are server owned.", retryable: false }, 400);
+  if (!participant.cloudflare_session_id) return jsonError({ code: "realtime_unavailable", message: "Media provider unavailable; rejoin after configuration.", retryable: false }, 503);
+  const direction = body.direction ?? "publish";
+  if (direction !== "publish" && direction !== "subscribe") return jsonError({ code: "invalid_track", message: "Invalid direction.", retryable: false }, 400);
   const trackId = `trk_${nanoid()}`;
+  let tracks: Record<string, unknown>[];
+  if (direction === "publish") {
+    if (!boundedRealtimeId(body.mid) || body.sessionDescription?.type !== "offer" || !body.sessionDescription.sdp || body.sessionDescription.sdp.length > 262144) return jsonError({ code: "invalid_track", message: "Publication requires mid and SDP offer.", retryable: false }, 400);
+    tracks = [{ location: "local", mid: body.mid, trackName: trackId }];
+  } else {
+    if (body.targetTrackIds?.length !== 1) return jsonError({ code: "invalid_track", message: "One publication required.", retryable: false }, 400);
+    const publication = (await listActiveTracks(env, call.id, ts)).find(t => t.id === body.targetTrackIds![0] && t.direction === "publish" && t.track_kind === trackKind && t.workspace_id === workspaceId && t.participant_id !== participant.id);
+    if (!publication?.cloudflare_session_id || !publication.cloudflare_track_id) return jsonError({ code: "realtime_track_forbidden", message: "Publication unavailable in this call.", retryable: false }, 403);
+    tracks = [{ location: "remote", sessionId: publication.cloudflare_session_id, trackName: publication.cloudflare_track_id }];
+  }
+  let provider: Record<string, any>;
+  try {
+    provider = await mediaProvider(env, participant.cloudflare_session_id, "/tracks/new", "POST", { tracks, ...(direction === "publish" ? { sessionDescription: body.sessionDescription } : {}) });
+    if (!provider.tracks?.[0]?.mid) throw new Error("Missing allocation");
+  } catch { return jsonError({ code: "realtime_provider_failed", message: "Media negotiation failed.", retryable: true }, 502); }
   await execute(
     env.TEAMFORGE_DB!,
     `INSERT INTO realtime_media_tracks
@@ -1161,15 +1183,15 @@ export async function handlePostRealtimeTrack(
     body.direction ?? "publish",
     body.label ?? null,
     body.sourceId ?? null,
-    body.cloudflareSessionId ?? participant.cloudflare_session_id,
-    body.cloudflareTrackId ?? null,
+    participant.cloudflare_session_id,
+    direction === "publish" ? trackId : provider.tracks[0].trackName ?? null,
     stringifyJson(body.targetTrackIds ?? []),
-    stringifyJson(body.metadata ?? {}),
+    stringifyJson({ mid: provider.tracks[0].mid }),
     ts,
     ts,
   );
 
-  if (trackKind === "audio" || trackKind === "camera" || trackKind === "screen") {
+  if (direction === "publish") {
     await execute(
       env.TEAMFORGE_DB!,
       `UPDATE realtime_participants
@@ -1202,7 +1224,9 @@ export async function handlePostRealtimeTrack(
     cloudflare: {
       appId: env.CF_REALTIME_APP_ID ?? null,
       stunUrls: STUN_URLS,
-      negotiation: body.sdp ? "track_metadata_recorded" : "client_local_track_recorded",
+      ...provider,
+      tracks: provider.tracks.map((t: any) => ({ ...t, trackId: direction === "subscribe" ? body.targetTrackIds![0] : trackId })),
+      negotiation: "tracks_created",
     },
   }, { status: 201 });
 }
@@ -1232,6 +1256,11 @@ export async function handleCloseRealtimeTrack(
     return jsonError({ code: "realtime_track_forbidden", message: "Cannot close another participant's track.", retryable: false }, 403);
   }
 
+  const mid = safeJsonParse<{mid?: string}>(track.metadata_json, {}).mid;
+  if (track.state === "live" && track.cloudflare_session_id && mid) {
+    try { await mediaProvider(env, track.cloudflare_session_id, "/tracks/close", "PUT", { tracks: [{ mid }], force: true }); }
+    catch { return jsonError({ code: "realtime_provider_failed", message: "Provider closure failed.", retryable: true }, 502); }
+  }
   const ts = now();
   await execute(
     env.TEAMFORGE_DB!,
@@ -1287,6 +1316,14 @@ export async function handleLeaveRealtimeCall(
     return jsonError({ code: "realtime_join_denied", message: "Participant is not joined to this call.", retryable: false }, 403);
   }
 
+  const ownedTracks = (await listTracks(env, callId)).filter(t => t.participant_id === participant.id && t.state === "live");
+  for (const track of ownedTracks) {
+    const mid = safeJsonParse<{mid?: string}>(track.metadata_json, {}).mid;
+    if (track.cloudflare_session_id && mid) {
+      try { await mediaProvider(env, track.cloudflare_session_id, "/tracks/close", "PUT", {tracks: [{mid}], force: true}); }
+      catch { return jsonError({code: "realtime_provider_failed", message: "Provider cleanup failed; retry leaving.", retryable: true}, 502); }
+    }
+  }
   const ts = now();
   await execute(
     env.TEAMFORGE_DB!,
@@ -1564,4 +1601,26 @@ export async function handleGetRealtimeMeeting(
     return jsonError({ code: "not_found", message: "Realtime meeting not found.", retryable: false }, 404);
   }
   return jsonOk({ meeting: mapMeeting(meeting) });
+}
+
+async function mediaProvider(env: Env, sessionId: string, path: string, method: string, body: unknown): Promise<Record<string, any>> {
+  const token = env.CF_REALTIME_API_TOKEN ?? env.CF_REALTIME_APP_TOKEN;
+  if (!env.CF_REALTIME_APP_ID || !token) throw new Error("Provider unavailable");
+  const base = (env.CF_REALTIME_API_BASE_URL ?? "https://rtc.live.cloudflare.com").replace(/\/+$/, "");
+  const response = await fetch(`${base}/v1/apps/${encodeURIComponent(env.CF_REALTIME_APP_ID)}/sessions/${encodeURIComponent(sessionId)}${path}`, { method, headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const result = await response.json() as Record<string, any>;
+  if (!response.ok || result.errorCode || result.tracks?.some((t: any) => t.errorCode)) throw new Error("Provider failed");
+  return result;
+}
+export async function handleRenegotiateRealtimeCall(env: Env, request: Request, callId: string, principal?: PlexusPrincipal | null): Promise<Response> {
+  const failure = missingDb(env) ?? requirePrincipal(principal); if (failure) return failure;
+  const parsed = await readJson<{participantId?: string; sessionDescription?: {type: string; sdp: string}}>(request); if (parsed.response) return parsed.response;
+  const call = await getCall(env, principal!.workspaceId, callId);
+  if (!call || call.state !== "live") return jsonError({code: "not_found", message: "Live call required.", retryable: false}, 404);
+  const body = parsed.body!;
+  const participant = (await listActiveParticipants(env, callId, now())).find(p => p.id === body.participantId && p.identity_id === principal!.identityId && p.workspace_id === principal!.workspaceId);
+  if (!participant?.cloudflare_session_id) return jsonError({code: "realtime_track_forbidden", message: "Owned active participant required.", retryable: false}, 403);
+  if (body.sessionDescription?.type !== "answer" || !body.sessionDescription.sdp || body.sessionDescription.sdp.length > 262144) return jsonError({code: "invalid_track", message: "SDP answer required.", retryable: false}, 400);
+  try { return jsonOk({ cloudflare: await mediaProvider(env, participant.cloudflare_session_id, "/renegotiate", "PUT", {sessionDescription: body.sessionDescription}) }); }
+  catch { return jsonError({code: "realtime_provider_failed", message: "Answer rejected.", retryable: true}, 502); }
 }

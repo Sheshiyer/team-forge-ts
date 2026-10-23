@@ -114,7 +114,11 @@ function makeRealtimeHarness() {
   `);
   sqlite.exec(readFileSync(new URL("../../../migrations/0011_realtime_workspace.sql", import.meta.url), "utf8"));
   sqlite.exec(readFileSync(new URL("../../../migrations/0016_plexus_app_presence_leases.sql", import.meta.url), "utf8"));
-  const env = { TF_ENV: "test", TEAMFORGE_DB: d1(sqlite), CF_REALTIME_APP_ID: "public-app" } as Env;
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    return new Response(JSON.stringify(String(url).endsWith("/sessions/new") ? {sessionId: "provider-session"} : {tracks: (body.tracks ?? []).map((t: any) => ({...t, mid: t.mid ?? "remote-0"})), sessionDescription: {type: "answer", sdp: "provider-sdp"}}), {status: 200});
+  }));
+  const env = { TF_ENV: "test", TEAMFORGE_DB: d1(sqlite), CF_REALTIME_APP_ID: "public-app", CF_REALTIME_API_TOKEN: "test-token" } as Env;
   return { sqlite, env, principal: makePrincipal() };
 }
 
@@ -162,7 +166,11 @@ describe("realtime routes", () => {
   });
 
   it("GET /v1/realtime/rooms fails closed without app auth", async () => {
-    const env = { TF_ENV: "test", TF_CREDENTIAL_ENVELOPE_KEY: "secret" } as Env;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    return new Response(JSON.stringify(String(url).endsWith("/sessions/new") ? {sessionId: "provider-session"} : {tracks: (body.tracks ?? []).map((t: any) => ({...t, mid: t.mid ?? "remote-0"})), sessionDescription: {type: "answer", sdp: "provider-sdp"}}), {status: 200});
+  }));
+  const env = { TF_ENV: "test", TF_CREDENTIAL_ENVELOPE_KEY: "secret" } as Env;
     const request = new Request("https://worker.test/v1/realtime/rooms");
     const res = await handleV1Request(request, env, new URL(request.url));
     expect(res.status).toBe(401);
@@ -282,6 +290,8 @@ describe("realtime routes", () => {
       const track = await handlePostRealtimeTrack(env, makeReq(`/v1/realtime/calls/${joined.data.call.id}/tracks`, {
         participantId: joined.data.participant.id,
         trackKind: "screen",
+        mid: "0",
+        sessionDescription: { type: "offer", sdp: "test-offer" },
         direction: "publish",
         label: "Main display",
       }), joined.data.call.id, principal);
@@ -326,6 +336,8 @@ describe("realtime routes", () => {
       await handlePostRealtimeTrack(env, makeReq(`/v1/realtime/calls/${firstBody.data.call.id}/tracks`, {
         participantId: firstBody.data.participant.id,
         trackKind: "screen",
+        mid: "0",
+        sessionDescription: { type: "offer", sdp: "test-offer" },
         direction: "publish",
       }), firstBody.data.call.id, principal);
 
@@ -370,6 +382,8 @@ describe("realtime routes", () => {
       await handlePostRealtimeTrack(env, makeReq(`/v1/realtime/calls/${joined.data.call.id}/tracks`, {
         participantId: joined.data.participant.id,
         trackKind: "screen",
+        mid: "0",
+        sessionDescription: { type: "offer", sdp: "test-offer" },
         direction: "publish",
       }), joined.data.call.id, principal);
 
@@ -412,6 +426,42 @@ describe("realtime routes", () => {
     }
   });
 
+  it("rejects forged provider IDs and unavailable remote publications without contacting the provider", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      vi.mocked(fetch).mockClear();
+      for (const body of [
+        {cloudflareSessionId: "attacker-session"},
+        {direction: "subscribe", targetTrackIds: ["other-room-track"]},
+      ]) {
+        const response = await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: joined.data.participant.id, trackKind: "audio", ...body}), joined.data.call.id, principal);
+        expect([400, 403]).toContain(response.status);
+      }
+      expect(fetch).not.toHaveBeenCalled();
+      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM realtime_media_tracks").get()).toEqual({count: 0});
+    } finally { sqlite.close(); }
+  });
+
+  it("allocates an empty provider session and publishes with server owned identifiers", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      const sessionRequest = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith("/sessions/new"));
+      expect(sessionRequest?.[1]?.body).toBeUndefined();
+      const response = await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: joined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}}), joined.data.call.id, principal);
+      expect(response.status).toBe(201);
+      const result = await response.json() as any;
+      const operation = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body));
+      expect(operation.tracks[0]).toEqual({location: "local", mid: "0", trackName: result.data.track.id});
+      expect(result.data.track.cloudflareSessionId).toBe("provider-session");
+    } finally { sqlite.close(); }
+  });
+
   it("rejects identity-only track publication when multiple app clients are joined", async () => {
     const { sqlite, env, principal } = makeRealtimeHarness();
     try {
@@ -424,6 +474,8 @@ describe("realtime routes", () => {
 
       const track = await handlePostRealtimeTrack(env, makeReq(`/v1/realtime/calls/${firstBody.data.call.id}/tracks`, {
         trackKind: "screen",
+        mid: "0",
+        sessionDescription: { type: "offer", sdp: "test-offer" },
         direction: "publish",
       }), firstBody.data.call.id, principal);
       expect(track.status).toBe(400);

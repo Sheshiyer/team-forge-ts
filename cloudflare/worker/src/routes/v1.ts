@@ -57,6 +57,7 @@ import {
   handleLeaveRealtimeCall,
   handlePostRealtimeRoom,
   handlePostRealtimeTrack,
+  handleRenegotiateRealtimeCall,
   handleRealtimeCloseout,
 } from "./realtime";
 import {
@@ -512,6 +513,8 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
       return handleJoinRealtimeRoom(env, request, decodeURIComponent(joinRoomMatch[1]), plexusPrincipal);
     }
 
+    const renegotiateMatch = pathname.match(/^\/v1\/realtime\/calls\/([^/]+)\/renegotiate$/);
+    if (method === "POST" && renegotiateMatch) return handleRenegotiateRealtimeCall(env, request, decodeURIComponent(renegotiateMatch[1]), plexusPrincipal);
     const tracksMatch = pathname.match(/^\/v1\/realtime\/calls\/([^/]+)\/tracks$/);
     if (method === "POST" && tracksMatch) {
       return handlePostRealtimeTrack(env, request, decodeURIComponent(tracksMatch[1]), plexusPrincipal);
