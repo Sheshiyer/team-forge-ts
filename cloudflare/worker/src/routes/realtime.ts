@@ -671,11 +671,11 @@ async function createCloudflareSession(env: Env, sessionDescription: unknown): P
     },
     ...(sessionDescription ? { body: JSON.stringify({ sessionDescription }) } : {}),
   });
-  const providerBody = await res.json().catch(() => null) as Record<string, unknown> | null;
+  const providerBody = await boundedProviderJson(res).catch(() => null) as Record<string, unknown> | null;
   if (!res.ok) {
-    const message = typeof providerBody?.message === "string" ? providerBody.message : `Cloudflare Realtime responded ${res.status}.`;
-    throw new Error(message);
+    throw new Error("Realtime provider session allocation failed.");
   }
+  if (!boundedRealtimeId(providerBody?.sessionId)) throw new Error("Realtime provider returned no valid session.");
   return {
     configured: true,
     appId,
@@ -856,7 +856,7 @@ async function handleJoinRealtimeRoomUnlocked(
     if (body.intent !== "presence_only" && !cloudflare.sessionId) throw new Error("Realtime provider unavailable.");
   } catch (error) {
     return jsonError(
-      { code: "realtime_provider_unavailable", message: error instanceof Error ? error.message : "Cloudflare Realtime unavailable.", retryable: true },
+      { code: "realtime_provider_unavailable", message: "Cloudflare Realtime unavailable.", retryable: true },
       502,
     );
   }
@@ -1172,7 +1172,10 @@ async function handlePostRealtimeTrackUnlocked(
   let provider: Record<string, any>;
   try {
     provider = await mediaProvider(env, participant.cloudflare_session_id, "/tracks/new", "POST", { tracks, ...(direction === "publish" ? { sessionDescription: body.sessionDescription } : {}) });
-    if (!provider.tracks?.[0]?.mid) throw new Error("Missing allocation");
+    const description = provider.sessionDescription;
+    if (!Array.isArray(provider.tracks) || provider.tracks.length !== 1 || !boundedRealtimeId(provider.tracks[0]?.mid) || !boundedRealtimeId(provider.tracks[0]?.trackName)) throw new Error("Invalid track allocation");
+    if (!description || description.type !== (direction === "publish" ? "answer" : "offer") || typeof description.sdp !== "string" || !description.sdp || description.sdp.length > 262144) throw new Error("Invalid provider SDP");
+    if (direction === "publish" && provider.tracks[0].trackName !== trackId) throw new Error("Invalid publication mapping");
   } catch { return jsonError({ code: "realtime_provider_failed", message: "Media negotiation failed.", retryable: true }, 502); }
   if (provider.requiresImmediateRenegotiation) await execute(env.TEAMFORGE_DB!, "UPDATE realtime_participants SET metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.pendingRenegotiation', json('true')) WHERE id = ?", participant.id);
   await execute(
@@ -1326,13 +1329,8 @@ async function handleLeaveRealtimeCallUnlocked(
   }
 
   const ownedTracks = (await listTracks(env, callId)).filter(t => t.participant_id === participant.id && t.state === "live");
-  for (const track of ownedTracks) {
-    const mid = safeJsonParse<{mid?: string}>(track.metadata_json, {}).mid;
-    if (track.cloudflare_session_id && mid) {
-      try { await mediaProvider(env, track.cloudflare_session_id, "/tracks/close", "PUT", {tracks: [{mid}], force: true}); }
-      catch { return jsonError({code: "realtime_provider_failed", message: "Provider cleanup failed; retry leaving.", retryable: true}, 502); }
-    }
-  }
+  const cleanupFailure = await closeProviderTracks(env, ownedTracks);
+  if (cleanupFailure) return cleanupFailure;
   const ts = now();
   await execute(
     env.TEAMFORGE_DB!,
@@ -1423,14 +1421,8 @@ async function handleEndRealtimeCallUnlocked(
     return jsonError({ code: "realtime_join_denied", message: "Only the host or admin can end the call.", retryable: false }, 403);
   }
 
-  // Withdraw provider flows before accepting the host's end action.
-  for (const track of (await listTracks(env, callId)).filter(t => t.state === "live")) {
-    const mid = safeJsonParse<{mid?: string}>(track.metadata_json, {}).mid;
-    if (track.cloudflare_session_id && mid) {
-      try { await mediaProvider(env, track.cloudflare_session_id, "/tracks/close", "PUT", {tracks: [{mid}], force: true}); }
-      catch { return jsonError({code: "realtime_provider_failed", message: "Provider cleanup failed; retry ending the call.", retryable: true}, 502); }
-    }
-  }
+  const cleanupFailure = await closeProviderTracks(env, (await listTracks(env, callId)).filter(t => t.state === "live"));
+  if (cleanupFailure) return cleanupFailure;
   const ts = now();
   await execute(
     env.TEAMFORGE_DB!,
@@ -1626,7 +1618,7 @@ async function mediaProvider(env: Env, sessionId: string, path: string, method: 
   const base = (env.CF_REALTIME_API_BASE_URL ?? "https://rtc.live.cloudflare.com").replace(/\/+$/, "");
   validateProviderBase(base);
   const response = await fetch(`${base}/v1/apps/${encodeURIComponent(env.CF_REALTIME_APP_ID)}/sessions/${encodeURIComponent(sessionId)}${path}`, { method, redirect: "error", signal: AbortSignal.timeout(10000), headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
-  const result = await response.json() as Record<string, any>;
+  const result = await boundedProviderJson(response);
   if (!response.ok || result.errorCode || result.tracks?.some((t: any) => t.errorCode)) throw new Error("Provider failed");
   return result;
 }
@@ -1649,7 +1641,7 @@ async function handleRenegotiateRealtimeCallUnlocked(env: Env, request: Request,
 
 export async function handleJoinRealtimeRoom(...args: Parameters<typeof handleJoinRealtimeRoomUnlocked>): Promise<Response> {
   const env = args[0];
-  const principal = args[args.length - 1] as PlexusPrincipal | null | undefined;
+  const principal = args[3] as PlexusPrincipal | null | undefined;
   if (!principal) return requirePrincipal(principal)!;
   if (!env.WORKSPACE_LOCKS) return jsonError({code: "realtime_lock_unavailable", message: "Realtime coordination binding unavailable.", retryable: true}, 503);
   let lock;
@@ -1660,7 +1652,7 @@ export async function handleJoinRealtimeRoom(...args: Parameters<typeof handleJo
 
 export async function handlePostRealtimeTrack(...args: Parameters<typeof handlePostRealtimeTrackUnlocked>): Promise<Response> {
   const env = args[0];
-  const principal = args[args.length - 1] as PlexusPrincipal | null | undefined;
+  const principal = args[3] as PlexusPrincipal | null | undefined;
   if (!principal) return requirePrincipal(principal)!;
   if (!env.WORKSPACE_LOCKS) return jsonError({code: "realtime_lock_unavailable", message: "Realtime coordination binding unavailable.", retryable: true}, 503);
   let lock;
@@ -1671,7 +1663,7 @@ export async function handlePostRealtimeTrack(...args: Parameters<typeof handleP
 
 export async function handleCloseRealtimeTrack(...args: Parameters<typeof handleCloseRealtimeTrackUnlocked>): Promise<Response> {
   const env = args[0];
-  const principal = args[args.length - 1] as PlexusPrincipal | null | undefined;
+  const principal = args[3] as PlexusPrincipal | null | undefined;
   if (!principal) return requirePrincipal(principal)!;
   if (!env.WORKSPACE_LOCKS) return jsonError({code: "realtime_lock_unavailable", message: "Realtime coordination binding unavailable.", retryable: true}, 503);
   let lock;
@@ -1682,7 +1674,7 @@ export async function handleCloseRealtimeTrack(...args: Parameters<typeof handle
 
 export async function handleLeaveRealtimeCall(...args: Parameters<typeof handleLeaveRealtimeCallUnlocked>): Promise<Response> {
   const env = args[0];
-  const principal = args[args.length - 1] as PlexusPrincipal | null | undefined;
+  const principal = args[3] as PlexusPrincipal | null | undefined;
   if (!principal) return requirePrincipal(principal)!;
   if (!env.WORKSPACE_LOCKS) return jsonError({code: "realtime_lock_unavailable", message: "Realtime coordination binding unavailable.", retryable: true}, 503);
   let lock;
@@ -1693,7 +1685,7 @@ export async function handleLeaveRealtimeCall(...args: Parameters<typeof handleL
 
 export async function handleEndRealtimeCall(...args: Parameters<typeof handleEndRealtimeCallUnlocked>): Promise<Response> {
   const env = args[0];
-  const principal = args[args.length - 1] as PlexusPrincipal | null | undefined;
+  const principal = args[2] as PlexusPrincipal | null | undefined;
   if (!principal) return requirePrincipal(principal)!;
   if (!env.WORKSPACE_LOCKS) return jsonError({code: "realtime_lock_unavailable", message: "Realtime coordination binding unavailable.", retryable: true}, 503);
   let lock;
@@ -1704,7 +1696,7 @@ export async function handleEndRealtimeCall(...args: Parameters<typeof handleEnd
 
 export async function handleRenegotiateRealtimeCall(...args: Parameters<typeof handleRenegotiateRealtimeCallUnlocked>): Promise<Response> {
   const env = args[0];
-  const principal = args[args.length - 1] as PlexusPrincipal | null | undefined;
+  const principal = args[3] as PlexusPrincipal | null | undefined;
   if (!principal) return requirePrincipal(principal)!;
   if (!env.WORKSPACE_LOCKS) return jsonError({code: "realtime_lock_unavailable", message: "Realtime coordination binding unavailable.", retryable: true}, 503);
   let lock;
@@ -1716,4 +1708,38 @@ export async function handleRenegotiateRealtimeCall(...args: Parameters<typeof h
 function validateProviderBase(base: string): void {
   const url = new URL(base);
   if (url.origin !== "https://rtc.live.cloudflare.com" || url.pathname !== "/" || url.username || url.password || url.search || url.hash) throw new Error("Unsupported realtime provider endpoint.");
+}
+
+async function closeProviderTracks(env: Env, tracks: RealtimeTrackRow[]): Promise<Response | null> {
+  const groups = new Map<string, {mid: string}[]>();
+  for (const track of tracks) {
+    const mid = safeJsonParse<{mid?: string}>(track.metadata_json, {}).mid;
+    if (!track.cloudflare_session_id || !mid) continue;
+    const group = groups.get(track.cloudflare_session_id) ?? [];
+    group.push({mid}); groups.set(track.cloudflare_session_id, group);
+  }
+  try {
+    // One bounded call per session, all sessions concurrently: cleanup cannot accumulate N timeouts.
+    const results = await Promise.allSettled([...groups].map(([session, tracks]) => mediaProvider(env, session, "/tracks/close", "PUT", {tracks, force: true})));
+    if (results.some(result => result.status === "rejected")) throw new Error("Cleanup failed");
+    return null;
+  } catch { return jsonError({code: "realtime_provider_failed", message: "Provider cleanup failed; retry teardown.", retryable: true}, 502); }
+}
+
+async function boundedProviderJson(response: Response): Promise<Record<string, any>> {
+  if (Number(response.headers.get("content-length")) > 1048576) throw new Error("Provider response too large");
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Empty provider response");
+  const chunks: Uint8Array[] = []; let bytes = 0;
+  for (;;) {
+    const {done, value} = await reader.read(); if (done) break;
+    bytes += value.byteLength;
+    if (bytes > 1048576) { await reader.cancel(); throw new Error("Provider response too large"); }
+    chunks.push(value);
+  }
+  const buffer = new Uint8Array(bytes); let offset = 0;
+  for (const chunk of chunks) { buffer.set(chunk, offset); offset += chunk.byteLength; }
+  const result = JSON.parse(new TextDecoder().decode(buffer));
+  if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Invalid provider response");
+  return result;
 }

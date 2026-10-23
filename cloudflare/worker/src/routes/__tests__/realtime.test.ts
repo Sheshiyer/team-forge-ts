@@ -503,6 +503,26 @@ describe("realtime routes", () => {
     } finally { sqlite.close(); }
   });
 
+  it("rejects malformed and partially failed provider negotiation without live metadata", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      for (const result of [
+        {tracks: [{mid: "0", trackName: "fake"}]},
+        {tracks: [{mid: "0", trackName: "fake", errorCode: "partial"}], sessionDescription: {type: "answer", sdp: "answer"}},
+        {tracks: [{mid: "0"}], sessionDescription: {type: "answer", sdp: "answer"}},
+      ]) {
+        vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(result))));
+        const response = await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: joined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}}), joined.data.call.id, principal);
+        expect(response.status).toBe(502);
+      }
+      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM realtime_media_tracks").get()).toEqual({count: 0});
+      expect((await handleEndRealtimeCall(env, joined.data.call.id)).status).toBe(401);
+    } finally { sqlite.close(); }
+  });
+
   it("rejects identity-only track publication when multiple app clients are joined", async () => {
     const { sqlite, env, principal } = makeRealtimeHarness();
     try {
