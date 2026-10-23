@@ -27,3 +27,7 @@ Source4469c85 adds bounded private session allocation diagnostics (category, ups
 The approved diagnostic450ec42c retry emitted network_or_timeout before provider HTTP response. Exact compatibility-date2026-04-09 workerd probe reproduces redirect:error throwing TypeError at Request construction; manual is supported. Sourcebc713d0 changes bothSFUfetches to manual while existing non-success checks reject3xx; TypeScript and212tests pass.
 
 Operator approved exact versionbb596574-a47e-4a1a-8d9f-1075955844cd; promoted100percent and independently read back. Observability preserved. Actual authenticated lounge probe now allocates two independent app/presence/provider sessions successfully under one Labs admin identity. Publication/subscription verification in progress; distinct installed-member acceptance remains open.
+
+## Closure reconciliation accepted
+
+Source7f4507a implements documented authoritative terminal-session/already-closed-track outcomes while retaining unknown failures. TypeScript and213tests pass. Operator approveddd04f3dc-7cef-42f1-a376-20a0f018c2fe; live100percent and observabilitypreserved byindependentreadback. Bothretainedtestleaves acknowledged; independentread-onlyD1confirms4leftparticipantsand8closedtracks,0rowswritten. Subsequentunpublishedprobe cleanupreportederrors0. Originalrollback44c06546 remainsrecorded.
