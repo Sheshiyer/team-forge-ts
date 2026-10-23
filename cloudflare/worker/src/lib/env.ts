@@ -72,6 +72,10 @@ export interface LegacyTeamSnapshotMessage {
 }
 
 export interface Env {
+  TF_KNOWLEDGE_GATEWAY_TOKEN?: string;
+  TF_KNOWLEDGE_ROUTINE_ALLOWLIST_JSON?: string;
+  TF_KNOWLEDGE_WORKSPACE_ID?: string;
+  TF_KNOWLEDGE_PROJECT_ID?: string;
   TF_ENV: string;
   TF_API_BASE_URL?: string;
   TF_DEFAULT_OTA_CHANNEL?: string;

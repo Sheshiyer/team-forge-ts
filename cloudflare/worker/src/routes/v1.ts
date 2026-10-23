@@ -1,3 +1,4 @@
+import { handleGithubKnowledgeRoutineSnapshot } from "./github-knowledge";
 /**
  * V1 API Router — Safety Audit Note (2026-06-10)
  *
@@ -122,6 +123,9 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Exact third-party inbound paths. Cloudflare Access must bypass only these
   // two routes; callback state and webhook HMAC independently fail closed.
+  if (method === "GET" && pathname === "/v1/github/knowledge/routine-snapshot") {
+    return handleGithubKnowledgeRoutineSnapshot(request, env, url);
+  }
   if (method === "GET" && pathname === "/v1/github/callback") {
     return handleGithubCallback(env, request, url);
   }
