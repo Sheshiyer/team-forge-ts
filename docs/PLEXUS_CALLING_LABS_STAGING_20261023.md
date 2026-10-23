@@ -21,3 +21,9 @@ The operator explicitly approved promotion and call verification. Wrangler 4.152
 The operator completed Labs Access. Live whoami confirms access and ws_thoughtseed admin membership. The empty workspace lobby had no participants/call. A developer harness bundling actual RealtimeSession attempted two independent client sessions under that identity, with generated media only. First media join failed502/realtime_provider_unavailable before capture or publication. Own presence disconnect succeeded; room readback confirms0 probe participants and0 probe tracks. No room was created/deleted.
 
 Source4469c85 adds bounded private session allocation diagnostics (category, upstream status, constrained Ray ID only), preserving generic client errors. TypeScript and211 tests across18 files pass. Version450ec42c-5690-4d0b-b059-eaa16554dca0 is staged with no traffic; bindings/runtime exactly match current294c3fc3. Exact new-version promotion approval requested.
+
+## Workers runtime correction
+
+The approved diagnostic450ec42c retry emitted network_or_timeout before provider HTTP response. Exact compatibility-date2026-04-09 workerd probe reproduces redirect:error throwing TypeError at Request construction; manual is supported. Sourcebc713d0 changes bothSFUfetches to manual while existing non-success checks reject3xx; TypeScript and212tests pass.
+
+Operator approved exact versionbb596574-a47e-4a1a-8d9f-1075955844cd; promoted100percent and independently read back. Observability preserved. Actual authenticated lounge probe now allocates two independent app/presence/provider sessions successfully under one Labs admin identity. Publication/subscription verification in progress; distinct installed-member acceptance remains open.
