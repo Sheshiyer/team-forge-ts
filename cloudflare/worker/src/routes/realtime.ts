@@ -1,3 +1,4 @@
+import { acquireProjectLock } from "../lib/locks";
 import type { Env } from "../lib/env";
 import { execute, executeChanges, nanoid, now, queryAll, queryFirst } from "../lib/db";
 import { jsonError, jsonOk } from "../lib/response";
@@ -658,9 +659,11 @@ async function createCloudflareSession(env: Env, sessionDescription: unknown): P
   }
 
   const base = (env.CF_REALTIME_API_BASE_URL ?? "https://rtc.live.cloudflare.com").replace(/\/+$/, "");
+  validateProviderBase(base);
   const endpoint = `${base}/v1/apps/${encodeURIComponent(appId)}/sessions/new`;
   const res = await fetch(endpoint, {
     method: "POST",
+    redirect: "error", signal: AbortSignal.timeout(10000),
     headers: {
       Authorization: `Bearer ${token}`,
       "content-type": "application/json",
@@ -812,7 +815,7 @@ export async function handleGetRealtimeRoom(
   });
 }
 
-export async function handleJoinRealtimeRoom(
+async function handleJoinRealtimeRoomUnlocked(
   env: Env,
   request: Request,
   roomId: string,
@@ -846,9 +849,10 @@ export async function handleJoinRealtimeRoom(
     return jsonError({ code: "realtime_presence_stale", message: "Current fresh app presence is required before joining.", retryable: false }, 409);
   }
 
+  const reusable = await queryFirst<RealtimeParticipantRow>(env.TEAMFORGE_DB!, `SELECT p.* FROM realtime_participants p JOIN realtime_call_sessions c ON c.id = p.call_session_id WHERE p.workspace_id = ? AND p.room_id = ? AND p.identity_id = ? AND p.client_instance_id = ? AND p.presence_session_id = ? AND p.state = 'joined' AND c.state = 'live' LIMIT 1`, workspaceId, roomId, principal!.identityId, clientInstanceId, presenceSessionId);
   let cloudflare: Record<string, unknown>;
   try {
-    cloudflare = body.intent === "presence_only" ? { configured: false, sessionId: null } : await createCloudflareSession(env, body.sessionDescription);
+    cloudflare = reusable?.cloudflare_session_id ? { configured: true, sessionId: reusable.cloudflare_session_id, stunUrls: STUN_URLS, negotiation: "session_reused" } : body.intent === "presence_only" ? { configured: false, sessionId: null } : await createCloudflareSession(env, body.sessionDescription);
     if (body.intent !== "presence_only" && !cloudflare.sessionId) throw new Error("Realtime provider unavailable.");
   } catch (error) {
     return jsonError(
@@ -1084,7 +1088,7 @@ export async function handleJoinRealtimeRoom(
   }, { status: 201 });
 }
 
-export async function handlePostRealtimeTrack(
+async function handlePostRealtimeTrackUnlocked(
   env: Env,
   request: Request,
   callId: string,
@@ -1150,6 +1154,7 @@ export async function handlePostRealtimeTrack(
   if (!participant.cloudflare_session_id) return jsonError({ code: "realtime_unavailable", message: "Media provider unavailable; rejoin after configuration.", retryable: false }, 503);
   const direction = body.direction ?? "publish";
   if (direction !== "publish" && direction !== "subscribe") return jsonError({ code: "invalid_track", message: "Invalid direction.", retryable: false }, 400);
+  if (safeJsonParse<{pendingRenegotiation?: boolean}>(participant.metadata_json, {}).pendingRenegotiation) return jsonError({code: "realtime_negotiation_pending", message: "Answer the pending SFU offer before changing tracks.", retryable: false}, 409);
   const trackId = `trk_${nanoid()}`;
   let tracks: Record<string, unknown>[];
   if (direction === "publish") {
@@ -1161,11 +1166,15 @@ export async function handlePostRealtimeTrack(
     if (!publication?.cloudflare_session_id || !publication.cloudflare_track_id) return jsonError({ code: "realtime_track_forbidden", message: "Publication unavailable in this call.", retryable: false }, 403);
     tracks = [{ location: "remote", sessionId: publication.cloudflare_session_id, trackName: publication.cloudflare_track_id }];
   }
+  const existingTracks = (await listTracks(env, call.id)).filter(t => t.participant_id === participant.id && t.state === "live");
+  const duplicate = existingTracks.some(t => t.direction === direction && (direction === "publish" ? safeJsonParse<{mid?: string}>(t.metadata_json, {}).mid === body.mid : safeJsonParse<string[]>(t.target_track_ids_json, []).includes(body.targetTrackIds![0])));
+  if (duplicate) return jsonError({code: "realtime_track_duplicate", message: "Track is already allocated.", retryable: false}, 409);
   let provider: Record<string, any>;
   try {
     provider = await mediaProvider(env, participant.cloudflare_session_id, "/tracks/new", "POST", { tracks, ...(direction === "publish" ? { sessionDescription: body.sessionDescription } : {}) });
     if (!provider.tracks?.[0]?.mid) throw new Error("Missing allocation");
   } catch { return jsonError({ code: "realtime_provider_failed", message: "Media negotiation failed.", retryable: true }, 502); }
+  if (provider.requiresImmediateRenegotiation) await execute(env.TEAMFORGE_DB!, "UPDATE realtime_participants SET metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.pendingRenegotiation', json('true')) WHERE id = ?", participant.id);
   await execute(
     env.TEAMFORGE_DB!,
     `INSERT INTO realtime_media_tracks
@@ -1231,7 +1240,7 @@ export async function handlePostRealtimeTrack(
   }, { status: 201 });
 }
 
-export async function handleCloseRealtimeTrack(
+async function handleCloseRealtimeTrackUnlocked(
   env: Env,
   callId: string,
   trackId: string,
@@ -1278,7 +1287,7 @@ export async function handleCloseRealtimeTrack(
   return jsonOk({ track: updated ? mapTrack(updated) : null });
 }
 
-export async function handleLeaveRealtimeCall(
+async function handleLeaveRealtimeCallUnlocked(
   env: Env,
   request: Request,
   callId: string,
@@ -1396,7 +1405,7 @@ export async function handleLeaveRealtimeCall(
   return jsonOk({ left: true, ended });
 }
 
-export async function handleEndRealtimeCall(
+async function handleEndRealtimeCallUnlocked(
   env: Env,
   callId: string,
   principal?: PlexusPrincipal | null,
@@ -1414,6 +1423,14 @@ export async function handleEndRealtimeCall(
     return jsonError({ code: "realtime_join_denied", message: "Only the host or admin can end the call.", retryable: false }, 403);
   }
 
+  // Withdraw provider flows before accepting the host's end action.
+  for (const track of (await listTracks(env, callId)).filter(t => t.state === "live")) {
+    const mid = safeJsonParse<{mid?: string}>(track.metadata_json, {}).mid;
+    if (track.cloudflare_session_id && mid) {
+      try { await mediaProvider(env, track.cloudflare_session_id, "/tracks/close", "PUT", {tracks: [{mid}], force: true}); }
+      catch { return jsonError({code: "realtime_provider_failed", message: "Provider cleanup failed; retry ending the call.", retryable: true}, 502); }
+    }
+  }
   const ts = now();
   await execute(
     env.TEAMFORGE_DB!,
@@ -1607,12 +1624,13 @@ async function mediaProvider(env: Env, sessionId: string, path: string, method: 
   const token = env.CF_REALTIME_API_TOKEN ?? env.CF_REALTIME_APP_TOKEN;
   if (!env.CF_REALTIME_APP_ID || !token) throw new Error("Provider unavailable");
   const base = (env.CF_REALTIME_API_BASE_URL ?? "https://rtc.live.cloudflare.com").replace(/\/+$/, "");
-  const response = await fetch(`${base}/v1/apps/${encodeURIComponent(env.CF_REALTIME_APP_ID)}/sessions/${encodeURIComponent(sessionId)}${path}`, { method, headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+  validateProviderBase(base);
+  const response = await fetch(`${base}/v1/apps/${encodeURIComponent(env.CF_REALTIME_APP_ID)}/sessions/${encodeURIComponent(sessionId)}${path}`, { method, redirect: "error", signal: AbortSignal.timeout(10000), headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
   const result = await response.json() as Record<string, any>;
   if (!response.ok || result.errorCode || result.tracks?.some((t: any) => t.errorCode)) throw new Error("Provider failed");
   return result;
 }
-export async function handleRenegotiateRealtimeCall(env: Env, request: Request, callId: string, principal?: PlexusPrincipal | null): Promise<Response> {
+async function handleRenegotiateRealtimeCallUnlocked(env: Env, request: Request, callId: string, principal?: PlexusPrincipal | null): Promise<Response> {
   const failure = missingDb(env) ?? requirePrincipal(principal); if (failure) return failure;
   const parsed = await readJson<{participantId?: string; sessionDescription?: {type: string; sdp: string}}>(request); if (parsed.response) return parsed.response;
   const call = await getCall(env, principal!.workspaceId, callId);
@@ -1621,6 +1639,81 @@ export async function handleRenegotiateRealtimeCall(env: Env, request: Request, 
   const participant = (await listActiveParticipants(env, callId, now())).find(p => p.id === body.participantId && p.identity_id === principal!.identityId && p.workspace_id === principal!.workspaceId);
   if (!participant?.cloudflare_session_id) return jsonError({code: "realtime_track_forbidden", message: "Owned active participant required.", retryable: false}, 403);
   if (body.sessionDescription?.type !== "answer" || !body.sessionDescription.sdp || body.sessionDescription.sdp.length > 262144) return jsonError({code: "invalid_track", message: "SDP answer required.", retryable: false}, 400);
-  try { return jsonOk({ cloudflare: await mediaProvider(env, participant.cloudflare_session_id, "/renegotiate", "PUT", {sessionDescription: body.sessionDescription}) }); }
+  try {
+    const cloudflare = await mediaProvider(env, participant.cloudflare_session_id, "/renegotiate", "PUT", {sessionDescription: body.sessionDescription});
+    await execute(env.TEAMFORGE_DB!, "UPDATE realtime_participants SET metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.pendingRenegotiation', json('false')) WHERE id = ?", participant.id);
+    return jsonOk({cloudflare});
+  }
   catch { return jsonError({code: "realtime_provider_failed", message: "Answer rejected.", retryable: true}, 502); }
+}
+
+export async function handleJoinRealtimeRoom(...args: Parameters<typeof handleJoinRealtimeRoomUnlocked>): Promise<Response> {
+  const env = args[0];
+  const principal = args[args.length - 1] as PlexusPrincipal | null | undefined;
+  if (!principal) return requirePrincipal(principal)!;
+  if (!env.WORKSPACE_LOCKS) return jsonError({code: "realtime_lock_unavailable", message: "Realtime coordination binding unavailable.", retryable: true}, 503);
+  let lock;
+  try { lock = await acquireProjectLock(env, `realtime:${principal.workspaceId}`, nanoid(), 120000); }
+  catch { return jsonError({code: "realtime_busy", message: "Another call operation is in progress; retry.", retryable: true}, 409); }
+  try { return await handleJoinRealtimeRoomUnlocked(...args); } finally { await lock.release(); }
+}
+
+export async function handlePostRealtimeTrack(...args: Parameters<typeof handlePostRealtimeTrackUnlocked>): Promise<Response> {
+  const env = args[0];
+  const principal = args[args.length - 1] as PlexusPrincipal | null | undefined;
+  if (!principal) return requirePrincipal(principal)!;
+  if (!env.WORKSPACE_LOCKS) return jsonError({code: "realtime_lock_unavailable", message: "Realtime coordination binding unavailable.", retryable: true}, 503);
+  let lock;
+  try { lock = await acquireProjectLock(env, `realtime:${principal.workspaceId}`, nanoid(), 120000); }
+  catch { return jsonError({code: "realtime_busy", message: "Another call operation is in progress; retry.", retryable: true}, 409); }
+  try { return await handlePostRealtimeTrackUnlocked(...args); } finally { await lock.release(); }
+}
+
+export async function handleCloseRealtimeTrack(...args: Parameters<typeof handleCloseRealtimeTrackUnlocked>): Promise<Response> {
+  const env = args[0];
+  const principal = args[args.length - 1] as PlexusPrincipal | null | undefined;
+  if (!principal) return requirePrincipal(principal)!;
+  if (!env.WORKSPACE_LOCKS) return jsonError({code: "realtime_lock_unavailable", message: "Realtime coordination binding unavailable.", retryable: true}, 503);
+  let lock;
+  try { lock = await acquireProjectLock(env, `realtime:${principal.workspaceId}`, nanoid(), 120000); }
+  catch { return jsonError({code: "realtime_busy", message: "Another call operation is in progress; retry.", retryable: true}, 409); }
+  try { return await handleCloseRealtimeTrackUnlocked(...args); } finally { await lock.release(); }
+}
+
+export async function handleLeaveRealtimeCall(...args: Parameters<typeof handleLeaveRealtimeCallUnlocked>): Promise<Response> {
+  const env = args[0];
+  const principal = args[args.length - 1] as PlexusPrincipal | null | undefined;
+  if (!principal) return requirePrincipal(principal)!;
+  if (!env.WORKSPACE_LOCKS) return jsonError({code: "realtime_lock_unavailable", message: "Realtime coordination binding unavailable.", retryable: true}, 503);
+  let lock;
+  try { lock = await acquireProjectLock(env, `realtime:${principal.workspaceId}`, nanoid(), 120000); }
+  catch { return jsonError({code: "realtime_busy", message: "Another call operation is in progress; retry.", retryable: true}, 409); }
+  try { return await handleLeaveRealtimeCallUnlocked(...args); } finally { await lock.release(); }
+}
+
+export async function handleEndRealtimeCall(...args: Parameters<typeof handleEndRealtimeCallUnlocked>): Promise<Response> {
+  const env = args[0];
+  const principal = args[args.length - 1] as PlexusPrincipal | null | undefined;
+  if (!principal) return requirePrincipal(principal)!;
+  if (!env.WORKSPACE_LOCKS) return jsonError({code: "realtime_lock_unavailable", message: "Realtime coordination binding unavailable.", retryable: true}, 503);
+  let lock;
+  try { lock = await acquireProjectLock(env, `realtime:${principal.workspaceId}`, nanoid(), 120000); }
+  catch { return jsonError({code: "realtime_busy", message: "Another call operation is in progress; retry.", retryable: true}, 409); }
+  try { return await handleEndRealtimeCallUnlocked(...args); } finally { await lock.release(); }
+}
+
+export async function handleRenegotiateRealtimeCall(...args: Parameters<typeof handleRenegotiateRealtimeCallUnlocked>): Promise<Response> {
+  const env = args[0];
+  const principal = args[args.length - 1] as PlexusPrincipal | null | undefined;
+  if (!principal) return requirePrincipal(principal)!;
+  if (!env.WORKSPACE_LOCKS) return jsonError({code: "realtime_lock_unavailable", message: "Realtime coordination binding unavailable.", retryable: true}, 503);
+  let lock;
+  try { lock = await acquireProjectLock(env, `realtime:${principal.workspaceId}`, nanoid(), 120000); }
+  catch { return jsonError({code: "realtime_busy", message: "Another call operation is in progress; retry.", retryable: true}, 409); }
+  try { return await handleRenegotiateRealtimeCallUnlocked(...args); } finally { await lock.release(); }
+}
+
+function validateProviderBase(base: string): void {
+  const url = new URL(base);
+  if (url.origin !== "https://rtc.live.cloudflare.com" || url.pathname !== "/" || url.username || url.password || url.search || url.hash) throw new Error("Unsupported realtime provider endpoint.");
 }

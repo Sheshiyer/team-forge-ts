@@ -33,7 +33,15 @@ export interface QueueBatchLike<T> {
   retryAll?(options?: { delaySeconds?: number }): void;
 }
 
+export interface DurableObjectStorageLike {
+  get<T>(key: string): Promise<T | undefined>;
+  put<T>(key: string, value: T): Promise<void>;
+  delete(key: string): Promise<boolean>;
+  transaction<T>(callback: (txn: DurableObjectStorageLike) => Promise<T>): Promise<T>;
+}
+
 export interface DurableObjectStateLike {
+  storage?: DurableObjectStorageLike;
   id?: {
     toString(): string;
   };

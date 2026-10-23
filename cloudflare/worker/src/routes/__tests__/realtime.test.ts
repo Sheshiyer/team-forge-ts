@@ -118,7 +118,16 @@ function makeRealtimeHarness() {
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     return new Response(JSON.stringify(String(url).endsWith("/sessions/new") ? {sessionId: "provider-session"} : {tracks: (body.tracks ?? []).map((t: any) => ({...t, mid: t.mid ?? "remote-0"})), sessionDescription: {type: "answer", sdp: "provider-sdp"}}), {status: 200});
   }));
-  const env = { TF_ENV: "test", TEAMFORGE_DB: d1(sqlite), CF_REALTIME_APP_ID: "public-app", CF_REALTIME_API_TOKEN: "test-token" } as Env;
+  let locked = false;
+  const locks = {
+    idFromName: (key: string) => key,
+    get: () => ({ fetch: async (url: string) => {
+      if (url.endsWith("/release")) { locked = false; return new Response("{}"); }
+      if (locked) return new Response("{}", {status: 409});
+      locked = true; return new Response("{}");
+    }}),
+  };
+  const env = { TF_ENV: "test", TEAMFORGE_DB: d1(sqlite), WORKSPACE_LOCKS: locks, CF_REALTIME_APP_ID: "public-app", CF_REALTIME_API_TOKEN: "test-token" } as Env;
   return { sqlite, env, principal: makePrincipal() };
 }
 
@@ -459,6 +468,38 @@ describe("realtime routes", () => {
       const operation = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body));
       expect(operation.tracks[0]).toEqual({location: "local", mid: "0", trackName: result.data.track.id});
       expect(result.data.track.cloudflareSessionId).toBe("provider-session");
+    } finally { sqlite.close(); }
+  });
+
+  it("does not record live media when the provider rejects publication", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({errorCode: "provider_failure"}), {status: 500})));
+      const response = await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: joined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}}), joined.data.call.id, principal);
+      expect(response.status).toBe(502);
+      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM realtime_media_tracks").get()).toEqual({count: 0});
+    } finally { sqlite.close(); }
+  });
+
+  it("serializes concurrent media mutations and rejects duplicate allocation", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      const body = {participantId: joined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}};
+      const responses = await Promise.all([handlePostRealtimeTrack(env, makeReq("/tracks", body), joined.data.call.id, principal), handlePostRealtimeTrack(env, makeReq("/tracks", body), joined.data.call.id, principal)]);
+      expect(responses.map(r => r.status).sort()).toEqual([201, 409]);
+      const duplicate = await handlePostRealtimeTrack(env, makeReq("/tracks", body), joined.data.call.id, principal);
+      expect(duplicate.status).toBe(409);
+      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM realtime_media_tracks").get()).toEqual({count: 1});
+      vi.mocked(fetch).mockClear();
+      const end = await handleEndRealtimeCall(env, joined.data.call.id, {...principal, role: "admin"});
+      expect(end.status).toBe(200);
+      expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url).endsWith("/tracks/close") && JSON.parse(String(init?.body)).force)).toBe(true);
     } finally { sqlite.close(); }
   });
 
