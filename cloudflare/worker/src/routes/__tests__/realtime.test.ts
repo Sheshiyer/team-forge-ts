@@ -544,6 +544,30 @@ describe("realtime routes", () => {
     } finally {sqlite.close();}
   });
 
+  it("clears old negotiation state when rejoining a call kept live by another client", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    try {
+      let providerSession = 0;
+      vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        return new Response(JSON.stringify(String(url).endsWith("/sessions/new") ? {sessionId: `provider-${++providerSession}`} : {tracks: (body.tracks ?? []).map((t: any) => ({...t, mid: t.mid ?? "0"})), sessionDescription: {type: "answer", sdp: "answer"}}));
+      }));
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal, "client-a");
+      const first = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      const peerLease = await createPresenceSession(env, principal, "client-b");
+      await joinRoom(env, principal, roomId, "client-b", peerLease);
+      sqlite.prepare("UPDATE realtime_participants SET metadata_json = ? WHERE id = ?").run(JSON.stringify({pendingRenegotiation: true}), first.data.participant.id);
+      expect((await handleLeaveRealtimeCall(env, makeReq("/leave", {participantId: first.data.participant.id}), first.data.call.id, principal)).status).toBe(200);
+      const rejoined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      expect(rejoined.data.call.id).toBe(first.data.call.id);
+      expect(rejoined.data.participant.cloudflareSessionId).not.toBe(first.data.participant.cloudflareSessionId);
+      expect(rejoined.data.participant.metadata.pendingRenegotiation).toBeUndefined();
+      const publication = await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: rejoined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}}), first.data.call.id, principal);
+      expect(publication.status).toBe(201);
+    } finally {sqlite.close();}
+  });
+
   it("rejects identity-only track publication when multiple app clients are joined", async () => {
     const { sqlite, env, principal } = makeRealtimeHarness();
     try {

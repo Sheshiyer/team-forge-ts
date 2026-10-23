@@ -938,7 +938,7 @@ async function handleJoinRealtimeRoomUnlocked(
       media.video ? 1 : existingParticipant.video_enabled,
       media.screen ? 1 : existingParticipant.screen_share_enabled,
       joinedAt,
-      stringifyJson({ ...safeJsonParse<Record<string, unknown>>(existingParticipant.metadata_json, {}), intent: body.intent ?? "media" }),
+      stringifyJson({ ...(existingParticipant.state === "joined" && cloudflareSessionId === existingParticipant.cloudflare_session_id ? safeJsonParse<Record<string, unknown>>(existingParticipant.metadata_json, {}) : {}), intent: body.intent ?? "media" }),
       participantId,
     );
   } else {
