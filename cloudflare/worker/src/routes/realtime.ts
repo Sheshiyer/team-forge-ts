@@ -648,6 +648,7 @@ async function createCloudflareSession(env: Env, sessionDescription: unknown): P
   const appId = env.CF_REALTIME_APP_ID;
   const token = env.CF_REALTIME_API_TOKEN ?? env.CF_REALTIME_APP_TOKEN;
   if (!appId || !token) {
+    allocationDiagnostic("config_missing");
     return {
       configured: Boolean(appId && token),
       appId: appId ?? null,
@@ -659,9 +660,10 @@ async function createCloudflareSession(env: Env, sessionDescription: unknown): P
   }
 
   const base = (env.CF_REALTIME_API_BASE_URL ?? "https://rtc.live.cloudflare.com").replace(/\/+$/, "");
-  validateProviderBase(base);
+  try { validateProviderBase(base); } catch { allocationDiagnostic("config_missing"); throw new Error("Realtime provider configuration invalid."); }
   const endpoint = `${base}/v1/apps/${encodeURIComponent(appId)}/sessions/new`;
-  const res = await fetch(endpoint, {
+  let res: Response;
+  try { res = await fetch(endpoint, {
     method: "POST",
     redirect: "error", signal: AbortSignal.timeout(10000),
     headers: {
@@ -671,11 +673,19 @@ async function createCloudflareSession(env: Env, sessionDescription: unknown): P
     },
     ...(sessionDescription ? { body: JSON.stringify({ sessionDescription }) } : {}),
   });
-  const providerBody = await boundedProviderJson(res).catch(() => null) as Record<string, unknown> | null;
-  if (!res.ok) {
+  } catch {
+    allocationDiagnostic("network_or_timeout");
     throw new Error("Realtime provider session allocation failed.");
   }
-  if (!boundedRealtimeId(providerBody?.sessionId)) throw new Error("Realtime provider returned no valid session.");
+  if (!res.ok) {
+    allocationDiagnostic("http_rejected", res);
+    throw new Error("Realtime provider session allocation failed.");
+  }
+  const providerBody = await boundedProviderJson(res).catch(() => null) as Record<string, unknown> | null;
+  if (!boundedRealtimeId(providerBody?.sessionId)) {
+    allocationDiagnostic("invalid_response", res);
+    throw new Error("Realtime provider returned no valid session.");
+  }
   return {
     configured: true,
     appId,
@@ -1745,4 +1755,14 @@ async function boundedProviderJson(response: Response): Promise<Record<string, a
   const result = JSON.parse(new TextDecoder().decode(buffer));
   if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Invalid provider response");
   return result;
+}
+
+function allocationDiagnostic(category: "config_missing" | "http_rejected" | "invalid_response" | "network_or_timeout", response?: Response): void {
+  // Never include provider bodies, URLs, credentials, app IDs, or SDP in this boundary receipt.
+  const ray = response?.headers.get("cf-ray");
+  console.warn("realtime_provider_boundary", {
+    operation: "session_allocate", category,
+    ...(response ? {upstreamStatus: response.status} : {}),
+    ...(ray && /^[a-f0-9]{16,32}(?:-[A-Z]{3})?$/i.test(ray) ? {cfRay: ray} : {}),
+  });
 }

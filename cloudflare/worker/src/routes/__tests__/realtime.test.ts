@@ -568,6 +568,33 @@ describe("realtime routes", () => {
     } finally {sqlite.close();}
   });
 
+  it("logs only safe allocation diagnostics and keeps provider errors private", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      const failures = [
+        {category: "http_rejected", fetch: async () => new Response(JSON.stringify({message: "raw-secret-provider-error test-token"}), {status: 403, headers: {"cf-ray": "abcdef1234567890-BOM"}})},
+        {category: "invalid_response", fetch: async () => new Response(JSON.stringify({message: "raw-secret-provider-error test-token"}), {headers: {"cf-ray": "unsafe-secret-value"}})},
+        {category: "network_or_timeout", fetch: async () => {throw new Error("raw-secret-provider-error test-token");}},
+      ];
+      for (const failure of failures) {
+        warn.mockClear(); vi.stubGlobal("fetch", vi.fn(failure.fetch));
+        const response = await joinRoom(env, principal, roomId, "client-a", lease);
+        expect(response.status).toBe(502);
+        expect(warn).toHaveBeenCalledWith("realtime_provider_boundary", expect.objectContaining({operation: "session_allocate", category: failure.category}));
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("test-token");
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("raw-secret-provider-error");
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("unsafe-secret-value");
+        expect(await response.text()).not.toContain("raw-secret-provider-error");
+      }
+      warn.mockClear(); env.CF_REALTIME_API_TOKEN = undefined;
+      expect((await joinRoom(env, principal, roomId, "client-a", lease)).status).toBe(502);
+      expect(warn).toHaveBeenCalledWith("realtime_provider_boundary", {operation: "session_allocate", category: "config_missing"});
+    } finally {warn.mockRestore(); sqlite.close();}
+  });
+
   it("rejects identity-only track publication when multiple app clients are joined", async () => {
     const { sqlite, env, principal } = makeRealtimeHarness();
     try {
