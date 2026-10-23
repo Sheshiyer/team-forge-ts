@@ -11,3 +11,7 @@
 - Earlier no-traffic versions 2954b383-a1be-410d-a319-00ac8b9817cf and 825aff76-4045-4791-9232-0996969b747c are superseded; do not promote them.
 
 Production promotion awaits explicit operator approval. No deployed call or installed two-client media acceptance is claimed. Following approval, deploy only the reviewed version, verify authenticated session/publication/subscription/renegotiation and received media on two distinct clients, then verify leave teardown. Roll back to the pinned live version if runtime acceptance fails.
+
+## Approved promotion
+
+The operator explicitly approved promotion and call verification. Wrangler 4.152.0 successfully promoted 294c3fc3-ea28-4963-b325-d3b7a19cf42e to 100 percent. Independent API readback confirms that active version, exact observability preservation and unchanged logpush. The protected API returns the expected Labs Access sign-in. Member authentication is pending a freshly requested email code; no authenticated call or media success is claimed. Rollback version remains 44c06546-61c2-48bc-bedb-d1149409f12c.
