@@ -850,6 +850,9 @@ async function handleJoinRealtimeRoomUnlocked(
   }
 
   const reusable = await queryFirst<RealtimeParticipantRow>(env.TEAMFORGE_DB!, `SELECT p.* FROM realtime_participants p JOIN realtime_call_sessions c ON c.id = p.call_session_id WHERE p.workspace_id = ? AND p.room_id = ? AND p.identity_id = ? AND p.client_instance_id = ? AND p.presence_session_id = ? AND p.state = 'joined' AND c.state = 'live' LIMIT 1`, workspaceId, roomId, principal!.identityId, clientInstanceId, presenceSessionId);
+  if (body.intent !== "presence_only" && reusable?.cloudflare_session_id) {
+    return jsonError({code: "realtime_rejoin_required", message: "Leave the call before reconnecting media; the existing provider session belongs to its original peer connection.", retryable: false}, 409);
+  }
   let cloudflare: Record<string, unknown>;
   try {
     cloudflare = reusable?.cloudflare_session_id ? { configured: true, sessionId: reusable.cloudflare_session_id, stunUrls: STUN_URLS, negotiation: "session_reused" } : body.intent === "presence_only" ? { configured: false, sessionId: null } : await createCloudflareSession(env, body.sessionDescription);
@@ -935,7 +938,7 @@ async function handleJoinRealtimeRoomUnlocked(
       media.video ? 1 : existingParticipant.video_enabled,
       media.screen ? 1 : existingParticipant.screen_share_enabled,
       joinedAt,
-      stringifyJson({ intent: body.intent ?? "media" }),
+      stringifyJson({ ...safeJsonParse<Record<string, unknown>>(existingParticipant.metadata_json, {}), intent: body.intent ?? "media" }),
       participantId,
     );
   } else {
@@ -1177,7 +1180,7 @@ async function handlePostRealtimeTrackUnlocked(
     if (!description || description.type !== (direction === "publish" ? "answer" : "offer") || typeof description.sdp !== "string" || !description.sdp || description.sdp.length > 262144) throw new Error("Invalid provider SDP");
     if (direction === "publish" && provider.tracks[0].trackName !== trackId) throw new Error("Invalid publication mapping");
   } catch { return jsonError({ code: "realtime_provider_failed", message: "Media negotiation failed.", retryable: true }, 502); }
-  if (provider.requiresImmediateRenegotiation) await execute(env.TEAMFORGE_DB!, "UPDATE realtime_participants SET metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.pendingRenegotiation', json('true')) WHERE id = ?", participant.id);
+  if (provider.sessionDescription?.type === "offer") await execute(env.TEAMFORGE_DB!, "UPDATE realtime_participants SET metadata_json = json_set(COALESCE(metadata_json, '{}'), '$.pendingRenegotiation', json('true')) WHERE id = ?", participant.id);
   await execute(
     env.TEAMFORGE_DB!,
     `INSERT INTO realtime_media_tracks

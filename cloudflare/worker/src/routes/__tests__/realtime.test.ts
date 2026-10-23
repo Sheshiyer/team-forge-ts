@@ -5,6 +5,7 @@ import type { D1DatabaseLike, Env } from "../../lib/env";
 import type { PlexusPrincipal } from "../../lib/plexus-session";
 import { handleCreatePresenceSession, handleGetPresence } from "../presence";
 import {
+  handleCloseRealtimeTrack,
   handleEndRealtimeCall,
   handleGetRealtimeRoom,
   handleGetRealtimeRooms,
@@ -521,6 +522,26 @@ describe("realtime routes", () => {
       expect(sqlite.prepare("SELECT COUNT(*) AS count FROM realtime_media_tracks").get()).toEqual({count: 0});
       expect((await handleEndRealtimeCall(env, joined.data.call.id)).status).toBe(401);
     } finally { sqlite.close(); }
+  });
+
+  it("requires leave before media rejoin and preserves pending negotiation through track closure", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      const published = await (await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: joined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}}), joined.data.call.id, principal)).json() as any;
+      sqlite.prepare("UPDATE realtime_participants SET metadata_json = ? WHERE id = ?").run(JSON.stringify({intent: "media", pendingRenegotiation: true}), joined.data.participant.id);
+      expect((await handleCloseRealtimeTrack(env, joined.data.call.id, published.data.track.id, principal)).status).toBe(200);
+      const rejoin = await joinRoom(env, principal, roomId, "client-a", lease);
+      expect(rejoin.status).toBe(409);
+      expect((await rejoin.json() as any).error.code).toBe("realtime_rejoin_required");
+      expect(JSON.parse((sqlite.prepare("SELECT metadata_json FROM realtime_participants WHERE id = ?").get(joined.data.participant.id) as any).metadata_json).pendingRenegotiation).toBe(true);
+      expect((await handleLeaveRealtimeCall(env, makeReq("/leave", {participantId: joined.data.participant.id}), joined.data.call.id, principal)).status).toBe(200);
+      vi.mocked(fetch).mockClear();
+      expect((await joinRoom(env, principal, roomId, "client-a", lease)).status).toBe(201);
+      expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith("/sessions/new"))).toBe(true);
+    } finally {sqlite.close();}
   });
 
   it("rejects identity-only track publication when multiple app clients are joined", async () => {
