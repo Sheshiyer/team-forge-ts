@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { D1DatabaseLike, Env } from "../lib/env";
 import { handleNativeIdentityLookup } from "./native-identity";
+import { handleV1Request } from "./v1";
 
 function database(row: Record<string, unknown> | null): D1DatabaseLike {
   return {
@@ -47,7 +48,21 @@ function request(path: string, token = "native-token"): Request {
   });
 }
 
-describe("native Plexus identity lookup", () => {
+describe("native Plexus identity lookup", () => {\n  it("dispatches before Access resolution through the v1 router", async () => {
+    const target = new URL("https://plexus.test/v1/native/identity/pid_admin_thoughtseed_labs?tenant_id=cambium");
+    const response = await handleV1Request(
+      new Request(target, { headers: { authorization: "Bearer native-token" } }),
+      env(),
+      target,
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      data: { contractVersion: "plexus.native-identity.v1", identityId: "pid_admin_thoughtseed_labs" },
+    });
+  });
+
+
   it("returns the narrow active identity contract for an enrolled tenant", async () => {
     const response = await handleNativeIdentityLookup(
       env(),
