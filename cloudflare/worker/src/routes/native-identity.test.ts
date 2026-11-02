@@ -48,7 +48,8 @@ function request(path: string, token = "native-token"): Request {
   });
 }
 
-describe("native Plexus identity lookup", () => {\n  it("dispatches before Access resolution through the v1 router", async () => {
+describe("native Plexus identity lookup", () => {
+  it("dispatches before Access resolution through the v1 router", async () => {
     const target = new URL("https://plexus.test/v1/native/identity/pid_admin_thoughtseed_labs?tenant_id=cambium");
     const response = await handleV1Request(
       new Request(target, { headers: { authorization: "Bearer native-token" } }),
