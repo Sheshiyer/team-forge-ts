@@ -105,7 +105,7 @@ export async function handleNativeIdentityLookup(
       identityId,
       workspaceId,
     );
-    if (!row || (row.role !== "admin" && row.role !== "employee") || Number(row.is_active) !== 1) {
+    if (!row || row.id !== identityId || row.workspace_id !== workspaceId || (row.role !== "admin" && row.role !== "employee") || Number(row.is_active) !== 1) {
       return jsonError(
         { code: "native_identity_not_enrolled", message: "The identity is not enrolled for this tenant.", retryable: false },
         404,
