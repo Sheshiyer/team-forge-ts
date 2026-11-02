@@ -160,7 +160,7 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
 
   // Native desktop identity lookup. This is a dedicated, read-only bearer route
   // and must be matched before Access resolution or app/internal auth.
-  const nativeIdentityMatch = pathname.match(/^\\/v1\\/native\\/identity\\/([^/]+)$/);
+  const nativeIdentityMatch = pathname.match(/^\/v1\/native\/identity\/([^/]+)$/);
   if (nativeIdentityMatch) {
     if (method !== "GET") {
       return jsonError(
