@@ -2,7 +2,7 @@
  * V1 API Router — Safety Audit Note (2026-06-10)
  *
  * Route classification (read-only vs mutation):
- *  READ  — GET  /bootstrap, /remote-config, /reporting/weekly-context, /projects, /client-profiles, /onboarding-flows,
+ *  READ  — GET  /bootstrap, /remote-config, /reporting/weekly-context, /native/identity/:identityId, /projects, /client-profiles, /onboarding-flows,
  *               /project-mappings, /project-mappings/issues, /project-mappings/:id/control-plane,
  *               /credentials, /connections, /sync/jobs/:id, /sync/runs, /ota/check,
  *               /team/snapshot, /huly/normalization/history, /handoffs, /handoffs/:id,
@@ -12,7 +12,7 @@
  *               /sync/jobs, /team/refresh, /huly/normalization/preview, /huly/normalization/apply,
  *               /ota/install-events, /handoffs, /handoffs/:id
  *
- * Auth: App routes require Bearer (TF_CREDENTIAL_ENVELOPE_KEY) or internal secret.
+ * Auth: App routes require Bearer (TF_CREDENTIAL_ENVELOPE_KEY) or internal secret. Native identity lookup uses its own read-only bearer.
  * /reporting/weekly-context accepts only the dedicated TF_REPORTING_READ_TOKEN.
  * GET /whoami is Access-JWT-only and fail-closed (401 without a verified identity) since WS5.
  * Internal routes (/agent-feed/*, /projects/scaffold, /closeout) use TF_WEBHOOK_HMAC_SECRET.
@@ -103,6 +103,7 @@ import {
 } from "./github";
 import { handleGetWeeklyReportingContext } from "./reporting";
 import { getSyncConsumerStatus } from "../lib/control-plane-status";
+import { handleNativeIdentityLookup } from "./native-identity";
 
 interface DatabaseStatus {
   available: boolean;
@@ -155,6 +156,29 @@ export async function handleV1Request(request: Request, env: Env, url: URL): Pro
     } catch {
       // Preserve the authenticated route's existing bad_json response.
     }
+  }
+
+  // Native desktop identity lookup. This is a dedicated, read-only bearer route
+  // and must be matched before Access resolution or app/internal auth.
+  const nativeIdentityMatch = pathname.match(/^\\/v1\\/native\\/identity\\/([^/]+)$/);
+  if (nativeIdentityMatch) {
+    if (method !== "GET") {
+      return jsonError(
+        { code: "method_not_allowed", message: "GET is required.", retryable: false },
+        405,
+        { headers: { allow: "GET" } },
+      );
+    }
+    let identityId: string;
+    try {
+      identityId = decodeURIComponent(nativeIdentityMatch[1]);
+    } catch {
+      return jsonError(
+        { code: "invalid_identity_id", message: "A valid identity id is required.", retryable: false },
+        400,
+      );
+    }
+    return handleNativeIdentityLookup(env, request, identityId, url);
   }
 
   // Per-employee identity (Cloudflare Access). Live since WS5: TF_ACCESS_TEAM_DOMAIN +
