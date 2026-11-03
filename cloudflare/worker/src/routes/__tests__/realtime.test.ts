@@ -5,6 +5,7 @@ import type { D1DatabaseLike, Env } from "../../lib/env";
 import type { PlexusPrincipal } from "../../lib/plexus-session";
 import { handleCreatePresenceSession, handleGetPresence } from "../presence";
 import {
+  handleCloseRealtimeTrack,
   handleEndRealtimeCall,
   handleGetRealtimeRoom,
   handleGetRealtimeRooms,
@@ -114,7 +115,20 @@ function makeRealtimeHarness() {
   `);
   sqlite.exec(readFileSync(new URL("../../../migrations/0011_realtime_workspace.sql", import.meta.url), "utf8"));
   sqlite.exec(readFileSync(new URL("../../../migrations/0016_plexus_app_presence_leases.sql", import.meta.url), "utf8"));
-  const env = { TF_ENV: "test", TEAMFORGE_DB: d1(sqlite), CF_REALTIME_APP_ID: "public-app" } as Env;
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    return new Response(JSON.stringify(String(url).endsWith("/sessions/new") ? {sessionId: "provider-session"} : {tracks: (body.tracks ?? []).map((t: any) => ({...t, mid: t.mid ?? "remote-0"})), sessionDescription: {type: "answer", sdp: "provider-sdp"}}), {status: 200});
+  }));
+  let locked = false;
+  const locks = {
+    idFromName: (key: string) => key,
+    get: () => ({ fetch: async (url: string) => {
+      if (url.endsWith("/release")) { locked = false; return new Response("{}"); }
+      if (locked) return new Response("{}", {status: 409});
+      locked = true; return new Response("{}");
+    }}),
+  };
+  const env = { TF_ENV: "test", TEAMFORGE_DB: d1(sqlite), WORKSPACE_LOCKS: locks, CF_REALTIME_APP_ID: "public-app", CF_REALTIME_API_TOKEN: "test-token" } as Env;
   return { sqlite, env, principal: makePrincipal() };
 }
 
@@ -162,7 +176,11 @@ describe("realtime routes", () => {
   });
 
   it("GET /v1/realtime/rooms fails closed without app auth", async () => {
-    const env = { TF_ENV: "test", TF_CREDENTIAL_ENVELOPE_KEY: "secret" } as Env;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    return new Response(JSON.stringify(String(url).endsWith("/sessions/new") ? {sessionId: "provider-session"} : {tracks: (body.tracks ?? []).map((t: any) => ({...t, mid: t.mid ?? "remote-0"})), sessionDescription: {type: "answer", sdp: "provider-sdp"}}), {status: 200});
+  }));
+  const env = { TF_ENV: "test", TF_CREDENTIAL_ENVELOPE_KEY: "secret" } as Env;
     const request = new Request("https://worker.test/v1/realtime/rooms");
     const res = await handleV1Request(request, env, new URL(request.url));
     expect(res.status).toBe(401);
@@ -282,6 +300,8 @@ describe("realtime routes", () => {
       const track = await handlePostRealtimeTrack(env, makeReq(`/v1/realtime/calls/${joined.data.call.id}/tracks`, {
         participantId: joined.data.participant.id,
         trackKind: "screen",
+        mid: "0",
+        sessionDescription: { type: "offer", sdp: "test-offer" },
         direction: "publish",
         label: "Main display",
       }), joined.data.call.id, principal);
@@ -326,6 +346,8 @@ describe("realtime routes", () => {
       await handlePostRealtimeTrack(env, makeReq(`/v1/realtime/calls/${firstBody.data.call.id}/tracks`, {
         participantId: firstBody.data.participant.id,
         trackKind: "screen",
+        mid: "0",
+        sessionDescription: { type: "offer", sdp: "test-offer" },
         direction: "publish",
       }), firstBody.data.call.id, principal);
 
@@ -370,6 +392,8 @@ describe("realtime routes", () => {
       await handlePostRealtimeTrack(env, makeReq(`/v1/realtime/calls/${joined.data.call.id}/tracks`, {
         participantId: joined.data.participant.id,
         trackKind: "screen",
+        mid: "0",
+        sessionDescription: { type: "offer", sdp: "test-offer" },
         direction: "publish",
       }), joined.data.call.id, principal);
 
@@ -412,6 +436,209 @@ describe("realtime routes", () => {
     }
   });
 
+  it("rejects forged provider IDs and unavailable remote publications without contacting the provider", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      vi.mocked(fetch).mockClear();
+      for (const body of [
+        {cloudflareSessionId: "attacker-session"},
+        {direction: "subscribe", targetTrackIds: ["other-room-track"]},
+      ]) {
+        const response = await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: joined.data.participant.id, trackKind: "audio", ...body}), joined.data.call.id, principal);
+        expect([400, 403]).toContain(response.status);
+      }
+      expect(fetch).not.toHaveBeenCalled();
+      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM realtime_media_tracks").get()).toEqual({count: 0});
+    } finally { sqlite.close(); }
+  });
+
+  it("allocates an empty provider session and publishes with server owned identifiers", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      const sessionRequest = vi.mocked(fetch).mock.calls.find(([url]) => String(url).endsWith("/sessions/new"));
+      expect(sessionRequest?.[1]?.body).toBeUndefined();
+      const response = await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: joined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}}), joined.data.call.id, principal);
+      expect(response.status).toBe(201);
+      const result = await response.json() as any;
+      const operation = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body));
+      expect(operation.tracks[0]).toEqual({location: "local", mid: "0", trackName: result.data.track.id});
+      expect(result.data.track.cloudflareSessionId).toBe("provider-session");
+    } finally { sqlite.close(); }
+  });
+
+  it("does not record live media when the provider rejects publication", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({errorCode: "provider_failure"}), {status: 500})));
+      const response = await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: joined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}}), joined.data.call.id, principal);
+      expect(response.status).toBe(502);
+      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM realtime_media_tracks").get()).toEqual({count: 0});
+    } finally { sqlite.close(); }
+  });
+
+  it("serializes concurrent media mutations and rejects duplicate allocation", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      const body = {participantId: joined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}};
+      const responses = await Promise.all([handlePostRealtimeTrack(env, makeReq("/tracks", body), joined.data.call.id, principal), handlePostRealtimeTrack(env, makeReq("/tracks", body), joined.data.call.id, principal)]);
+      expect(responses.map(r => r.status).sort()).toEqual([201, 409]);
+      const duplicate = await handlePostRealtimeTrack(env, makeReq("/tracks", body), joined.data.call.id, principal);
+      expect(duplicate.status).toBe(409);
+      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM realtime_media_tracks").get()).toEqual({count: 1});
+      vi.mocked(fetch).mockClear();
+      const end = await handleEndRealtimeCall(env, joined.data.call.id, {...principal, role: "admin"});
+      expect(end.status).toBe(200);
+      expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url).endsWith("/tracks/close") && JSON.parse(String(init?.body)).force)).toBe(true);
+    } finally { sqlite.close(); }
+  });
+
+  it("rejects malformed and partially failed provider negotiation without live metadata", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      for (const result of [
+        {tracks: [{mid: "0", trackName: "fake"}]},
+        {tracks: [{mid: "0", trackName: "fake", errorCode: "partial"}], sessionDescription: {type: "answer", sdp: "answer"}},
+        {tracks: [{mid: "0"}], sessionDescription: {type: "answer", sdp: "answer"}},
+      ]) {
+        vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(result))));
+        const response = await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: joined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}}), joined.data.call.id, principal);
+        expect(response.status).toBe(502);
+      }
+      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM realtime_media_tracks").get()).toEqual({count: 0});
+      expect((await handleEndRealtimeCall(env, joined.data.call.id)).status).toBe(401);
+    } finally { sqlite.close(); }
+  });
+
+  it("requires leave before media rejoin and preserves pending negotiation through track closure", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      const published = await (await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: joined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}}), joined.data.call.id, principal)).json() as any;
+      sqlite.prepare("UPDATE realtime_participants SET metadata_json = ? WHERE id = ?").run(JSON.stringify({intent: "media", pendingRenegotiation: true}), joined.data.participant.id);
+      expect((await handleCloseRealtimeTrack(env, joined.data.call.id, published.data.track.id, principal)).status).toBe(200);
+      const rejoin = await joinRoom(env, principal, roomId, "client-a", lease);
+      expect(rejoin.status).toBe(409);
+      expect((await rejoin.json() as any).error.code).toBe("realtime_rejoin_required");
+      expect(JSON.parse((sqlite.prepare("SELECT metadata_json FROM realtime_participants WHERE id = ?").get(joined.data.participant.id) as any).metadata_json).pendingRenegotiation).toBe(true);
+      expect((await handleLeaveRealtimeCall(env, makeReq("/leave", {participantId: joined.data.participant.id}), joined.data.call.id, principal)).status).toBe(200);
+      vi.mocked(fetch).mockClear();
+      expect((await joinRoom(env, principal, roomId, "client-a", lease)).status).toBe(201);
+      expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith("/sessions/new"))).toBe(true);
+    } finally {sqlite.close();}
+  });
+
+  it("clears old negotiation state when rejoining a call kept live by another client", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    try {
+      let providerSession = 0;
+      vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        return new Response(JSON.stringify(String(url).endsWith("/sessions/new") ? {sessionId: `provider-${++providerSession}`} : {tracks: (body.tracks ?? []).map((t: any) => ({...t, mid: t.mid ?? "0"})), sessionDescription: {type: "answer", sdp: "answer"}}));
+      }));
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal, "client-a");
+      const first = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      const peerLease = await createPresenceSession(env, principal, "client-b");
+      await joinRoom(env, principal, roomId, "client-b", peerLease);
+      sqlite.prepare("UPDATE realtime_participants SET metadata_json = ? WHERE id = ?").run(JSON.stringify({pendingRenegotiation: true}), first.data.participant.id);
+      expect((await handleLeaveRealtimeCall(env, makeReq("/leave", {participantId: first.data.participant.id}), first.data.call.id, principal)).status).toBe(200);
+      const rejoined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      expect(rejoined.data.call.id).toBe(first.data.call.id);
+      expect(rejoined.data.participant.cloudflareSessionId).not.toBe(first.data.participant.cloudflareSessionId);
+      expect(rejoined.data.participant.metadata.pendingRenegotiation).toBeUndefined();
+      const publication = await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: rejoined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}}), first.data.call.id, principal);
+      expect(publication.status).toBe(201);
+    } finally {sqlite.close();}
+  });
+
+  it("logs only safe allocation diagnostics and keeps provider errors private", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      const failures = [
+        {category: "http_rejected", fetch: async () => new Response(JSON.stringify({message: "raw-secret-provider-error test-token"}), {status: 403, headers: {"cf-ray": "abcdef1234567890-BOM"}})},
+        {category: "invalid_response", fetch: async () => new Response(JSON.stringify({message: "raw-secret-provider-error test-token"}), {headers: {"cf-ray": "unsafe-secret-value"}})},
+        {category: "network_or_timeout", fetch: async () => {throw new Error("raw-secret-provider-error test-token");}},
+      ];
+      for (const failure of failures) {
+        warn.mockClear(); vi.stubGlobal("fetch", vi.fn(failure.fetch));
+        const response = await joinRoom(env, principal, roomId, "client-a", lease);
+        expect(response.status).toBe(502);
+        expect(warn).toHaveBeenCalledWith("realtime_provider_boundary", expect.objectContaining({operation: "session_allocate", category: failure.category}));
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("test-token");
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("raw-secret-provider-error");
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("unsafe-secret-value");
+        expect(await response.text()).not.toContain("raw-secret-provider-error");
+      }
+      warn.mockClear(); env.CF_REALTIME_API_TOKEN = undefined;
+      expect((await joinRoom(env, principal, roomId, "client-a", lease)).status).toBe(502);
+      expect(warn).toHaveBeenCalledWith("realtime_provider_boundary", {operation: "session_allocate", category: "config_missing"});
+    } finally {warn.mockRestore(); sqlite.close();}
+  });
+
+  it("uses Worker-compatible manual redirects and rejects redirects without following", async () => {
+    const {sqlite, env, principal} = makeRealtimeHarness();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const roomId = (await createRooms(env, principal))[0].id;
+      const lease = await createPresenceSession(env, principal);
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(null, {status: 302, headers: {location: "https://untrusted.example/collect"}})));
+      expect((await joinRoom(env, principal, roomId, "client-a", lease)).status).toBe(502);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(fetch).mock.calls[0][1]?.redirect).toBe("manual");
+      expect(warn).toHaveBeenCalledWith("realtime_provider_boundary", expect.objectContaining({category: "http_rejected", upstreamStatus: 302}));
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({sessionId: "session"}))));
+      const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(null, {status: 307, headers: {location: "https://untrusted.example/collect"}})));
+      const response = await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: joined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}}), joined.data.call.id, principal);
+      expect(response.status).toBe(502);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(fetch).mock.calls[0][1]?.redirect).toBe("manual");
+      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM realtime_media_tracks").get()).toEqual({count: 0});
+    } finally {warn.mockRestore(); sqlite.close();}
+  });
+
+  it("accepts authoritative gone sessions and absent owned tracks but preserves unknown cleanup failures", async () => {
+    for (const outcome of ["gone", "absent", "unknown", "wrong-status", "missing-mid"]) {
+      const {sqlite, env, principal} = makeRealtimeHarness();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const roomId = (await createRooms(env, principal))[0].id;
+        const lease = await createPresenceSession(env, principal);
+        const joined = await (await joinRoom(env, principal, roomId, "client-a", lease)).json() as any;
+        await handlePostRealtimeTrack(env, makeReq("/tracks", {participantId: joined.data.participant.id, trackKind: "audio", mid: "0", sessionDescription: {type: "offer", sdp: "offer"}}), joined.data.call.id, principal);
+        vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(
+          outcome === "gone" || outcome === "wrong-status" ? {errorCode: "session_error", errorDescription: "private test-token"} : {tracks: outcome === "missing-mid" ? [] : [{mid: "0", errorCode: outcome === "absent" ? "close_track_error" : "private-token", errorDescription: "private test-token"}]}
+        ), {status: outcome === "gone" ? 410 : outcome === "wrong-status" ? 500 : 200})));
+        const response = await handleLeaveRealtimeCall(env, makeReq("/leave", {participantId: joined.data.participant.id}), joined.data.call.id, principal);
+        const accepted = outcome === "gone" || outcome === "absent";
+        expect(response.status).toBe(accepted ? 200 : 502);
+        expect(sqlite.prepare("SELECT state FROM realtime_media_tracks").get()).toEqual({state: accepted ? "closed" : "live"});
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("test-token");
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("private-token");
+      } finally {warn.mockRestore(); sqlite.close();}
+    }
+  });
+
   it("rejects identity-only track publication when multiple app clients are joined", async () => {
     const { sqlite, env, principal } = makeRealtimeHarness();
     try {
@@ -424,6 +651,8 @@ describe("realtime routes", () => {
 
       const track = await handlePostRealtimeTrack(env, makeReq(`/v1/realtime/calls/${firstBody.data.call.id}/tracks`, {
         trackKind: "screen",
+        mid: "0",
+        sessionDescription: { type: "offer", sdp: "test-offer" },
         direction: "publish",
       }), firstBody.data.call.id, principal);
       expect(track.status).toBe(400);
