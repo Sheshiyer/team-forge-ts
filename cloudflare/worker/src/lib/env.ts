@@ -33,7 +33,15 @@ export interface QueueBatchLike<T> {
   retryAll?(options?: { delaySeconds?: number }): void;
 }
 
+export interface DurableObjectStorageLike {
+  get<T>(key: string): Promise<T | undefined>;
+  put<T>(key: string, value: T): Promise<void>;
+  delete(key: string): Promise<boolean>;
+  transaction<T>(callback: (txn: DurableObjectStorageLike) => Promise<T>): Promise<T>;
+}
+
 export interface DurableObjectStateLike {
+  storage?: DurableObjectStorageLike;
   id?: {
     toString(): string;
   };
@@ -64,6 +72,10 @@ export interface LegacyTeamSnapshotMessage {
 }
 
 export interface Env {
+  TF_KNOWLEDGE_GATEWAY_TOKEN?: string;
+  TF_KNOWLEDGE_ROUTINE_ALLOWLIST_JSON?: string;
+  TF_KNOWLEDGE_WORKSPACE_ID?: string;
+  TF_KNOWLEDGE_PROJECT_ID?: string;
   TF_ENV: string;
   TF_API_BASE_URL?: string;
   TF_DEFAULT_OTA_CHANNEL?: string;
@@ -112,6 +124,10 @@ export interface Env {
   // Used as alternative to TF_CREDENTIAL_ENVELOPE_KEY for app routes. Caller sends header "X-TeamForge-Internal-Secret".
   // Requires the request to pass the Access policy (e.g. via IP bypass on allowed machines).
   TF_INTERNAL_SHARED_SECRET?: string;
+  // Dedicated read-only bearer for reviewed native desktop identity lookups.
+  TF_NATIVE_IDENTITY_LOOKUP_TOKEN?: string;
+  // Explicit tenant -> TeamForge workspace enrollment; never inferred from catalog data.
+  TF_NATIVE_TENANT_WORKSPACE_MAP_JSON?: string;
   // Phase 7: Paperclip repo root for per-member provisioning
   TF_PAPERCLIP_REPO_ROOT?: string;
 
