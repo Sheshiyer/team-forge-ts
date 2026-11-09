@@ -59,6 +59,9 @@ export interface Env {
   TF_RELEASE_PUBLISH_TOKEN?: string;
   TEAMFORGE_DB?: D1DatabaseLike;
   TEAMFORGE_ARTIFACTS?: R2BucketLike;
+  // R2 bucket for OTA update files (plexus-upgrade.thoughtseed.space)
+  PLEXUS_UPDATES?: R2BucketLike;
+  PLEXUS_UPGRADE_HOST?: string;
   SYNC_QUEUE?: QueueLike<SyncJobMessage>;
   WORKSPACE_LOCKS?: DurableObjectNamespaceLike;
   // MultiCA (AI gateway + agent backend) — 2026-06-09 architecture

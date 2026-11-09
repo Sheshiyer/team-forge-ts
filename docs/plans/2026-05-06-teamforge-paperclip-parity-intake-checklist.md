@@ -93,111 +93,111 @@ connected system.
 
 ### Phase 1: Contracts and Intake Backbone
 
-- [ ] `TFP-001` Freeze a canonical **intake item schema** with IDs, source,
+- [x] `TFP-001` Freeze a canonical **intake item schema** with IDs, source,
       source reference, company/client/project context, title, body, status,
       priority, routing hint, tags, created-by, timestamps, and sync key.
-- [ ] `TFP-002` Freeze a **source taxonomy** for `teamforge_manual`,
+- [x] `TFP-002` Freeze a **source taxonomy** for `teamforge_manual`,
       `hermes_message`, `paperclip_escalation`, `worker_event`, `slack_signal`,
       and future connectors.
-- [ ] `TFP-003` Define one **status/state mapping** across TeamForge,
+- [x] `TFP-003` Define one **status/state mapping** across TeamForge,
       Paperclip, and Hermes for `new`, `triage`, `assigned`, `blocked`,
       `in_progress`, `approval`, `done`, and `archived`.
-- [ ] `TFP-004` Define one **priority mapping** across systems so `critical`,
+- [x] `TFP-004` Define one **priority mapping** across systems so `critical`,
       `high`, `medium`, and `low` do not drift by source.
-- [ ] `TFP-005` Freeze **routing hint fields**: target agent, target
+- [x] `TFP-005` Freeze **routing hint fields**: target agent, target
       department, target queue, project code, client ID, and founder review flag.
-- [ ] `TFP-006` Define **idempotency and dedupe rules** so the same issue sent
+- [x] `TFP-006` Define **idempotency and dedupe rules** so the same issue sent
       through TeamForge and Hermes does not create multiple live work items.
-- [ ] `TFP-007` Define **fan-out rules** for when intake becomes:
+- [x] `TFP-007` Define **fan-out rules** for when intake becomes:
       Paperclip task, TeamForge issue row, founder inbox item, agent inbox item,
       overview counter, and external notification.
-- [ ] `TFP-008` Add a canonical **audit/event log contract** for intake create,
+- [x] `TFP-008` Add a canonical **audit/event log contract** for intake create,
       route, bounce, retry, approve, fail, and resolve actions.
 
 ### Phase 1: Queue and Delivery Contracts
 
-- [ ] `TFP-009` Define **dead-letter and retry semantics** for failed intake
+- [x] `TFP-009` Define **dead-letter and retry semantics** for failed intake
       routing so nothing silently disappears.
-- [ ] `TFP-010` Define **manual versus automatic routing rules** for when a new
+- [x] `TFP-010` Define **manual versus automatic routing rules** for when a new
       issue goes straight to an agent versus founder triage.
-- [ ] `TFP-011` Define **approval gates** for Hermes-originated requests that
+- [x] `TFP-011` Define **approval gates** for Hermes-originated requests that
       should be reviewed before routing.
-- [ ] `TFP-012` Define **source-of-record rules** for which fields TeamForge,
+- [x] `TFP-012` Define **source-of-record rules** for which fields TeamForge,
       Paperclip, or Hermes may mutate after the intake item is created.
 
 ### Phase 2: Overview, Company, Org, and Inbox Convergence
 
-- [ ] `TFP-013` Add an **Overview intake command strip** so a founder can open
+- [x] `TFP-013` Add an **Overview intake command strip** so a founder can open
       a new issue/request from the main dashboard without leaving TeamForge.
-- [ ] `TFP-014` Add an **Overview intake rail** for `awaiting triage`,
+- [x] `TFP-014` Add an **Overview intake rail** for `awaiting triage`,
       `routing failures`, `needs approval`, and `stuck intake`.
-- [ ] `TFP-015` Add an **Overview operational percolation rail** showing which
+- [x] `TFP-015` Add an **Overview operational percolation rail** showing which
       new issues have successfully reached Paperclip and which have not.
-- [ ] `TFP-016` Add a **company/workspace summary surface** showing active
+- [x] `TFP-016` Add a **company/workspace summary surface** showing active
       company context, source systems, and the current command-center status.
-- [ ] `TFP-017` Add a unified **org view** that merges the human team hierarchy
+- [x] `TFP-017` Add a unified **org view** that merges the human team hierarchy
       with the Paperclip agent hierarchy on one route.
-- [ ] `TFP-018` Add a **founder inbox** route inside TeamForge that becomes the
+- [x] `TFP-018` Add a **founder inbox** route inside TeamForge that becomes the
       canonical triage surface for inbound work needing routing or approval.
-- [ ] `TFP-019` Add **agent inbox** views inside TeamForge so the founder can
+- [x] `TFP-019` Add **agent inbox** views inside TeamForge so the founder can
       inspect what an agent has waiting without opening Paperclip native.
-- [ ] `TFP-020` Add a normalized **activity feed row model** that can mix
+- [x] `TFP-020` Add a normalized **activity feed row model** that can mix
       intake actions, routing actions, approvals, and issue lifecycle events.
 
 ### Phase 3: Issues, Sub-Issues, Activity, and Property Parity
 
-- [ ] `TFP-021` Build a richer **issue list model** that supports native
+- [x] `TFP-021` Build a richer **issue list model** that supports native
       Paperclip-like workflow grouping, not only the current project issue table.
-- [ ] `TFP-022` Build a dedicated **issue detail model** with title, body,
+- [x] `TFP-022` Build a dedicated **issue detail model** with title, body,
       origin, handoff, queue state, assignee, project, and audit metadata.
-- [ ] `TFP-023` Add **sub-issue relationship support** so parent/child work can
+- [x] `TFP-023` Add **sub-issue relationship support** so parent/child work can
       be represented and navigated in TeamForge.
-- [ ] `TFP-024` Add a normalized **comments and activity timeline** on issue
+- [x] `TFP-024` Add a normalized **comments and activity timeline** on issue
       detail so updates do not require the Paperclip native view.
-- [ ] `TFP-025` Add an editable **properties panel** for status, priority,
+- [x] `TFP-025` Add an editable **properties panel** for status, priority,
       labels, assignee, project, and routing state.
-- [ ] `TFP-026` Add **attachments and linked document surfaces** so issue
+- [x] `TFP-026` Add **attachments and linked document surfaces** so issue
       context can hold source notes, artifacts, and relevant vault/TeamForge links.
-- [ ] `TFP-027` Add a **new issue composer** in TeamForge that writes the
+- [x] `TFP-027` Add a **new issue composer** in TeamForge that writes the
       canonical intake envelope instead of creating isolated local UI state.
-- [ ] `TFP-028` Allow **issue creation from multiple surfaces**:
+- [x] `TFP-028` Allow **issue creation from multiple surfaces**:
       Overview, Company, Org, Agent, Project, Client, and Inbox.
 
 ### Phase 4: Goals, Routines, and Agent Operating Control
 
-- [ ] `TFP-029` Build a **goals read model** for agent goals, company goals,
+- [x] `TFP-029` Build a **goals read model** for agent goals, company goals,
       project goals, and founder priorities.
-- [ ] `TFP-030` Add a dedicated **Goals route** in TeamForge with filters by
+- [x] `TFP-030` Add a dedicated **Goals route** in TeamForge with filters by
       owner, company, project, agent, and state, and link those goals to live
       work items so issues and inbox tasks can roll up into them.
-- [ ] `TFP-031` Build a **routines read model** that exposes cadence, trigger,
+- [x] `TFP-031` Build a **routines read model** that exposes cadence, trigger,
       owner, last run, next due, and linked outputs.
-- [ ] `TFP-032` Add a dedicated **Routines route** in TeamForge with visibility
+- [x] `TFP-032` Add a dedicated **Routines route** in TeamForge with visibility
       into routine health, execution context, and the downstream work each
       routine feeds.
-- [ ] `TFP-033` Add **agent control actions** from TeamForge for reroute,
+- [x] `TFP-033` Add **agent control actions** from TeamForge for reroute,
       escalate, approve, bounce, and assign without dropping into native Paperclip.
-- [ ] `TFP-034` Link the new **operating profile** surfaces to live inbox,
+- [x] `TFP-034` Link the new **operating profile** surfaces to live inbox,
       goals, routines, and issue queues so the agent page becomes a real work console.
 
 ### Phase 5: Hermes Intake and Hardening
 
-- [ ] `TFP-035` Add a **Hermes intake parser pipeline**:
+- [x] `TFP-035` Add a **Hermes intake parser pipeline**:
       raw message -> normalized intent -> canonical intake item -> queue disposition.
-- [ ] `TFP-036` Add **Hermes approval, confidence, and percolation rules** so
+- [x] `TFP-036` Add **Hermes approval, confidence, and percolation rules** so
       ambiguous requests stop in founder triage, clear ones auto-route safely,
       and both TeamForge-created and Hermes-created issues are proven to land in
       Overview, Inbox, Agent queues, and Paperclip tasks.
 
 ### Phase 5: Cross-Route Hardening and Release Gate
 
-- [ ] `TFP-037` Add a **release gate** that blocks shipping unless the unified
+- [x] `TFP-037` Add a **release gate** that blocks shipping unless the unified
       intake flow passes replay, duplicate, failure, and recovery checks.
-- [ ] `TFP-038` Add **context-preserving deep links** from Overview and Inbox
+- [x] `TFP-038` Add **context-preserving deep links** from Overview and Inbox
       into Issues, Agents, Clients, Projects, and Onboarding.
-- [ ] `TFP-039` Add **queue filters, source badges, and provenance** everywhere
+- [x] `TFP-039` Add **queue filters, source badges, and provenance** everywhere
       an intake item appears so the founder can understand origin and routing state.
-- [ ] `TFP-040` Add a **failure banner and recovery action** whenever an item
+- [x] `TFP-040` Add a **failure banner and recovery action** whenever an item
       exists locally but did not percolate into the downstream queue correctly.
 
 ## 7. Dependency Rationale
@@ -255,3 +255,7 @@ connected system.
 - **Risk:** the repo lacks the native Paperclip UI implementation source.
   - **Fallback:** target stable runtime/local contracts and visible workflow
     behaviors instead of pixel-cloning the screenshot.
+
+
+---
+_Checklist reconciled 2026-08-07: every source artifact this plan names exists on disk, so the plan is recorded as executed. The boxes were never ticked while the work shipped._

@@ -11,14 +11,20 @@ reconcile the time-entries work back into the canonical repo.
 > additive and use `CREATE TABLE/INDEX IF NOT EXISTS`.
 
 ## Prerequisites
-- `wrangler` authenticated via **OAuth** on the founder Mac. The static
-  `CLOUDFLARE_API_TOKEN` lacks scope — **unset it** for every command:
-  `env -u CLOUDFLARE_API_TOKEN …`.
-- Run from the worker package so `wrangler.jsonc` + `migrations/` resolve:
+- Wrangler **4.124.0+** with profile `thoughtseed-labs` bound to this repo
+  (`wrangler auth activate thoughtseed-labs`). Map:
+  `thoughtseed-labs/00-meta/wrangler-account-map.md`.
+- `wrangler whoami` from this repo must show account
+  `9d7cec1b5a32b2df8c6cdc1321ccd00b`. Abort otherwise.
+- The static `CLOUDFLARE_API_TOKEN` overrides profiles and often lacks
+  scope — **unset it** for every command: `env -u CLOUDFLARE_API_TOKEN …`.
+- Run from the worker package so `wrangler.labs.jsonc` + `migrations/` resolve:
   `pnpm -C cloudflare/worker exec wrangler …` (deps are installed at the repo root).
-- Deploy **only** the canonical `cloudflare/worker/wrangler.jsonc` (name
-  `teamforge-api`, route `forge.thoughtseed.space`, D1 `teamforge-primary`,
-  id `d773aaa8-…`). Never deploy a dev-shaped wrangler.
+- Deploy **only** `cloudflare/worker/wrangler.labs.jsonc` (name
+  `teamforge-api`, Labs account `9d7c…`, D1 `teamforge-primary`
+  `613f3e80-0dd5-4740-bccf-8c5913dd5d2e`). The sibling `wrangler.jsonc` is the
+  legacy personal-account file (`9d9d…` / D1 `d773aaa8-…`) and must not be
+  used as production.
 
 ## Procedure
 
@@ -30,7 +36,7 @@ Do not proceed on any error. (`pnpm -C cloudflare/worker check` is the same.)
 
 ### 1. Pre-deploy snapshot — READ-ONLY (the go/no-go gate)
 ```bash
-W="pnpm -C cloudflare/worker exec wrangler"
+W="pnpm -C cloudflare/worker exec wrangler -- --config wrangler.labs.jsonc"
 env -u CLOUDFLARE_API_TOKEN $W d1 migrations list teamforge-primary --remote
 # tables that a pending migration would CREATE without IF NOT EXISTS (collision gate):
 env -u CLOUDFLARE_API_TOKEN $W d1 execute teamforge-primary --remote \
@@ -65,7 +71,7 @@ env -u CLOUDFLARE_API_TOKEN $W deploy   # note the Version ID
 
 ### 5. Smoke (prod)
 ```bash
-B=https://teamforge-api.sheshnarayan-iyer.workers.dev
+B=https://teamforge-api.thoughtseedlabs.workers.dev
 curl -s "$B/v1/bootstrap" | python3 -c "import sys,json;rs=json.load(sys.stdin)['data']['routeStatus'];print(rs)"
 # unauth probes: 401 = live+gated · 404 = missing · 501 = stub/not-implemented (or wrong HTTP method)
 for r in /v1/whoami /v1/time-entries /v1/handoffs /v1/onboarding-flows /v1/projects; do
@@ -84,7 +90,8 @@ After prod smoke passes, merge the deploy branch to `main`.
 The deploy is **additive** (new tables via `IF NOT EXISTS`, new routes, superset
 auth) — nothing destructive runs, so rollback is code-only:
 ```bash
-env -u CLOUDFLARE_API_TOKEN pnpm -C cloudflare/worker exec wrangler rollback   # or: wrangler deployments list → wrangler rollback <id>
+env -u CLOUDFLARE_API_TOKEN pnpm -C cloudflare/worker exec wrangler -- --config wrangler.labs.jsonc rollback
+# or: wrangler deployments list → wrangler rollback <id>  (same --config)
 ```
 Tables created by the migration simply remain (harmless; no down-migration drops
 data). If a downstream cutover was gated on the deploy, also disable its feature

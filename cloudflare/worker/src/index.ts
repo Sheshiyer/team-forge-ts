@@ -2,6 +2,7 @@ import type { DurableObjectStateLike, Env } from "./lib/env";
 import { requireBearerAuth } from "./lib/auth";
 import { jsonError, jsonOk } from "./lib/response";
 import { handleInternalRequest } from "./routes/internal";
+import { handleUpgradeFile } from "./routes/upgrade";
 import { handleV1Request } from "./routes/v1";
 
 function getInternalRouteToken(pathname: string, env: Env): string | undefined {
@@ -45,6 +46,12 @@ export default {
       if (authFailure) return authFailure;
 
       return handleInternalRequest(request, url, env);
+    }
+
+    // OTA upgrade static file serving — public files from the plexus-updates R2 bucket.
+    // Routes: plexus-upgrade.thoughtseed.space/*  (custom-domain route binding)
+    if (url.hostname === "plexus-upgrade.thoughtseed.space") {
+      return handleUpgradeFile(env, url);
     }
 
     return jsonError(
