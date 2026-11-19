@@ -1,6 +1,6 @@
 # TeamForge Cloudflare Worker
 
-This package is the Phase 2 Wave 1 scaffold for the TeamForge Cloudflare backend.
+This package contains the TeamForge Cloudflare Worker.
 
 It aligns with the frozen contracts in:
 
@@ -9,7 +9,16 @@ It aligns with the frozen contracts in:
 - `docs/architecture/contracts/worker-route-contract.md`
 - `docs/architecture/contracts/ota-updater-contract.md`
 
-## Auth (current, post-WS5)
+## Production
+
+Use the production inventory for the active Labs Worker before preparing a release. [Deployment runbook](../../docs/runbooks/teamforge-worker-deploy.md)
+
+Forge is the OAuth issuer for the Cortex MCP resource at
+`https://cortex.thoughtseed.space/mcp`. The issuer advertises `cortex:read` and
+S256 PKCE. Interactive authorization and consent remain behind Cloudflare Access.
+[Forge issuer metadata](https://forge.thoughtseed.space/.well-known/oauth-authorization-server)
+
+## App route authentication in this checkout
 
 App routes accept three tiers (`requireAppOrInternalAuth` in `src/routes/v1.ts`):
 
@@ -64,7 +73,7 @@ curl --fail-with-body --silent --show-error \
   | jq '{ok,schemaVersion:.data.schemaVersion,generatedAt:.data.generatedAt,window:.data.window,projects:.data.projects,clients:.data.clients,kpis:.data.kpis,freshness:.data.freshness}'
 ```
 
-## Scope
+## Original Wave 1 scope
 
 Wave 1 provides:
 
@@ -84,19 +93,7 @@ Wave 1 does not yet provide:
 - OTA publication logic
 - live GitHub or Huly issue/milestone propagation
 
-## Current Cloudflare Status
-
-The Cloudflare MCP spec is reachable in this environment, but live account execution is currently blocked by an authentication error:
-
-- `10000 Authentication error`
-
-Because of that, `wrangler.jsonc` still contains placeholder IDs for:
-
-- the D1 database
-- the R2 bucket
-- the sync queue
-
-## Expected Remote Resource Names
+## Remote resource names
 
 - Worker name: `teamforge-api`
 - D1 database name: `teamforge-primary`

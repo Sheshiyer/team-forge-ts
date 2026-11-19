@@ -1,5 +1,39 @@
 # Runbook — Deploying the TeamForge Worker (`teamforge-api`)
 
+## Production inventory
+
+`forge.thoughtseed.space` and `plexus-api.thoughtseed.space` serve the
+Thoughtseed Labs `teamforge-api` Worker. Use the named Labs profile and pin
+the account explicitly for production readback.
+
+```sh
+CLOUDFLARE_ACCOUNT_ID=9d7cec1b5a32b2df8c6cdc1321ccd00b \
+  wrangler deployments status --name teamforge-api --profile thoughtseed-labs --json
+```
+
+The Labs release contains Cortex OAuth and Plexus native identity code. Before
+any release, obtain the reviewed Labs source and match it against the active
+version, bindings, database and rollback version. The June procedure below
+belongs to the former Personal-account deployment. The Personal `workers.dev`
+endpoint still answers health checks and remains referenced by desktop and
+automation defaults. Collect dependency and rollback evidence before retiring it.
+
+## Cortex OAuth release check
+
+The native Codex release registers its exact callback for `cambium-cortex-j1`.
+The serving validator admits that same client and URI. Keep those two inputs
+together when rebuilding the Labs release. The November 18 release receipt
+and reproducible source are linked in Cambium's Cortex Workbench handoff.
+
+Before promoting a change to the callback policy, exercise the compiled
+issuer with the candidate policy and confirm discovery succeeds. Check that
+the registered paths reach the founder sign-in guard and that an unregistered
+path or scope is rejected. Repeat issuer discovery on the serving version
+after promotion.
+
+<details>
+<summary>Historical June 2026 Personal-account deployment procedure</summary>
+
 Safe, data-preserving deploy of the Cloudflare Worker (`cloudflare/worker/`,
 `teamforge-api`) and its D1 (`teamforge-primary`). Satisfies the
 [migration-rollback-contract](../architecture/contracts/migration-rollback-contract.md)
@@ -115,3 +149,5 @@ flag. Preserve the step-1 snapshot as reconciliation evidence.
     them to `""`, or delete them in the dashboard. Unset/empty vars revert
     `verifyAccessJwt` to a no-op (Bearer-era behavior); whoami then 401s but no
     other route changes.
+
+</details>

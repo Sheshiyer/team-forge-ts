@@ -101,9 +101,10 @@ external result callback is a non-mutating `410 Gone` tombstone.
 See the [function retirement map](docs/plans/2026-06-20-teamforge-function-retirement-map.md)
 and [Hermes/Cambium command contract](docs/architecture/contracts/hermes-cambium-command-contract.md).
 
-**Security note (CF Access):** The TeamForge Worker remains protected by
-Cloudflare Zero Trust Access. Automated callers use narrowly scoped current
-credentials; retired service credentials are not an execution authority.
+**Security note (CF Access):** Cloudflare Zero Trust Access protects the
+TeamForge app routes on `forge.thoughtseed.space` and
+`plexus-api.thoughtseed.space`. Automated callers use narrowly scoped current
+credentials. Forge also serves the Cortex OAuth flow. [Worker README](cloudflare/worker/README.md)
 
 Example authenticated call (both CF Access headers + app Bearer are required):
 
