@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-11T05:39:30.724Z",
+  "cwd": "/Volumes/madara/2026/Projects/thoughtseed/team-forge-ts",
+  "github": null,
+  "gsd": {
+    "phase": "01 (Founder Sync Hardening) — EXECUTING",
+    "status": "executing",
+    "resume": "None",
+    "focus": "** Phase 01 — Founder Sync Hardening",
+    "complete": false
+  },
+  "sources": [
+    {
+      "kind": "gsd",
+      "path": ".planning/STATE.md",
+      "weight": 100
+    },
+    {
+      "kind": "gsd-phase",
+      "path": ".planning/phases/01-founder-sync-hardening/01-01-PLAN.md",
+      "weight": 70
+    },
+    {
+      "kind": "gsd-phase",
+      "path": ".planning/phases/01-founder-sync-hardening/01-02-PLAN.md",
+      "weight": 70
+    },
+    {
+      "kind": "gsd-phase",
+      "path": ".planning/phases/01-founder-sync-hardening/01-03-PLAN.md",
+      "weight": 70
+    },
+    {
+      "kind": "gsd-phase",
+      "path": ".planning/phases/01-founder-sync-hardening/01-CONTEXT.md",
+      "weight": 70
+    },
+    {
+      "kind": "gsd-phase",
+      "path": ".planning/phases/01-founder-sync-hardening/01-RESEARCH.md",
+      "weight": 70
+    },
+    {
+      "kind": "gsd-phase",
+      "path": ".planning/phases/01-founder-sync-hardening/01-REVIEWS.md",
+      "weight": 70
+    },
+    {
+      "kind": "gsd-phase",
+      "path": ".planning/phases/01-founder-sync-hardening/01-VALIDATION.md",
+      "weight": 70
+    },
+    {
+      "kind": "plan-doc",
+      "path": "docs/plans/2026-05-06-teamforge-paperclip-parity-intake-checklist.md",
+      "weight": 45
+    },
+    {
+      "kind": "plan-doc",
+      "path": "docs/plans/2026-06-20-teamforge-function-retirement-map.md",
+      "weight": 45
+    },
+    {
+      "kind": "plan-doc",
+      "path": "docs/plans/2026-06-14-hermes-multica-paperclip-command-contract-handoff.md",
+      "weight": 45
+    },
+    {
+      "kind": "plan-doc",
+      "path": "docs/plans/2026-06-15-phase-1-3-salvage-and-multica-bridge.md",
+      "weight": 45
+    },
+    {
+      "kind": "plan-doc",
+      "path": "docs/plans/2026-06-15-hermes-multica-paperclip-contract-impl.md",
+      "weight": 45
+    },
+    {
+      "kind": "plan-doc",
+      "path": "docs/plans/2026-06-12-command-cortex-visual-implementation.md",
+      "weight": 45
+    },
+    {
+      "kind": "plan-doc",
+      "path": "tasks/todo.md",
+      "weight": 45
+    },
+    {
+      "kind": "plan-doc",
+      "path": "tasks/lessons.md",
+      "weight": 45
+    },
+    {
+      "kind": "gsd",
+      "path": ".planning/ROADMAP.md",
+      "weight": 40
+    },
+    {
+      "kind": "gsd",
+      "path": ".planning/PROJECT.md",
+      "weight": 40
+    },
+    {
+      "kind": "gsd",
+      "path": ".planning/REQUIREMENTS.md",
+      "weight": 40
+    }
+  ],
+  "progress": {
+    "open": 3,
+    "done": 2,
+    "source": "/Volumes/madara/2026/Projects/thoughtseed/team-forge-ts/.planning/phases/01-founder-sync-hardening/01-01-PLAN.md"
+  },
+  "wave": {
+    "action": "execute_next",
+    "reason": "phase \"default\" has 3 open tasks; take next batch",
+    "mode": "sequential-batch",
+    "phase": "default",
+    "combo": "noesis-build",
+    "tasks": [
+      {
+        "id": "L2",
+        "parallel": false,
+        "desc": "Provision GitHub org access",
+        "phase": "default",
+        "source": ".planning/phases/01-founder-sync-hardening/01-01-PLAN.md"
+      }
+    ]
+  },
+  "agent_instruction": "NEXT-WAVE (auto from local planning — do NOT wait for user to say dispatch/proceed):\n  action=execute_next · phase \"default\" has 3 open tasks; take next batch\n  gsd_phase=01 (Founder Sync Hardening) — EXECUTING status=executing\n  wave_mode=sequential-batch phase=\"default\" open_total=3\n  - [ ] L2: Provision GitHub org access\n  DO: execute the listed task(s) now on noesis-build (or noesis-execute if multi-file fleet).\n  SYNC: plan-issue-sync LaunchAgent promotes open plan docs → Sheshiyer/thoughtseed-vault issues hourly; run temperance-next-wave --sync to force."
+}

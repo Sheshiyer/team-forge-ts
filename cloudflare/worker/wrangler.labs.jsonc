@@ -16,7 +16,8 @@
     "TF_ACCESS_TEAM_DOMAIN": "thoughtseedlabs.cloudflareaccess.com",
     "TF_ACCESS_AUD": "dd832e556cd9ee7c4e2fb9fddc6bb16bccd64d1b28b0784f84884a69f8a2f3d9,38b502a01f4063c5521191e084c7fd9b086099c0061b045145cd93165b9af8d0,29e1c8a6760778891fe1278ea0c8639afba1eb41a0008a7fd14850e4168911b5",
     "TF_ACCESS_AUDIENCE": "dd832e556cd9ee7c4e2fb9fddc6bb16bccd64d1b28b0784f84884a69f8a2f3d9",
-    "TF_INTEGRATION_CONFIG_JSON": "{\"github\":{\"repos\":[]},\"decommissioned\":[\"slack\",\"clockify\",\"huly\"],\"note\":\"Slack/Clockify/Huly retired — features live in Plexus directly\"}"
+    "PLEXUS_UPGRADE_HOST": "plexus-upgrade.thoughtseed.space",
+    "TF_INTEGRATION_CONFIG_JSON": "{\"github\":{\"repos\":[]},\"decommissioned\":[\"slack\",\"clockify\",\"huly\"],\"note\":\"Slack/Clockify/Huly retired — features live in Plexus directly\"}",
   },
   "d1_databases": [
     {
@@ -30,6 +31,10 @@
     {
       "binding": "TEAMFORGE_ARTIFACTS",
       "bucket_name": "teamforge-artifacts"
+    },
+    {
+      "binding": "PLEXUS_UPDATES",
+      "bucket_name": "plexus-updates"
     }
   ],
   "kv_namespaces": [
@@ -69,6 +74,10 @@
     },
     {
       "pattern": "plexus-api.thoughtseed.space",
+      "custom_domain": true
+    },
+    {
+      "pattern": "plexus-upgrade.thoughtseed.space",
       "custom_domain": true
     }
   ]
